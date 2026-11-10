@@ -55,12 +55,41 @@ test('unsaved changes require a deliberate discard', async ({ page }) => {
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('sidebar width: drag adjusts, double-click resets, choice persists', async ({ page }) => {
+  await page.goto('/');
+  const sidebar = page.getByRole('complementary', { name: '邮箱导航' });
+  const handle = page.getByRole('separator', { name: '调整导航栏宽度' });
+  await expect(sidebar).toHaveCSS('width', '222px');
+  const box = await handle.boundingBox();
+  const y = box!.y + box!.height / 2;
+  const centerX = box!.x + box!.width / 2;
+  await page.mouse.move(centerX, y);
+  await page.mouse.down();
+  await page.mouse.move(centerX + 60, y, { steps: 4 });
+  await page.mouse.up();
+  await expect(sidebar).toHaveCSS('width', '282px');
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
+  await handle.dblclick();
+  await expect(sidebar).toHaveCSS('width', '222px');
+  await page.mouse.move(centerX, y);
+  await page.mouse.down();
+  await page.mouse.move(centerX + 80, y, { steps: 4 });
+  await page.mouse.up();
+  await expect(sidebar).toHaveCSS('width', '302px');
+  await page.reload();
+  await expect(sidebar).toHaveCSS('width', '302px');
+});
+
 test('event completion, associated mail, and keyboard resizing', async ({ page }) => {
   await page.goto('/');
   const handle = page.getByRole('separator', { name: '调整邮件列表宽度' });
   await handle.focus();
   await page.keyboard.press('ArrowRight');
   await expect(handle).toHaveAttribute('aria-valuenow', '360');
+  await page.keyboard.press('End');
+  await expect(handle).toHaveAttribute('aria-valuenow', '440');
+  await handle.dblclick();
+  await expect(handle).toHaveAttribute('aria-valuenow', '340');
   await page.getByRole('button', { name: '事件与待办' }).click();
   await page.getByRole('button', { name: '完成：阅读体验 · 设计讨论', exact: true }).click();
   await expect(page.getByRole('button', { name: '标记未完成：阅读体验 · 设计讨论', exact: true })).toHaveAttribute('aria-pressed', 'true');

@@ -1,17 +1,39 @@
 import { useRef } from 'react';
-import { useLayoutStore, MIN_LIST_WIDTH, MAX_LIST_WIDTH } from '../../stores/layoutStore';
 
-export function ResizeHandle() {
-  const width = useLayoutStore(s => s.listWidth);
-  const setWidth = useLayoutStore(s => s.setListWidth);
-  const start = useRef<{ x: number; width: number } | null>(null);
-  return <div role="separator" aria-label="调整邮件列表宽度" aria-orientation="vertical" aria-valuemin={MIN_LIST_WIDTH} aria-valuemax={MAX_LIST_WIDTH} aria-valuenow={width} tabIndex={0} className="resize-handle"
+/** Vertical workspace splitter: pointer drag, arrow keys, Home / End, double-click resets to default. */
+export function ResizeHandle({ label, value, min, max, onResize, onReset, variant }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onResize: (value: number) => void;
+  onReset: () => void;
+  variant?: 'sidebar';
+}) {
+  const start = useRef<{ origin: number; width: number } | null>(null);
+  return <div role="separator" aria-label={label} aria-orientation="vertical" aria-valuemin={min} aria-valuemax={max} aria-valuenow={value} tabIndex={0}
+    className={`resize-handle${variant === 'sidebar' ? ' resize-handle--sidebar' : ''}`}
     onKeyDown={event => {
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setWidth(width + (event.key === 'ArrowRight' ? 20 : -20)); }
-      if (event.key === 'Home') { event.preventDefault(); setWidth(MIN_LIST_WIDTH); }
-      if (event.key === 'End') { event.preventDefault(); setWidth(MAX_LIST_WIDTH); }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onResize(value + (event.key === 'ArrowRight' ? 20 : -20)); }
+      if (event.key === 'Home') { event.preventDefault(); onResize(min); }
+      if (event.key === 'End') { event.preventDefault(); onResize(max); }
     }}
-    onPointerDown={event => { if (event.button === 0) { start.current = { x: event.clientX, width }; event.currentTarget.setPointerCapture(event.pointerId); } }}
-    onPointerMove={event => { if (start.current) setWidth(start.current.width + event.clientX - start.current.x); }}
-    onPointerUp={() => { start.current = null; }} onPointerCancel={() => { start.current = null; }} onLostPointerCapture={() => { start.current = null; }} />;
+    onPointerDown={event => {
+      if (event.button !== 0) return;
+      // Desktop behavior: a splitter drag never starts a text selection or moves focus ring; keyboard use stays on Tab.
+      event.preventDefault();
+      event.currentTarget.focus();
+      start.current = { origin: event.clientX, width: value };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.classList.add('is-resizing');
+    }}
+    onPointerMove={event => { if (start.current) onResize(start.current.width + event.clientX - start.current.origin); }}
+    onPointerUp={event => {
+      start.current = null;
+      document.body.classList.remove('is-resizing');
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }}
+    onPointerCancel={() => { start.current = null; document.body.classList.remove('is-resizing'); }}
+    onLostPointerCapture={() => { start.current = null; document.body.classList.remove('is-resizing'); }}
+    onDoubleClick={event => { event.preventDefault(); onReset(); }} />;
 }
