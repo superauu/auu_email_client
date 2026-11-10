@@ -136,7 +136,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .reader-toolbar .button { font-size: 11px; }
 .reader-toolbar .reader-back { display: none; }
 .reader-scroll { min-height: 0; flex: 1; overflow-y: auto; }
-.reader-content { max-width: 850px; padding: 36px 42px 40px; margin-inline: auto; }
+.reader-content { padding: 36px 42px 40px; }
 .reader-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 17px; }
 .reader-content > h2 { font-size: clamp(19px, 1.8vw, 27px); line-height: 1.55; letter-spacing: -.7px; font-weight: 600; overflow-wrap: anywhere; }
 .message-sender { display: flex; align-items: center; gap: 11px; margin-top: 26px; padding-bottom: 26px; border-bottom: 1px solid var(--border); }
@@ -218,7 +218,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .discard-prompt > span { margin-right: auto; }
 .events-view { flex: 1; min-width: 0; overflow-y: auto; padding: 48px; background: var(--surface); }
 .events-view h1 { font-size: 26px; margin: 11px 0; font-weight: 600; letter-spacing: -.7px; }
-.event-list { display: grid; gap: 14px; max-width: 850px; margin-top: 32px; }
+.event-list { display: grid; gap: 14px; margin-top: 32px; }
 .event-card { display: flex; align-items: center; gap: 16px; padding: 21px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .event-check { display: flex; align-items: center; justify-content: center; width: 21px; height: 21px; border: 1px solid var(--border); border-radius: var(--radius-sm); flex-shrink: 0; }
 .event-check.is-completed { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }

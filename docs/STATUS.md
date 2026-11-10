@@ -25,6 +25,7 @@
 - 拖拽分隔条改为 `preventDefault` + 拖拽期间 `body.is-resizing` 锁定光标、禁止文本选择；修复原先拖拽会把正文文字选中的网页化行为。
 - 应用框架（`user-select: none`）与长内容区（`user-select: text`）的桌面选择策略；侧栏账号 / 文件夹行超长名称省略号截断。
 - localStorage 布局键 `auumail.ui.layout.v1` 兼容旧格式（纯数字 = 旧列表宽度，迁移后侧栏取默认值）。
+- 主工作区全宽度：移除阅读区与事件卡片的居中窄栏（`max-width: 850px; margin-inline: auto`），内容从左侧起铺满窗格，符合桌面软件阅读窗格习惯。
 
 ### 本轮修复
 
