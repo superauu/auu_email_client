@@ -547,7 +547,10 @@ mod tests {
                     remote_id: None,
                     thread_id: id.into(),
                     mailbox: mailbox.into(),
-                    from: SeedAddress { name: "发件人".into(), email: "from@example.test".into() },
+                    from: SeedAddress {
+                        name: "发件人".into(),
+                        email: "from@example.test".into(),
+                    },
                     to: vec!["me@example.test".into()],
                     subject: format!("主题 {id}"),
                     body_text: body.into(),
