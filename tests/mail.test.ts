@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectMessages } from '../src/features/mail/selectors';
 import { demoWorkspace } from '../src/services/demo/fixtures';
-import { demoMailGateway, validateDemoDrafts } from '../src/services/demo/DemoMailGateway';
+import { demoMailGateway } from '../src/services/demo/DemoMailGateway';
+import { validateDemoDrafts } from '../src/services/demo/drafts';
 import type { MailDraft, MailQuery } from '../src/domain/mail';
 
 const query: MailQuery = { accountId: null, mailbox: 'inbox', labelId: null, search: '' };

@@ -1,22 +1,25 @@
 # 当前状态
 
-更新时间：2026-11-10。当前为基础架构预览阶段，所有邮箱均为本机演示数据，未连接真实邮箱。
+更新时间：2026-11-10（第二轮后）。当前为阶段 A 第 1 步完成：本机数据层就绪，所有邮箱仍为演示数据，未连接真实邮件服务器。
 
 ## 已完成（本轮已验证）
 
 - 邮件工作区：统一收件箱、三账号切换、搜索、标签筛选、阅读、星标、归档、撰写和本机演示草稿。
 - 事件视图：演示待办完成状态、跳转关联邮件。
 - 皮肤：Paper / Graphite / Linen 内置包；明暗 / 跟随系统；桌面端扫描独立皮肤包、坏包隔离、缺失回退。
-- UI：自定义窗口栏、导航栏与邮件列表宽度可调（拖拽 / 方向键 / Home·End / 双击复位）、窄窗口阅读切换、可访问弹窗、空状态、错误边界。
+- UI：自定义窗口栏、导航栏与邮件列表宽度可调（拖拽 / 方向键 / Home·End / 双击复位）、窄窗口阅读切换、可访问弹窗、空状态、错误边界；主工作区全宽阅读窗格。
 - 桌面交互：应用框架禁止文本选择（阅读区、事件视图、输入框保留），分隔条拖拽期间锁定光标且不产生选区。
-- Rust / SQLite：固定数据目录、v1 迁移与 FTS5 索引、受限皮肤扫描命令。
+- **本机数据层（阶段 A1）**：SQLite v2 迁移（`messages.recipients_json`、`accounts.profile_json`）；Rust 邮件仓库（幂等种子写入、keyset 分页查询、FTS5 短语转义搜索、账号隔离、mailbox 投影）；系统凭据服务（Windows Credential Manager，按 `provider:accountId` 作用域，机密只进不出）；9 个 Tauri 命令（含 `mail_page_messages` 分页 IPC 与凭据三命令）。
+- 桌面 gateway：`DesktopMailGateway`（mode `desktop-local`）——演示数据幂等种子进 SQLite 后分页读回；浏览器仍走 `DemoMailGateway`。两个网关共享 localStorage 演示草稿存储。
+- Rust / SQLite：固定数据目录、逐版本迁移与 FTS5 索引、受限皮肤扫描命令。
 
 ### 验证记录（2026-11-10，Windows / Node 20.19 / Rust 1.98）
 
 - `npm run check`：lint、皮肤 schema 一致性、类型检查、生产构建、11 个领域测试，全部通过。
-- `npm run check:native`：cargo fmt --check、cargo test、clippy（-D warnings），全部通过。
-- `npm run test:ui`：7 个 Playwright 测试全部通过（含新增侧栏拖拽 / 双击复位 / 刷新持久化）。
-- 浏览器预览（`npm run dev` → http://127.0.0.1:4317）：界面正常渲染，账号切换、阅读、搜索、空状态可用；Graphite 暗色与 Paper 亮色、222px 与 320px 导航栏宽度目视检查通过。
+- `npm run check:native`：cargo fmt --check、cargo test（16 个 Rust 测试：迁移 / 仓库 / 分页 / 隔离 / FTS 转义 / 凭据真实读写）、clippy（-D warnings），全部通过。
+- `npm run test:ui`：7 个 Playwright 测试全部通过（含侧栏拖拽 / 双击复位 / 刷新持久化）。
+- **桌面端到端实测**（`tauri dev` + WebView2 CDP 连接验证）：桌面窗口正常启动（自定义窗口栏）；收件箱 6 封邮件经分页 IPC 读自 SQLite；搜索"呼吸感"FTS 命中 1 封；账号切换隔离正确；状态栏显示"桌面工作区"。数据库落盘验证：`%APPDATA%/com.auu.mailclient/mail.db`，`user_version=2`，3 账号 / 8 消息 / 2 事件。
+- 浏览器预览（`npm run dev`）：界面正常渲染，账号切换、阅读、搜索、空状态可用；Graphite 暗色与 Paper 亮色、222px 与 320px 导航栏宽度目视检查通过。
 
 ### 本轮变更（2026-11-10 第二轮）
 
@@ -34,16 +37,19 @@
 
 ## 预留（结构已就位，未接入）
 
-- 真实邮箱连接、OAuth 授权、真实收发（见 `docs/PROVIDER_CONTRACTS.md` 的接入约定）。
+- 真实邮箱连接、OAuth 授权、真实收发（阶段 A2-A3；凭据服务与账号仓库已就绪，见 `docs/PROVIDER_CONTRACTS.md`）。
 - AI 能力（界面按钮已占位，未调用任何模型）。
 - 日历同步。
-- 富文本撰写、附件、自动保存；当前为纯文本 + 手动保存演示草稿。
-- SQLite 真实邮件读写；Rust / SQLite 侧结构就绪，演示邮件尚未落库。
+- 富文本撰写、附件、自动保存；当前为纯文本 + 手动保存演示草稿（草稿仍存 localStorage，SQLite drafts/outbox 表随阶段 A4 接线）。
+- 星标 / 已读 / 归档的跨会话持久化与增量同步（阶段 A3，sync_states 表已建）。
+- UI 侧消息增量加载与虚拟列表（当前桌面 gateway 内部循环取页拼快照，数据量增大前可接受）。
 
 ## 未验证
 
-- `npm run desktop:dev` / `npm run desktop:build`（本轮未启动 Tauri 桌面窗口与打包；WebView2 / Rust 工具链在本机已安装，`check:native` 通过）。
+- `npm run desktop:build`（打包与 NSIS 安装包未在本轮运行；桌面 dev 窗口已实测）。
+- 凭据服务的账号向导 UI（Rust 服务与 IPC 已有真实读写测试，前端入口随阶段 A2 向导提供）。
 - 皮肤包桌面扫描依赖 Tauri 命令，浏览器预览无法覆盖（单测与 schema 校验已覆盖数据层）。
+- macOS / Linux（keyring 与打包按阶段 D 扩展）。
 
 ## 已知限制（保存边界）
 

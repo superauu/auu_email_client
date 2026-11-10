@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import type { MailDraft, MailQuery, WorkspaceSnapshot } from '../domain/mail';
 import { errorMessage } from '../domain/errors';
+import { isDesktop } from '../platform/desktop';
 import { demoMailGateway } from '../services/demo/DemoMailGateway';
+import { desktopMailGateway } from '../services/desktop/DesktopMailGateway';
 import { selectMessages } from '../features/mail/selectors';
 
 interface WorkspaceState extends WorkspaceSnapshot {
@@ -22,7 +24,7 @@ interface WorkspaceState extends WorkspaceSnapshot {
 }
 
 // A single gateway composition point; live providers must not be imported into components.
-const gateway = demoMailGateway;
+const gateway = isDesktop() ? desktopMailGateway : demoMailGateway;
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   accounts: [], messages: [], labels: [], events: [], status: 'idle', error: null,
   query: { accountId: null, mailbox: 'inbox', labelId: null, search: '' }, selectedId: null, view: 'mail',

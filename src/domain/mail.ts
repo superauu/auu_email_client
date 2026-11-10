@@ -85,7 +85,8 @@ export interface MailQuery {
 }
 
 export interface MailGateway {
-  readonly mode: 'demo' | 'live';
+  /** 'demo': in-memory demo data; 'desktop-local': real local SQLite via IPC, demo content; 'live': a connected provider. */
+  readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;
   saveDraft(draft: MailDraft): Promise<MailMessage>;
   // Add sync/send through explicit capability interfaces when a provider is implemented.

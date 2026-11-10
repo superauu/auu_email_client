@@ -16,4 +16,22 @@ impl AppError {
             retryable: true,
         }
     }
+
+    /// Malformed caller input (bad cursor, unknown folder kind, out-of-range page size).
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid",
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    /// OS credential service failure. Never embeds the secret or the entry lookup error verbatim.
+    pub fn credentials(message: impl Into<String>) -> Self {
+        Self {
+            code: "credentials",
+            message: message.into(),
+            retryable: false,
+        }
+    }
 }
