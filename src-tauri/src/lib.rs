@@ -1,6 +1,7 @@
 mod credentials;
 mod error;
 mod mail_store;
+mod mail_verify;
 mod skins;
 mod storage;
 
@@ -126,6 +127,70 @@ async fn mail_page_messages(
 }
 
 #[tauri::command]
+async fn mail_verify_account(
+    endpoints: mail_verify::Endpoints,
+    secret: String,
+) -> Result<mail_verify::VerifyReport, AppError> {
+    tauri::async_runtime::spawn_blocking(move || Ok(mail_verify::verify(&endpoints, &secret)))
+        .await
+        .map_err(|_| AppError::network("验证任务未完成"))?
+}
+
+/// Verifies, writes the secret to the OS keyring, then persists the account.
+/// A failed DB write compensates by deleting the just-written credential.
+#[tauri::command]
+async fn mail_save_account(
+    db: State<'_, Db>,
+    account: mail_store::RealAccount,
+    secret: String,
+) -> Result<String, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let endpoints = mail_verify::Endpoints {
+            imap_host: account.imap_host.clone(),
+            imap_port: account.imap_port,
+            smtp_host: account.smtp_host.clone(),
+            smtp_port: account.smtp_port,
+            auth_user: account.auth_user.clone(),
+        };
+        mail_verify::ensure_verified(&mail_verify::verify(&endpoints, &secret))?;
+        let id = account
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("imap:{}", uuid::Uuid::new_v4()));
+        credentials::set("imap", &id, &secret)?;
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        match mail_store::save_real_account(
+            &mut conn,
+            &mail_store::RealAccount {
+                id: Some(id.clone()),
+                ..account
+            },
+        ) {
+            Ok(saved) => Ok(saved),
+            Err(error) => {
+                let _ = credentials::delete("imap", &id);
+                Err(error)
+            }
+        }
+    })
+    .await
+    .map_err(|_| AppError::storage("保存任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_delete_account(db: State<'_, Db>, id: String) -> Result<(), AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_store::delete_real_account(&mut conn, &id)?;
+        credentials::delete("imap", &id)
+    })
+    .await
+    .map_err(|_| AppError::storage("删除任务未完成"))?
+}
+
+#[tauri::command]
 async fn credential_status(provider: String, account_id: String) -> Result<bool, AppError> {
     tauri::async_runtime::spawn_blocking(move || credentials::exists(&provider, &account_id))
         .await
@@ -170,6 +235,9 @@ pub fn run() {
             mail_seed_workspace,
             mail_load_workspace,
             mail_page_messages,
+            mail_verify_account,
+            mail_save_account,
+            mail_delete_account,
             credential_status,
             credential_save,
             credential_delete

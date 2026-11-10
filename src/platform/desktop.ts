@@ -61,3 +61,40 @@ export const desktopCredentials = {
   async save(provider: ProviderKind, accountId: string, secret: string): Promise<void> { await invoke('credential_save', { provider, accountId, secret }); },
   async delete(provider: ProviderKind, accountId: string): Promise<void> { await invoke('credential_delete', { provider, accountId }); },
 };
+
+export interface MailEndpoints {
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  authUser: string;
+}
+export interface MailProbeOutcome {
+  ok: boolean;
+  error: string | null;
+  code: 'network' | 'auth' | null;
+}
+export interface MailVerifyReport {
+  imap: MailProbeOutcome;
+  smtp: MailProbeOutcome;
+  folderCount: number | null;
+}
+export interface RealAccountInput {
+  id?: string | null;
+  name: string;
+  email: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  authUser: string;
+  avatar: string;
+  color: 'teal' | 'blue' | 'amber';
+}
+
+/** Real-account lifecycle: verify a connection, persist it, or remove it. */
+export const desktopAccounts = {
+  async verify(endpoints: MailEndpoints, secret: string): Promise<MailVerifyReport> { return invoke('mail_verify_account', { endpoints, secret }); },
+  async save(account: RealAccountInput, secret: string): Promise<string> { return invoke('mail_save_account', { account, secret }); },
+  async remove(id: string): Promise<void> { await invoke('mail_delete_account', { id }); },
+};

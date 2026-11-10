@@ -12,12 +12,14 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     selectMessage: s.selectMessage, toggleStar: s.toggleStar,
   })));
   const visible = selectMessages(messages, query);
+  const queriedAccount = query.accountId ? accounts.find(a => a.id === query.accountId) : null;
+  const realAccount = queriedAccount && queriedAccount.status !== 'demo' ? queriedAccount : null;
   const title = query.labelId ? labels.find(l => l.id === query.labelId)?.name : mailboxNames[query.mailbox];
   return <section className="mail-list" aria-label="邮件列表">
     <header className="list-header"><div><span className="eyebrow">YOUR MAIL, IN ORDER</span><h1>{title}<span className="count-pill">{visible.length}</span></h1></div><span className="list-order">最新在前</span></header>
     <div className="list-context">{query.accountId ? accounts.find(a => a.id === query.accountId)?.email : '所有账号的邮件，尽在一处'}{query.search && <span><Search size={12} /> 搜索结果</span>}</div>
     <div className="mail-list-scroll">
-      {visible.length === 0 ? <EmptyState title={query.search ? '没有找到相关邮件' : '这里暂时没有邮件'} description={query.search ? '换个关键词，或选择其他账号试试。' : '收到的邮件和保存的草稿会在这里出现。'} /> : visible.map(message => {
+      {visible.length === 0 ? (query.search ? <EmptyState title="没有找到相关邮件" description="换个关键词，或选择其他账号试试。" /> : realAccount ? <EmptyState title={`${realAccount.name} 已连接，邮件同步尚未接入`} description="本阶段完成连接验证与本机保存；收到的邮件将在同步功能上线后出现在这里。" /> : <EmptyState title="这里暂时没有邮件" description="收到的邮件和保存的草稿会在这里出现。" />) : visible.map(message => {
         const account = accounts.find(a => a.id === message.accountId);
         return <article key={message.id} className={cn('mail-row', selectedId === message.id && 'is-selected', message.unread && 'is-unread')}>
           <button className="mail-row-main" aria-label={`阅读邮件：${message.subject}`} onClick={() => { selectMessage(message.id); onSelect(); }} aria-current={selectedId === message.id ? 'true' : undefined}>
@@ -29,6 +31,6 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         </article>;
       })}
     </div>
-    <footer className="list-footer">共 {visible.length} 封邮件<span>仅本机演示</span></footer>
+    <footer className="list-footer">共 {visible.length} 封邮件<span>{realAccount ? '尚未同步' : '仅本机演示'}</span></footer>
   </section>;
 }

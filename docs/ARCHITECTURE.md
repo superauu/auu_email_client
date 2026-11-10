@@ -65,6 +65,9 @@ flowchart LR
 | `mail_seed_workspace` | `seed`（演示快照） | void | 后台线程；幂等替换种子账号与本地标签，不动其他行 |
 | `mail_load_workspace` | 无 | `{ accounts, labels, events }` | 消息不在此命令，只走分页 |
 | `mail_page_messages` | `query { accountId?, mailbox?, labelId?, search?, cursor?, limit? }` | `{ items, nextCursor }` | keyset 分页（received_at DESC, id DESC），limit 1–500，FTS 输入做短语转义 |
+| `mail_verify_account` | `endpoints { imapHost, imapPort, smtpHost, smtpPort, authUser }`, `secret` | `{ imap, smtp, folderCount }` | 真实 TLS 连接 + 登录测试；IMAP/SMTP 独立出结果；错误不含机密 |
+| `mail_save_account` | `account`, `secret` | `id` | 保存前再次验证；密码只写系统凭据库；DB 写失败时补偿删除凭据 |
+| `mail_delete_account` | `id` | void | 级联删除账号数据并移除凭据 |
 | `credential_status` | `provider, accountId` | bool | 只返回存在性，不返回机密 |
 | `credential_save` | `provider, accountId, secret` | void | 写入系统 keyring（Windows Credential Manager） |
 | `credential_delete` | `provider, accountId` | void | 幂等，删除不存在的凭据不算失败 |

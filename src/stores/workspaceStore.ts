@@ -13,6 +13,7 @@ interface WorkspaceState extends WorkspaceSnapshot {
   selectedId: string | null;
   view: 'mail' | 'events';
   load: () => Promise<void>;
+  reload: () => Promise<void>;
   setQuery: (changes: Partial<MailQuery>) => void;
   selectMessage: (id: string) => void;
   openMessage: (id: string) => void;
@@ -34,6 +35,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       const snapshot = await gateway.loadWorkspace();
       const selectedId = selectMessages(snapshot.messages, get().query)[0]?.id ?? null;
+      set({ ...snapshot, selectedId, status: 'ready' });
+    } catch (error) { set({ status: 'error', error: errorMessage(error) }); }
+  },
+  /** Forces a fresh gateway read (new account was added or removed); keeps the selection when it survives. */
+  async reload() {
+    set({ status: 'loading', error: null });
+    try {
+      const snapshot = await gateway.loadWorkspace();
+      const selectedId = snapshot.messages.some(m => m.id === get().selectedId) ? get().selectedId : selectMessages(snapshot.messages, get().query)[0]?.id ?? null;
       set({ ...snapshot, selectedId, status: 'ready' });
     } catch (error) { set({ status: 'error', error: errorMessage(error) }); }
   },

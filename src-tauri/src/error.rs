@@ -34,4 +34,22 @@ impl AppError {
             retryable: false,
         }
     }
+
+    /// DNS, TCP, TLS or protocol-level failure while talking to a mail server.
+    pub fn network(message: impl Into<String>) -> Self {
+        Self {
+            code: "network",
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    /// The server rejected the credentials (IMAP LOGIN / SMTP AUTH).
+    pub fn auth(message: impl Into<String>) -> Self {
+        Self {
+            code: "auth",
+            message: message.into(),
+            retryable: false,
+        }
+    }
 }

@@ -214,6 +214,75 @@ fn cursor_decode(cursor: &str) -> Result<(String, String), AppError> {
     Ok((received_at.to_string(), id.to_string()))
 }
 
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RealAccount {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub email: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub auth_user: String,
+    pub avatar: String,
+    pub color: String,
+}
+
+/// Persists a wizard-verified real IMAP account. Caller owns the connection probe and the
+/// keyring write; if the DB insert fails afterwards the caller compensates by deleting the entry.
+pub fn save_real_account(conn: &mut Connection, account: &RealAccount) -> Result<String, AppError> {
+    if !account.email.contains('@')
+        || account.name.trim().is_empty()
+        || account.auth_user.trim().is_empty()
+    {
+        return Err(AppError::invalid("账号信息不完整"));
+    }
+    let id = account
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("imap:{}", uuid::Uuid::new_v4()));
+    let profile = serde_json::json!({
+        "avatar": account.avatar,
+        "color": account.color,
+        "status": "connected",
+        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": false, "threads": true, "calendar": false },
+        "imapHost": account.imap_host,
+        "imapPort": account.imap_port,
+        "smtpHost": account.smtp_host,
+        "smtpPort": account.smtp_port,
+        "authUser": account.auth_user,
+    });
+    let transaction = conn
+        .transaction()
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    transaction
+        .execute(
+            "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, 'imap', ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET email = excluded.email, display_name = excluded.display_name, profile_json = excluded.profile_json",
+            params![id, account.email, account.name.trim(), profile.to_string(), crate::now_utc()],
+        )
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    Ok(id)
+}
+
+/// Removes a real account; folders and messages cascade with it, local events detach.
+pub fn delete_real_account(conn: &mut Connection, id: &str) -> Result<(), AppError> {
+    let transaction = conn
+        .transaction()
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    transaction
+        .execute("DELETE FROM accounts WHERE id = ?1", params![id])
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|e| AppError::storage(e.to_string()))
+}
+
 /// Replaces exactly the seeded accounts (cascade) plus local labels, leaving any other rows untouched.
 pub fn seed_workspace(conn: &mut Connection, seed: &SeedWorkspace) -> Result<(), AppError> {
     for message in &seed.messages {

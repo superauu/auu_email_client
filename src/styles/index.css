@@ -218,6 +218,17 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .compose-footer > span { flex: 1; font-size: 10px; color: var(--text-subtle); }
 .discard-prompt { display: flex; align-items: center; gap: 8px; padding: 12px 27px; background: var(--canvas); border-top: 1px solid var(--border); font-size: 11px; }
 .discard-prompt > span { margin-right: auto; }
+.wizard-fields { border-top: 1px solid var(--border); }
+.wizard-fields label { display: flex; align-items: center; gap: 16px; margin: 0 27px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.wizard-fields label > span { width: 84px; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.wizard-fields input { flex: 1; min-width: 0; padding: 4px; border: 0; background: var(--surface); font-size: 12px; }
+.wizard-note { margin: 12px 27px 0; color: var(--text-subtle); font-size: 10px; }
+.verify-report { display: grid; gap: 7px; margin: 12px 27px 0; font-size: 11px; }
+.verify-report .probe { display: inline-flex; align-items: center; gap: 6px; }
+.probe-ok { color: var(--success); }
+.probe-fail { color: var(--danger); overflow-wrap: anywhere; }
+.account-remove { font-size: 11px; white-space: nowrap; }
+.account-remove:hover:not(:disabled) { color: var(--danger); }
 .events-view { flex: 1; min-width: 0; overflow-y: auto; padding: 48px; background: var(--surface); }
 .events-view h1 { font-size: 26px; margin: 11px 0; font-weight: 600; letter-spacing: -.7px; }
 .event-list { display: grid; gap: 14px; margin-top: 32px; }
