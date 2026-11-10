@@ -1,0 +1,9 @@
+{
+  "$schema": "../../schemas/skin-manifest.schema.json",
+  "schemaVersion": 1,
+  "id": "graphite",
+  "name": "Graphite · 石墨",
+  "version": "1.0.0",
+  "author": "Auu",
+  "description": "延续 AuuGit 的石墨层次与青色强调。"
+}

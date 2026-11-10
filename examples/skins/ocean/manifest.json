@@ -1,0 +1,9 @@
+{
+  "$schema": "../../../schemas/skin-manifest.schema.json",
+  "schemaVersion": 1,
+  "id": "ocean",
+  "name": "Ocean · 海岸",
+  "version": "1.0.0",
+  "author": "Auu Community",
+  "description": "可直接复制安装的独立皮肤示例，以海蓝色营造安静的工作空间。"
+}

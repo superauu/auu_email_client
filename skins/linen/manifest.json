@@ -1,0 +1,9 @@
+{
+  "$schema": "../../schemas/skin-manifest.schema.json",
+  "schemaVersion": 1,
+  "id": "linen",
+  "name": "Linen · 亚麻",
+  "version": "1.0.0",
+  "author": "Auu",
+  "description": "柔和暖灰、陶土色与更舒展的圆角。"
+}

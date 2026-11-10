@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuuMail skin tokens v1",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "light"
+      ]
+    },
+    {
+      "required": [
+        "dark"
+      ]
+    }
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "light": {
+      "$ref": "#/$defs/palette"
+    },
+    "dark": {
+      "$ref": "#/$defs/palette"
+    }
+  },
+  "$defs": {
+    "palette": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canvas",
+        "surface",
+        "surface-raised",
+        "surface-hover",
+        "surface-selected",
+        "rail",
+        "text",
+        "text-muted",
+        "text-subtle",
+        "border",
+        "accent",
+        "accent-foreground",
+        "danger",
+        "success",
+        "warning",
+        "radius-sm",
+        "radius-md",
+        "radius-lg",
+        "control-height",
+        "list-row-height"
+      ],
+      "properties": {
+        "canvas": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface-raised": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface-hover": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface-selected": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "rail": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "text": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "text-muted": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "text-subtle": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "border": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "accent": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "accent-foreground": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "danger": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "success": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "warning": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "radius-sm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "radius-md": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 24
+        },
+        "radius-lg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "control-height": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 44
+        },
+        "list-row-height": {
+          "type": "integer",
+          "minimum": 88,
+          "maximum": 128
+        }
+      }
+    }
+  }
+}

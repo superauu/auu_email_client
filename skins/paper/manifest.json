@@ -1,0 +1,9 @@
+{
+  "$schema": "../../schemas/skin-manifest.schema.json",
+  "schemaVersion": 1,
+  "id": "paper",
+  "name": "Paper · 素笺",
+  "version": "1.0.0",
+  "author": "Auu",
+  "description": "温润的纸白与松绿色，给阅读留一点呼吸。"
+}
