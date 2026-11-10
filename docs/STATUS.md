@@ -37,7 +37,7 @@
 
 ### 本轮变更（2026-11-10 第三轮）
 
-- 品牌对齐 AuuGit：重绘 `public/logo.svg`（深蓝渐变 tile + teal 信封与发光节点，延续 AuuGit 的 commit-merge 视觉语言）；品牌词 "AuuMail" 采用本地打包的 Orbitron Variable（`--font-display`），应用于顶栏与关于页；Tauri 全套图标（含 .ico 与 Square/Store 资产）由新 logo 重新生成。
+- 品牌对齐 AuuGit：重绘 `public/logo.svg`——以 "Auu" 的字母 A 为主图形（同款深蓝渐变 tile 与 teal 渐变族），A 的横笔化为信封封口折线并交汇于发光节点，区别于 AuuGit 的 git-merge 横笔；品牌词 "AuuMail" 采用本地打包的 Orbitron Variable（`--font-display`），应用于顶栏与关于页；Tauri 全套图标（含 .ico 与 Square/Store 资产）由新 logo 重新生成。
 
 ## 预留（结构已就位，未接入）
 
