@@ -1,6 +1,7 @@
 mod credentials;
 mod error;
 mod mail_store;
+mod mail_sync;
 mod mail_verify;
 mod skins;
 mod storage;
@@ -190,6 +191,23 @@ async fn mail_delete_account(db: State<'_, Db>, id: String) -> Result<(), AppErr
     .map_err(|_| AppError::storage("删除任务未完成"))?
 }
 
+/// Reads the stored credential from the OS keyring and runs an incremental sync.
+/// The secret never leaves this task.
+#[tauri::command]
+async fn mail_sync_account(
+    db: State<'_, Db>,
+    id: String,
+) -> Result<mail_sync::SyncOutcome, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let secret = credentials::secret_for("imap", &id)?;
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_sync::sync_account(&mut conn, &id, &secret)
+    })
+    .await
+    .map_err(|_| AppError::storage("同步任务未完成"))?
+}
+
 #[tauri::command]
 async fn credential_status(provider: String, account_id: String) -> Result<bool, AppError> {
     tauri::async_runtime::spawn_blocking(move || credentials::exists(&provider, &account_id))
@@ -238,6 +256,7 @@ pub fn run() {
             mail_verify_account,
             mail_save_account,
             mail_delete_account,
+            mail_sync_account,
             credential_status,
             credential_save,
             credential_delete

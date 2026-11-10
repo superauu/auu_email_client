@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-11-10（第四轮后）。阶段 A2 完成：IMAP / SMTP 账号可通过向导做真实 TLS 连接验证并保存本机；邮件同步（A3）未接入。
+更新时间：2026-11-10（第五轮后）。阶段 A3 首个增量完成：真实账号可经 IMAP 增量同步 INBOX / Sent 到本机 SQLite（UID 游标 + UIDVALIDITY 变更清理）；发送与附件仍是后续阶段。
 
 ## 已完成（本轮已验证）
 
@@ -8,19 +8,20 @@
 - 事件视图：演示待办完成状态、跳转关联邮件。
 - 皮肤：Paper / Graphite / Linen 内置包；明暗 / 跟随系统；桌面端扫描独立皮肤包、坏包隔离、缺失回退。
 - UI：自定义窗口栏、导航栏与邮件列表宽度可调（拖拽 / 方向键 / Home·End / 双击复位）、窄窗口阅读切换、可访问弹窗、空状态、错误边界；主工作区全宽阅读窗格；Auu 字母 A 品牌标与 Orbitron 品牌字。
-- **账号向导（阶段 A2）**：IMAP / SMTP 真实 TLS 连接验证（native-tls 走系统证书库）；IMAP 用 imap 2.4，SMTP 为自实现状态机（greeting/EHLO/AUTH PLAIN/QUIT，多行响应解析带长度上限）；两端独立出结果并区分 network / auth 错误；验证通过后账号写入 SQLite（provider=imap，profile 含服务器端点与能力），密码只写入 Windows 凭据管理器；保存路径自带二次验证并带补偿回滚；真实账号支持两步确认删除（级联清库 + 删凭据）。
-- Rust 协议单测：MockStream 脚本化 IMAP（经真实 imap crate）与 SMTP 会话、凭据拒绝映射 auth、协议垃圾映射 network、host 校验、完整 verify 双端独立报告；不依赖任何真实服务器。
+- 账号向导（阶段 A2）：IMAP / SMTP 真实 TLS 连接验证；账号保存前二次验证；密码只写入 Windows 凭据管理器；两步确认删除。
+- **增量同步（阶段 A3.1）**：`mail_sync_account` 从系统凭据库内部取密码（不经 IPC），IMAP LIST 同步文件夹结构（INBOX / Sent / Drafts / Archive / Trash / 其他），INBOX 与 Sent 走 UID 游标增量（`sync_states` 存 `{uidValidity, lastUid}`，首次窗口最近 50 封）；UIDVALIDITY 变更时清理该文件夹旧行防止重复；正文经 mail-parser 解析（RFC 2047 主题解码、text/plain 正文、发件人/收件人），只存纯文本。账号页显示同步按钮、上次同步时间与真实同步结果。
 - 桌面交互：应用框架禁止文本选择，分隔条拖拽锁定光标且不产生选区。
 - Rust / SQLite：固定数据目录、逐版本迁移与 FTS5 索引、受限皮肤扫描命令。
 
 ### 验证记录（2026-11-10，Windows / Node 20.19 / Rust 1.98）
 
 - `npm run check`：lint、皮肤 schema 一致性、类型检查、生产构建、11 个领域测试，全部通过。
-- `npm run check:native`：cargo fmt --check、cargo test（23 个 Rust 测试：迁移 / 仓库 / 分页 / 隔离 / FTS 转义 / 凭据真实读写 / **IMAP+SMTP 协议会话脚本测试**）、clippy（-D warnings），全部通过。
+- `npm run check:native`：cargo fmt --check、cargo test（27 个 Rust 测试：迁移 / 仓库 / 分页 / 隔离 / FTS 转义 / 凭据真实读写 / IMAP+SMTP 协议会话 / 同步增量与 UIDVALIDITY 清理）、clippy（-D warnings），全部通过。
 - `npm run test:ui`：7 个 Playwright 测试全部通过（含侧栏拖拽 / 双击复位 / 刷新持久化）。
 - **桌面端到端实测**（`tauri dev` + WebView2 CDP 连接验证）：
   - 工作区：收件箱 6 封邮件经分页 IPC 读自 SQLite；搜索"呼吸感"FTS 命中 1 封；账号切换隔离正确；状态栏显示"桌面工作区"。数据库落盘验证：`%APPDATA%/com.auu.mailclient/mail.db`，`user_version=2`。
-  - **账号向导错误路径**：对 `127.0.0.1:1`（无服务端口）执行真实"测试连接"，IMAP 与 SMTP 双双返回真实 TCP 拒绝错误（os error 10061）并展示在报告区——错误链路端到端为真，无任何伪造成功。
+  - 账号向导错误路径：对 `127.0.0.1:1`（无服务端口）执行真实"测试连接"，IMAP 与 SMTP 双双返回真实 TCP 拒绝错误（os error 10061）并展示在报告区——错误链路端到端为真，无任何伪造成功。
+  - 同步错误路径：插入真实账号行并写入 Windows 凭据后点击"同步"，keyring 读取成功 → TLS 连接真实被拒（os error 10061）→ 账号页展示"同步失败：无法连接到 127.0.0.1:1…"。测试账号与凭据已清理。
 - 浏览器预览（`npm run dev`）：界面正常渲染，账号切换、阅读、搜索、空状态可用；Graphite 暗色与 Paper 亮色、222px 与 320px 导航栏宽度目视检查通过。
 
 ### 本轮变更（2026-11-10 第二轮）
@@ -43,15 +44,16 @@
 
 ## 预留（结构已就位，未接入）
 
-- **邮件同步（阶段 A3）**：增量同步、正文按需读取、文件夹拉取入库、sync_states 游标、断线重试。账号向导已能在 IMAP LIST 中数出文件夹（报告区展示），但不入库。
-- 发送队列与真实发信（阶段 A4，outbox 表已建）；富文本、附件、自动保存。
+- **发送队列与真实发信（阶段 A4）**：SMTP 发送、outbox 表状态机、发送结果不明时不重复发送；附件；草稿迁入 SQLite 并自动保存。
+- 星标 / 已读 / 归档的跨会话持久化与会话内状态回写 IMAP（当前仅同步时读取标志）。
+- 正文按需读取（当前同步时一并拉取全文并仅保存 text/plain）；HTML-only 邮件正文暂为空。
+- 多账号队列与断线重试（当前为单账号手动同步）。
 - AI 能力（界面按钮已占位，未调用任何模型）；日历同步。
-- 星标 / 已读 / 归档的跨会话持久化。
 - UI 侧消息增量加载与虚拟列表（当前桌面 gateway 内部循环取页拼快照，数据量增大前可接受）。
 
 ## 未验证
 
-- **真实邮件服务器上的成功连接**：协议状态机与错误路径已用脚本化 MockStream 单测 + 本机真实 TCP 拒绝实测覆盖；成功路径（TLS 握手 + 真实登录 + LIST）需要你的真实测试账号，属阶段 A5 验收。
+- **真实邮件服务器上的成功同步**：协议状态机、增量与 UIDVALIDITY 逻辑已用脚本化 MockStream 单测覆盖；成功路径（真实 TLS + 登录 + SELECT/FETCH）需要你的真实测试账号，属阶段 A5 验收。
 - STARTTLS（143/587）路径：当前仅隐式 TLS（993/465）。
 - `npm run desktop:build`（打包与 NSIS 安装包未在本轮运行；桌面 dev 窗口已实测）。
 - 皮肤包桌面扫描依赖 Tauri 命令，浏览器预览无法覆盖（单测与 schema 校验已覆盖数据层）。

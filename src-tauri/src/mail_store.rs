@@ -95,6 +95,15 @@ pub struct WorkspaceBase {
     pub accounts: Vec<AccountRow>,
     pub labels: Vec<LabelRow>,
     pub events: Vec<EventRow>,
+    pub sync_states: Vec<SyncStateRow>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStateRow {
+    pub account_id: String,
+    pub scope: String,
+    pub updated_at: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -439,10 +448,23 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
         },
     )?;
 
+    let sync_states = query_rows(
+        conn,
+        "SELECT account_id, scope, updated_at FROM sync_states ORDER BY account_id, scope",
+        |row| {
+            Ok(SyncStateRow {
+                account_id: row.get(0)?,
+                scope: row.get(1)?,
+                updated_at: row.get(2)?,
+            })
+        },
+    )?;
+
     Ok(WorkspaceBase {
         accounts,
         labels,
         events,
+        sync_states,
     })
 }
 

@@ -9,10 +9,22 @@ export interface AppInfo {
   databaseReady: boolean;
 }
 /** Workspace without messages: messages always arrive through the paged query. */
+export interface DesktopSyncState {
+  accountId: string;
+  scope: string;
+  updatedAt: string;
+}
 export interface DesktopWorkspaceBase {
   accounts: MailAccount[];
   labels: MailLabel[];
   events: MailEvent[];
+  syncStates: DesktopSyncState[];
+}
+export interface SyncOutcome {
+  folders: number;
+  fetchedMessages: number;
+  syncedAt: string;
+  warnings: string[];
 }
 export interface DesktopMessagePage {
   items: MailMessage[];
@@ -53,6 +65,8 @@ export const desktopMail = {
   async seed(snapshot: WorkspaceSnapshot): Promise<void> { await invoke('mail_seed_workspace', { seed: snapshot }); },
   async workspace(): Promise<DesktopWorkspaceBase> { return invoke('mail_load_workspace'); },
   async page(query: DesktopMessageQuery): Promise<DesktopMessagePage> { return invoke('mail_page_messages', { query }); },
+  /** Incremental IMAP sync for a real account; the credential never leaves Rust. */
+  async sync(accountId: string): Promise<SyncOutcome> { return invoke('mail_sync_account', { id: accountId }); },
 };
 
 /** OS credential storage. Secrets travel in only; nothing here ever returns one. */

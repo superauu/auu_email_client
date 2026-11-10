@@ -142,7 +142,10 @@ fn smtp_probe(host: &str, port: u16, user: &str, secret: &str) -> Result<(), App
     smtp_verify_stream(tls, user, secret)
 }
 
-fn tls_connect(host: &str, port: u16) -> Result<native_tls::TlsStream<TcpStream>, AppError> {
+pub(crate) fn tls_connect(
+    host: &str,
+    port: u16,
+) -> Result<native_tls::TlsStream<TcpStream>, AppError> {
     let address = (host, port);
     let tcp = TcpStream::connect(address).map_err(|error| {
         AppError::network(format!(

@@ -75,6 +75,8 @@ export interface WorkspaceSnapshot {
   messages: MailMessage[];
   labels: MailLabel[];
   events: MailEvent[];
+  /** accountId → last successful sync time (ISO). Desktop gateway only; absent for demo. */
+  syncStates?: Record<string, string>;
 }
 
 export interface MailQuery {

@@ -20,7 +20,12 @@ export const desktopMailGateway: MailGateway = {
       cursor = page.nextCursor;
     } while (cursor);
     messages.push(...loadDraftMessages(base.accounts));
-    return { ...base, messages };
+    const syncStates: Record<string, string> = {};
+    for (const state of base.syncStates) {
+      const current = syncStates[state.accountId] ?? '';
+      if (state.updatedAt > current) syncStates[state.accountId] = state.updatedAt;
+    }
+    return { accounts: base.accounts, labels: base.labels, events: base.events, messages, syncStates };
   },
   async saveDraft(draft) {
     persistDraft(draft);

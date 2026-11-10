@@ -45,6 +45,17 @@ pub fn delete(provider: &str, account_id: &str) -> Result<(), AppError> {
     }
 }
 
+/// Internal read for sync tasks. Never exposed as an IPC command.
+pub fn secret_for(provider: &str, account_id: &str) -> Result<String, AppError> {
+    match entry(provider, account_id)?.get_password() {
+        Ok(secret) => Ok(secret),
+        Err(keyring::Error::NoEntry) => Err(AppError::credentials(
+            "系统凭据库中没有该账号的密码，请重新添加账号",
+        )),
+        Err(_) => Err(AppError::credentials("无法读取系统凭据")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
