@@ -10,6 +10,8 @@
   --color-muted-foreground: var(--text-muted);
   --color-border: var(--border);
   --font-sans: 'Inter Variable', 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  /* Brand display face, shared with AuuGit; Latin-only, CJK falls back to the sans stack. */
+  --font-display: 'Orbitron Variable', 'Inter Variable', 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
 }
 
 :root { font-family: var(--font-sans); font-size: 13px; line-height: 1.5; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; }
@@ -51,7 +53,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .app-header { height: 62px; flex-shrink: 0; display: flex; align-items: center; gap: 28px; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; user-select: none; touch-action: none; }
 .brand img { width: 28px; height: 28px; }
-.brand strong { font-size: 17px; font-weight: 650; letter-spacing: -.5px; }
+.brand strong { font-family: var(--font-display); font-size: 16px; font-weight: 620; letter-spacing: .5px; color: var(--accent); }
 .brand-divider { height: 16px; width: 1px; background: var(--border); margin: 0 3px 0 8px; }
 .brand-subtitle { color: var(--text-subtle); font-size: 11px; }
 .global-search { display: flex; align-items: center; gap: 10px; color: var(--text-subtle); height: 34px; width: 370px; max-width: 35vw; margin-left: auto; background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 10px; }
@@ -200,7 +202,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .info-card p { margin-top: 9px; color: var(--text-muted); font-size: 11px; line-height: 1.9; }
 .about-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 24px; }
 .about-brand img { width: 48px; height: 48px; }
-.about-brand h3 { font-size: 22px; }
+.about-brand h3 { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: .5px; color: var(--accent); }
 .about-brand p { font-size: 11px; color: var(--text-muted); }
 .about-brand .label { margin-left: auto; }
 .inline-error, .warning-list { margin: 14px 27px; color: var(--danger); font-size: 11px; overflow-wrap: anywhere; }

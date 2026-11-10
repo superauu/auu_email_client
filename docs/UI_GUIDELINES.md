@@ -18,7 +18,7 @@
 
 ## 排版与间距
 
-字体为本地打包 Inter Variable，中文回退 Segoe UI / Microsoft YaHei UI / 系统 sans-serif；不从 CDN 请求字体。默认正文 13px、约 2 倍行高；标题 20–27px；列表内容 11–12px；辅助信息 9–11px。重要信息不能仅放在最小字号中。字号可调整和可读性增强是后续任务。
+字体为本地打包 Inter Variable（正文）与 Orbitron Variable（品牌展示字，与 AuuGit 同源；仅用于拉丁品牌词 "AuuMail"，中文回退 Segoe UI / Microsoft YaHei UI / 系统 sans-serif），不从 CDN 请求字体。默认正文 13px、约 2 倍行高；标题 20–27px；列表内容 11–12px；辅助信息 9–11px。重要信息不能仅放在最小字号中。字号可调整和可读性增强是后续任务。
 
 间距采用 4 / 8 / 12 / 16 / 24 / 32px 基础节奏。圆角、控件高度和邮件行高由皮肤规定；布局宽度和交互行为属于应用，不由皮肤重写。长主题、地址和正文必须截断或换行，不得撑破分栏。
 

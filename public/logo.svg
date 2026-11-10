@@ -1,5 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect x="16" y="16" width="480" height="480" rx="128" fill="#167969"/>
-  <rect x="104" y="148" width="304" height="222" rx="32" fill="none" stroke="#ffffff" stroke-width="24"/>
-  <path d="m116 166 140 108 140-108" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <title>AuuMail</title>
+  <defs>
+    <linearGradient id="tile" x1="64" y1="24" x2="424" y2="496" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#172B42"/>
+      <stop offset=".55" stop-color="#0C182A"/>
+      <stop offset="1" stop-color="#091221"/>
+    </linearGradient>
+    <linearGradient id="envelope" x1="128" y1="336" x2="384" y2="176" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#05B5C7"/>
+      <stop offset="1" stop-color="#38D6F0"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="132" y1="176" x2="384" y2="288" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B0FFF5"/>
+      <stop offset="1" stop-color="#72F0F2"/>
+    </linearGradient>
+    <linearGradient id="trail" x1="384" y1="256" x2="452" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#72F0F2" stop-opacity="0"/>
+      <stop offset="1" stop-color="#72F0F2"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="128" fill="url(#tile)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="126.5" stroke="#B8E4F7" stroke-opacity=".12"/>
+  <!-- The envelope flap meets at a glowing node, echoing the Auu commit merge language. -->
+  <rect x="132" y="184" width="248" height="152" rx="40" stroke="url(#envelope)" stroke-width="20"/>
+  <path d="m148 208 92.5 71.5a25 25 0 0 0 31 0L364 208" stroke="url(#fold)" stroke-width="20" stroke-linecap="round"/>
+  <path d="M392 256c18-10 32-28 44-52" stroke="url(#trail)" stroke-width="14" stroke-linecap="round" stroke-opacity=".7"/>
+  <circle cx="447" cy="192" r="12" fill="#B0FFF5"/>
+  <circle cx="256" cy="288" r="26" fill="#0C182A"/>
+  <circle cx="256" cy="288" r="15" fill="#B0FFF5"/>
 </svg>

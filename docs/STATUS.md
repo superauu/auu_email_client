@@ -35,6 +35,10 @@
 - `e2e/workspace.spec.ts`：账号按钮“独立邮箱”的选择器由 `exact: false` 改为 `exact: true`。演示邮件《你的独立邮箱已经准备就绪》与账号名撞名，子串匹配触发 Playwright strict mode violation。
 - 运维提示：Vite 配置变更后，旧的 dev server 依赖缓存会失效，页面因 `504 Outdated Optimize Dep` 黑屏；关闭旧进程、删除 `node_modules/.vite`、重启 `npm run dev` 即可恢复。
 
+### 本轮变更（2026-11-10 第三轮）
+
+- 品牌对齐 AuuGit：重绘 `public/logo.svg`（深蓝渐变 tile + teal 信封与发光节点，延续 AuuGit 的 commit-merge 视觉语言）；品牌词 "AuuMail" 采用本地打包的 Orbitron Variable（`--font-display`），应用于顶栏与关于页；Tauri 全套图标（含 .ico 与 Square/Store 资产）由新 logo 重新生成。
+
 ## 预留（结构已就位，未接入）
 
 - 真实邮箱连接、OAuth 授权、真实收发（阶段 A2-A3；凭据服务与账号仓库已就绪，见 `docs/PROVIDER_CONTRACTS.md`）。
