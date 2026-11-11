@@ -1,7 +1,7 @@
 /** UTC ISO-8601 at every persistence / IPC boundary; localize only when rendering. */
 export type Timestamp = string;
 export type ProviderKind = 'imap' | 'pop3' | 'microsoft' | 'gmail';
-export type MailboxKind = 'inbox' | 'starred' | 'sent' | 'drafts' | 'archive' | 'trash';
+export type MailboxKind = 'inbox' | 'starred' | 'sent' | 'drafts' | 'archive' | 'trash' | 'other';
 
 export interface MailCapabilities {
   folders: boolean;
@@ -12,6 +12,8 @@ export interface MailCapabilities {
 }
 
 export interface MailAccount {
+  oauth?: import('./oauth').OAuthConfig | null;
+  authUser?: string;
   id: string;
   name: string;
   email: string;
@@ -32,6 +34,10 @@ export interface MailLabel {
 }
 
 export interface MailMessage {
+  bodyDownload?: { state: 'queued' | 'failed'; error: string | null } | null;
+  folderIds?: string[];
+  attachments?: { index: number; name: string; size: number; mediaType: string }[];
+  remoteMissing?: boolean;
   id: string;
   accountId: string;
   remoteId?: string;
@@ -47,6 +53,35 @@ export interface MailMessage {
   unread: boolean;
   starred: boolean;
   labelIds: string[];
+  /** Present only for a locally editable draft; preserves empty subjects and reply metadata. */
+  draft?: MailDraft;
+  stateRevision?: number;
+  changes?: MessageChange[];
+  recovery?: RecoveryStatus | null;
+}
+
+export type RecoveryAction = 'check' | 'confirm' | 'retry-archive' | 'continue' | 'auto-continue' | 'fingerprint' | 'confirm-fingerprint';
+export interface RecoveryStatus {
+  autoContinue?: boolean;
+  state: 'available' | 'queued' | 'checking' | 'scanning' | 'located' | 'source-present' | 'unresolved' | 'failed' | 'restored' | 'local' | 'stale';
+  detail: string;
+  location: { folder: string; kind: string; uidValidity: number; uid: number } | null;
+  evidence: 'raw-sha256' | 'cached-fields' | null;
+  progress?: { checked: number; total: number; matches: number; segments?: { completed: number; total: number; phase: 'collecting' | 'validating' } | null } | null;
+  crossUidValidity?: boolean;
+  fingerprint?: { eligible: boolean; reason: string } | null;
+  operation?: 'recovery' | 'fingerprint';
+}
+
+export interface MessageChange {
+  field: 'unread' | 'starred' | 'archive';
+  state: 'queued' | 'applying' | 'failed' | 'conflict' | 'unknown' | 'local';
+  error: string | null;
+}
+export interface MessagePatch {
+  unread?: boolean;
+  starred?: boolean;
+  archive?: true;
 }
 
 export interface MailDraft {
@@ -57,6 +92,13 @@ export interface MailDraft {
   bodyText: string;
   replyToId?: string;
   updatedAt: Timestamp;
+  /** Persisted revision; omitted only for legacy drafts, which are treated as revision zero. */
+  revision?: number;
+}
+
+export interface DraftSaveOptions {
+  /** Last persisted owner, required when moving an existing draft to another sender. */
+  previousAccountId: string;
 }
 
 export interface MailEvent {
@@ -71,6 +113,7 @@ export interface MailEvent {
 }
 
 export interface WorkspaceSnapshot {
+  folders?: MailFolder[];
   accounts: MailAccount[];
   messages: MailMessage[];
   labels: MailLabel[];
@@ -80,16 +123,23 @@ export interface WorkspaceSnapshot {
 }
 
 export interface MailQuery {
+  folderId?: string | null;
   accountId: string | null;
   mailbox: MailboxKind;
   labelId: string | null;
   search: string;
 }
+export interface MailFolder { id: string; accountId: string; name: string; kind: string; available: boolean }
 
 export interface MailGateway {
-  /** 'demo': in-memory demo data; 'desktop-local': real local SQLite via IPC, demo content; 'live': a connected provider. */
+  requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
+  exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
+  /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;
-  saveDraft(draft: MailDraft): Promise<MailMessage>;
+  saveDraft(draft: MailDraft, options?: DraftSaveOptions): Promise<MailMessage>;
+  updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage>;
+  keepMessageLocal(accountId: string, messageId: string): Promise<MailMessage>;
+  requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage>;
   // Add sync/send through explicit capability interfaces when a provider is implemented.
 }

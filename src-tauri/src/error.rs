@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppError {
     pub code: &'static str,
@@ -9,6 +9,14 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            code: "conflict",
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
     pub fn storage(message: impl Into<String>) -> Self {
         Self {
             code: "storage",

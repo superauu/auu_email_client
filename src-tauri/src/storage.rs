@@ -1,10 +1,20 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i64 = 2;
+const LATEST_VERSION: i64 = 9;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_foundation.sql")),
     (2, include_str!("../migrations/002_mail_store.sql")),
+    (3, include_str!("../migrations/003_local_drafts.sql")),
+    (4, include_str!("../migrations/004_sync_generation.sql")),
+    (5, include_str!("../migrations/005_message_changes.sql")),
+    (6, include_str!("../migrations/006_remote_recovery.sql")),
+    (7, include_str!("../migrations/007_recovery_scan.sql")),
+    (
+        8,
+        include_str!("../migrations/008_fingerprint_provenance.sql"),
+    ),
+    (9, include_str!("../migrations/009_imap_completion.sql")),
 ];
 
 pub fn initialize(path: &Path) -> Result<Connection, String> {
@@ -13,6 +23,9 @@ pub fn initialize(path: &Path) -> Result<Connection, String> {
         .pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| e.to_string())?;
     migrate(&mut connection)?;
+    crate::message_changes::recover(&mut connection).map_err(|error| error.message)?;
+    crate::mail_recovery::recover(&mut connection).map_err(|error| error.message)?;
+    crate::imap_jobs::recover(&connection).map_err(|error| error.message)?;
     Ok(connection)
 }
 
@@ -42,6 +55,44 @@ pub fn migrate(connection: &mut Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v8_upgrade_keeps_cached_mail_and_edits_without_inventing_raw_or_auto_sync() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for (_, script) in MIGRATIONS.iter().filter(|(v, _)| *v <= 8) {
+            conn.execute_batch(script).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        crate::message_changes::tests::seed(&conn);
+        conn.execute_batch("UPDATE messages SET starred=1,state_revision=1 WHERE id='m'; INSERT INTO message_changes(account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,updated_at) SELECT 'acc','m','starred',1,1,'queued',sync_generation,'INBOX',10,1,'2026-11-11T00:00:00Z' FROM accounts WHERE id='acc';").unwrap();
+        migrate(&mut conn).unwrap();
+        let m = crate::mail_store::message_by_id(&conn, "acc", "m").unwrap();
+        assert!(m.starred);
+        assert_eq!(m.changes.len(), 1);
+        let key: Option<String> = conn
+            .query_row("SELECT raw_cache_key FROM messages WHERE id='m'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(key.is_none());
+        let settings = crate::imap_settings::read(&conn, "acc").unwrap();
+        assert!(settings.sync_all_folders);
+        assert!(!settings.history_enabled);
+        assert_eq!(settings.auto_sync_seconds, 0);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM imap_sync_requests", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(conn
+            .execute(
+                "INSERT INTO imap_body_requests VALUES ('other','m','generation',1,'queued',NULL)",
+                []
+            )
+            .is_err());
+    }
 
     #[test]
     fn migration_is_repeatable_and_rejects_newer_databases() {

@@ -3,6 +3,39 @@
 //! no command and no error message ever returns a secret or echoes the platform error verbatim.
 use crate::error::AppError;
 use keyring::Entry;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock, Weak},
+};
+type AccountLocks = Mutex<HashMap<String, Weak<Mutex<()>>>>;
+static ACCOUNT_LOCKS: OnceLock<AccountLocks> = OnceLock::new();
+/// Serializes credential rotation with account reconfiguration. Never call with a DB guard.
+pub(crate) fn with_account<T>(
+    provider: &str,
+    id: &str,
+    work: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let _ = entry(provider, id)?;
+    let key = format!("{provider}:{id}");
+    let lock = {
+        let mut locks = ACCOUNT_LOCKS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| AppError::credentials("凭据锁不可用"))?;
+        locks.retain(|_, v| v.strong_count() > 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            locks.insert(key, Arc::downgrade(&lock));
+            lock
+        }
+    };
+    let _guard = lock
+        .lock()
+        .map_err(|_| AppError::credentials("账号凭据不可用"))?;
+    work()
+}
 
 const SERVICE: &str = "AuuMail";
 const PROVIDERS: [&str; 4] = ["imap", "pop3", "microsoft", "gmail"];

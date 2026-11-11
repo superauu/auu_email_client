@@ -1,4 +1,4 @@
-export type AppErrorCode = 'not-connected' | 'not-supported' | 'storage' | 'validation' | 'cancelled' | 'internal';
+export type AppErrorCode = 'not-connected' | 'not-supported' | 'storage' | 'validation' | 'invalid' | 'credentials' | 'network' | 'auth' | 'conflict' | 'cancelled' | 'internal';
 export interface AppError {
   code: AppErrorCode;
   message: string;

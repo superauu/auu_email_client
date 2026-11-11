@@ -1,45 +1,38 @@
-import type { MailAccount, MailDraft, MailMessage } from '../../domain/mail';
+import type { MailAccount, MailDraft, MailMessage, DraftSaveOptions } from '../../domain/mail';
 import { demoWorkspace } from './fixtures';
 import { readPreference, writePreference } from '../../lib/preferences';
+import { validateDraft, draftAsMessage } from '../../domain/drafts';
+export { draftAsMessage } from '../../domain/drafts';
 
 const KEY = 'auumail.demo.drafts.v1';
 export function validateDemoDrafts(raw: unknown): MailDraft[] {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error('Invalid demo drafts');
   return raw.map((item: unknown) => {
-    if (!item || typeof item !== 'object') throw new Error('Invalid draft');
-    const value = item as Record<string, unknown>;
-    for (const key of ['id', 'accountId', 'to', 'subject', 'bodyText', 'updatedAt']) {
-      if (typeof value[key] !== 'string' || value[key].length > 50_000) throw new Error('Invalid draft field');
-    }
-    if (!demoWorkspace.accounts.some(a => a.id === value.accountId) || !String(value.id).startsWith('draft-') || !Number.isFinite(Date.parse(String(value.updatedAt)))) throw new Error('Invalid draft identity');
-    if (value.replyToId !== undefined && typeof value.replyToId !== 'string') throw new Error('Invalid reply');
-    return {
-      id: value.id as string, accountId: value.accountId as string, to: value.to as string,
-      subject: value.subject as string, bodyText: value.bodyText as string, updatedAt: value.updatedAt as string,
-      ...(value.replyToId ? { replyToId: value.replyToId as string } : {}),
-    };
+    const draft = validateDraft(item);
+    if (!demoWorkspace.accounts.some(a => a.id === draft.accountId)) throw new Error('Invalid demo account');
+    return draft;
   });
 }
 
-export function draftAsMessage(draft: MailDraft, accounts: MailAccount[]): MailMessage {
-  const account = accounts.find(a => a.id === draft.accountId);
-  if (!account) throw new Error('找不到发件账号');
-  return {
-    id: draft.id, accountId: draft.accountId, threadId: draft.replyToId ?? draft.id, mailbox: 'drafts',
-    from: { name: account.name, email: account.email }, to: draft.to ? [draft.to] : [], subject: draft.subject || '未命名草稿',
-    preview: draft.bodyText.slice(0, 120), bodyText: draft.bodyText, receivedAt: draft.updatedAt,
-    unread: false, starred: false, labelIds: [],
-  };
+/** Legacy desktop draft source; retained as a backup after transactional native import. */
+export function loadLegacyDemoDrafts(): MailDraft[] {
+  return readPreference(KEY, validateDemoDrafts) ?? [];
 }
 
-/** Demo drafts are localStorage-persisted on every gateway; SQLite drafts arrive with real accounts (Roadmap A4). */
+/** Browser demo only. Desktop drafts are persisted by the native repository. */
 export function loadDraftMessages(accounts: MailAccount[]): MailMessage[] {
   return (readPreference(KEY, validateDemoDrafts) ?? []).map(draft => draftAsMessage(draft, accounts));
 }
 
-export function persistDraft(draft: MailDraft): MailDraft[] {
+export function persistDraft(draft: MailDraft, options?: DraftSaveOptions): MailDraft {
   const existing = readPreference(KEY, validateDemoDrafts) ?? [];
-  const next = validateDemoDrafts([draft, ...existing.filter(item => item.id !== draft.id)]);
+  const current = existing.find(item => item.id === draft.id);
+  const expectedRevision = draft.revision ?? 0;
+  if (current ? (current.revision ?? 0) !== expectedRevision || current.accountId !== (options?.previousAccountId ?? draft.accountId) : expectedRevision !== 0) {
+    throw { code: 'conflict', message: '草稿已在其他窗口修改，请保留当前内容并重新打开草稿。', retryable: false };
+  }
+  const saved = validateDraft({ ...draft, revision: expectedRevision + 1, updatedAt: new Date().toISOString() });
+  const next = validateDemoDrafts([saved, ...existing.filter(item => item.id !== draft.id)]);
   if (!writePreference(KEY, next)) throw new Error('草稿未能保存，请保留窗口中的内容后重试。');
-  return next;
+  return saved;
 }

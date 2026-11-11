@@ -1,7 +1,7 @@
 //! SQLite repository for the mail workspace: idempotent demo seeding, paged message queries.
 //! Timestamps are UTC ISO-8601 strings; keyset pagination orders by (received_at DESC, id DESC).
 use crate::error::AppError;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -9,7 +9,7 @@ const MAX_PAGE_LIMIT: u32 = 500;
 const DEFAULT_PAGE_LIMIT: u32 = 100;
 const PREVIEW_CHARS: usize = 120;
 /// Folder kinds map 1:1 to the UI mailbox projection; 'starred' is a flag filter, never a folder.
-const FOLDER_KINDS: [&str; 5] = ["inbox", "sent", "drafts", "archive", "trash"];
+const FOLDER_KINDS: [&str; 6] = ["inbox", "sent", "drafts", "archive", "trash", "other"];
 /// Deterministic projection when a message sits in several folders.
 const KIND_PRIORITY: &str = "CASE f.kind WHEN 'inbox' THEN 0 WHEN 'sent' THEN 1 WHEN 'drafts' THEN 2 WHEN 'archive' THEN 3 ELSE 4 END";
 
@@ -92,10 +92,20 @@ pub struct SeedEvent {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceBase {
+    pub folders: Vec<FolderRow>,
     pub accounts: Vec<AccountRow>,
     pub labels: Vec<LabelRow>,
     pub events: Vec<EventRow>,
     pub sync_states: Vec<SyncStateRow>,
+}
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRow {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    pub kind: String,
+    pub available: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -109,6 +119,8 @@ pub struct SyncStateRow {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRow {
+    pub oauth: Option<crate::mail_oauth::Config>,
+    pub auth_user: String,
     pub id: String,
     pub name: String,
     pub email: String,
@@ -146,6 +158,21 @@ pub struct EventRow {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRow {
+    pub body_download: Option<crate::imap_body::Status>,
+    pub folder_ids: Vec<String>,
+    pub attachments: Vec<crate::mail_sync::Attachment>,
+    pub remote_missing: bool,
+    pub recovery: Option<crate::mail_recovery::Status>,
+    #[serde(skip)]
+    pub content_hash: Option<String>,
+    #[serde(skip)]
+    pub locator_verified: bool,
+    #[serde(skip)]
+    pub content_hash_verified: bool,
+    #[serde(skip)]
+    pub header_message_id: Option<String>,
+    pub state_revision: i64,
+    pub changes: Vec<crate::message_changes::ChangeStatus>,
     pub id: String,
     pub account_id: String,
     pub remote_id: Option<String>,
@@ -160,6 +187,8 @@ pub struct MessageRow {
     pub unread: bool,
     pub starred: bool,
     pub label_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft: Option<crate::drafts::Draft>,
 }
 
 #[derive(Serialize, Debug)]
@@ -179,6 +208,8 @@ pub struct MessagePage {
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MessageQuery {
+    pub folder_id: Option<String>,
+    pub message_id: Option<String>,
     pub account_id: Option<String>,
     /// Folder kind or 'starred' (starred flag excluding trash), matching the UI mailbox projection.
     pub mailbox: Option<String>,
@@ -223,15 +254,21 @@ fn cursor_decode(cursor: &str) -> Result<(String, String), AppError> {
     Ok((received_at.to_string(), id.to_string()))
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RealAccount {
+    #[serde(default)]
+    pub receive_only: bool,
+    #[serde(default)]
+    pub oauth: Option<crate::mail_oauth::Config>,
     #[serde(default)]
     pub id: Option<String>,
     pub name: String,
     pub email: String,
     pub imap_host: String,
     pub imap_port: u16,
+    #[serde(default)]
+    pub imap_security: crate::imap_transport::Security,
     pub smtp_host: String,
     pub smtp_port: u16,
     pub auth_user: String,
@@ -241,7 +278,11 @@ pub struct RealAccount {
 
 /// Persists a wizard-verified real IMAP account. Caller owns the connection probe and the
 /// keyring write; if the DB insert fails afterwards the caller compensates by deleting the entry.
-pub fn save_real_account(conn: &mut Connection, account: &RealAccount) -> Result<String, AppError> {
+pub fn save_real_account(
+    conn: &mut Connection,
+    account: &RealAccount,
+    expected: Option<&str>,
+) -> Result<String, AppError> {
     if !account.email.contains('@')
         || account.name.trim().is_empty()
         || account.auth_user.trim().is_empty()
@@ -256,16 +297,31 @@ pub fn save_real_account(conn: &mut Connection, account: &RealAccount) -> Result
         "avatar": account.avatar,
         "color": account.color,
         "status": "connected",
-        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": false, "threads": true, "calendar": false },
+        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": true, "threads": true, "calendar": false },
         "imapHost": account.imap_host,
         "imapPort": account.imap_port,
+        "imapSecurity": account.imap_security,
         "smtpHost": account.smtp_host,
         "smtpPort": account.smtp_port,
         "authUser": account.auth_user,
+        "receiveOnly":account.receive_only,
+        "oauth":account.oauth,
+        "authEpoch":uuid::Uuid::new_v4().to_string(),
     });
     let transaction = conn
         .transaction()
         .map_err(|e| AppError::storage(e.to_string()))?;
+    let current: Option<String> = transaction
+        .query_row(
+            "SELECT sync_generation FROM accounts WHERE id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| AppError::storage("无法核对账号版本"))?;
+    if current.as_deref() != expected {
+        return Err(AppError::conflict("账号版本已改变，未覆盖连接或授权"));
+    }
     transaction
         .execute(
             "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, 'imap', ?2, ?3, ?4, ?5)
@@ -273,6 +329,23 @@ pub fn save_real_account(conn: &mut Connection, account: &RealAccount) -> Result
             params![id, account.email, account.name.trim(), profile.to_string(), crate::now_utc()],
         )
         .map_err(|e| AppError::storage(e.to_string()))?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO imap_settings(account_id) VALUES (?1)",
+            [&id],
+        )
+        .map_err(|_| AppError::storage("无法保存 IMAP 设置"))?;
+    transaction
+        .execute(
+            "DELETE FROM sync_states WHERE account_id=?1 AND scope LIKE 'imap:%'",
+            [&id],
+        )
+        .map_err(|_| AppError::storage("无法重建账号同步边界"))?;
+    transaction
+        .execute("DELETE FROM imap_sync_requests WHERE account_id=?1", [&id])
+        .map_err(|_| AppError::storage("无法清理旧连接请求"))?;
+    transaction.execute("UPDATE messages SET remote_missing=1,state_revision=state_revision+1 WHERE account_id=?1 AND remote_missing=0",[&id]).map_err(|_|AppError::storage("无法保护旧连接邮件"))?;
+    transaction.execute("UPDATE message_changes SET state='conflict',error='连接已重新配置，保留本机修改，需明确核对定位。' WHERE account_id=?1 AND state IN ('queued','failed')",[&id]).map_err(|_|AppError::storage("无法保留旧连接修改"))?;
     transaction
         .commit()
         .map_err(|e| AppError::storage(e.to_string()))?;
@@ -292,8 +365,11 @@ pub fn delete_real_account(conn: &mut Connection, id: &str) -> Result<(), AppErr
         .map_err(|e| AppError::storage(e.to_string()))
 }
 
-/// Replaces exactly the seeded accounts (cascade) plus local labels, leaving any other rows untouched.
+/// Refreshes demo messages without deleting accounts or their durable drafts.
 pub fn seed_workspace(conn: &mut Connection, seed: &SeedWorkspace) -> Result<(), AppError> {
+    if seed.accounts.iter().any(|account| account.status != "demo") {
+        return Err(AppError::invalid("只允许初始化演示账号"));
+    }
     for message in &seed.messages {
         validate_folder_kind(&message.mailbox)?;
     }
@@ -306,12 +382,7 @@ pub fn seed_workspace(conn: &mut Connection, seed: &SeedWorkspace) -> Result<(),
         .transaction()
         .map_err(|e| AppError::storage(e.to_string()))?;
     {
-        // FK-safe order; account deletes cascade folders/messages/memberships/events/drafts/sync states.
-        for account in &seed.accounts {
-            transaction
-                .execute("DELETE FROM accounts WHERE id = ?1", params![account.id])
-                .map_err(|e| AppError::storage(e.to_string()))?;
-        }
+        // Never delete account rows here: drafts must survive every workspace reload.
         for label in &seed.labels {
             transaction
                 .execute("DELETE FROM labels WHERE id = ?1", params![label.id])
@@ -320,7 +391,9 @@ pub fn seed_workspace(conn: &mut Connection, seed: &SeedWorkspace) -> Result<(),
         for account in &seed.accounts {
             let profile = serde_json::json!({ "avatar": account.avatar, "color": account.color, "status": account.status, "capabilities": account.capabilities });
             transaction.execute(
-                "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, email = excluded.email,
+                   display_name = excluded.display_name, profile_json = excluded.profile_json",
                 params![account.id, account.provider, account.email, account.name, profile.to_string(), crate::now_utc()],
             ).map_err(|e| AppError::storage(e.to_string()))?;
         }
@@ -348,7 +421,9 @@ pub fn seed_workspace(conn: &mut Connection, seed: &SeedWorkspace) -> Result<(),
                  ON CONFLICT(account_id, remote_id) DO UPDATE SET
                    thread_id = excluded.thread_id, subject = excluded.subject, sender_name = excluded.sender_name,
                    sender_email = excluded.sender_email, recipients_json = excluded.recipients_json, body_text = excluded.body_text,
-                   received_at = excluded.received_at, unread = excluded.unread, starred = excluded.starred, id = excluded.id",
+                   received_at = excluded.received_at,
+                   unread = COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='unread'),excluded.unread),
+                   starred = COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='starred'),excluded.starred)",
                 params![
                     message.id, message.account_id, remote_id, message.thread_id, message.subject, message.from.name,
                     message.from.email, serde_json::to_string(&message.to).map_err(|e| AppError::storage(e.to_string()))?,
@@ -395,6 +470,7 @@ where
 }
 
 pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
+    let folders=query_rows(conn,"SELECT f.id,f.account_id,f.name,f.kind,COALESCE(s.available,1) FROM folders f LEFT JOIN imap_folder_state s ON s.account_id=f.account_id AND s.remote_id=f.remote_id ORDER BY f.account_id,f.name",|r|Ok(FolderRow{id:r.get(0)?,account_id:r.get(1)?,name:r.get(2)?,kind:r.get(3)?,available:r.get(4)?}))?;
     let accounts = query_rows(
         conn,
         "SELECT id, display_name, email, provider, profile_json FROM accounts ORDER BY created_at, id",
@@ -404,6 +480,8 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
                 .and_then(|text| serde_json::from_str(&text).ok())
                 .unwrap_or_else(default_profile);
             Ok(AccountRow {
+                oauth:profile.get("oauth").filter(|v|!v.is_null()).and_then(|v|serde_json::from_value(v.clone()).ok()),
+                auth_user:profile["authUser"].as_str().unwrap_or("").to_owned(),
                 id: row.get(0)?,
                 name: row.get(1)?,
                 email: row.get(2)?,
@@ -411,7 +489,9 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
                 avatar: profile["avatar"].as_str().unwrap_or("·").to_string(),
                 color: profile["color"].as_str().unwrap_or("teal").to_string(),
                 status: profile["status"].as_str().unwrap_or("offline").to_string(),
-                capabilities: profile["capabilities"].clone(),
+                capabilities: if row.get::<_,String>(3)?=="imap" && profile["status"]!="demo" {
+                    let mut capabilities=profile["capabilities"].as_object().cloned().unwrap_or_default();capabilities.insert("readStateSync".into(),Value::Bool(true));Value::Object(capabilities)
+                } else {profile["capabilities"].clone()},
             })
         },
     )?;
@@ -461,6 +541,7 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
     )?;
 
     Ok(WorkspaceBase {
+        folders,
         accounts,
         labels,
         events,
@@ -484,6 +565,10 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     }
     let mut clauses: Vec<&'static str> = Vec::new();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(id) = &query.message_id {
+        clauses.push("m.id = ?");
+        args.push(Box::new(id.clone()));
+    }
     if let Some(account) = &query.account_id {
         clauses.push("m.account_id = ?");
         args.push(Box::new(account.clone()));
@@ -494,8 +579,12 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     } else {
         query.mailbox.clone()
     };
-    if let Some(kind) = &folder_kind {
-        clauses.push("EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = ?)");
+    if let Some(folder) = &query.folder_id {
+        clauses.push("EXISTS(SELECT 1 FROM message_folders mf WHERE mf.account_id=m.account_id AND mf.message_id=m.id AND mf.folder_id=?)");
+        args.push(Box::new(folder.clone()));
+    } else if let Some(kind) = &folder_kind {
+        clauses.push("(CASE WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN ?='archive' ELSE EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = ?) END)");
+        args.push(Box::new(kind.clone()));
         args.push(Box::new(kind.clone()));
     }
     // Mirrors the UI selector: starred excludes trash; label results exclude trash.
@@ -504,7 +593,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         clauses.push("m.starred = 1");
     }
     if exclude_trash {
-        clauses.push("NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash')");
+        clauses.push("(EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) OR NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash'))");
     }
     if let Some(label) = &query.label_id {
         clauses.push("EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?)");
@@ -532,9 +621,9 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         format!("WHERE {}", clauses.join(" AND "))
     };
     let sql = format!(
-        "SELECT m.id, m.account_id, m.remote_id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
-           (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) AS mailbox
-         FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
+        "SELECT m.id, m.account_id, COALESCE(m.original_remote_id,m.remote_id), m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
+           CASE WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) END AS mailbox, m.state_revision
+         ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -556,6 +645,24 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         let received_at: String = row.get(9).map_err(|e| AppError::storage(e.to_string()))?;
         let label_ids = label_ids_for(conn, &id)?;
         items.push(MessageRow {
+            body_download:crate::imap_body::status(conn,&id)?,
+            folder_ids: {let mut stmt=conn.prepare("SELECT folder_id FROM message_folders WHERE account_id=?1 AND message_id=?2 ORDER BY folder_id").map_err(|_|AppError::storage("无法读取文件夹"))?;let folders=stmt.query_map(params![row.get::<_,String>(1).map_err(|_|AppError::storage("无法读取账号"))?,id],|r|r.get(0)).map_err(|_|AppError::storage("无法读取文件夹"))?.collect::<Result<Vec<_>,_>>().map_err(|_|AppError::storage("文件夹数据损坏"))?;folders},
+            attachments: serde_json::from_str(
+                &row.get::<_, String>(18)
+                    .map_err(|_| AppError::storage("无法读取附件信息"))?,
+            )
+            .map_err(|_| AppError::storage("附件信息损坏"))?,
+            remote_missing: row
+                .get(19)
+                .map_err(|_| AppError::storage("无法读取远端状态"))?,
+            recovery: crate::mail_recovery::status(conn, &id)?,
+            content_hash: row.get(14).map_err(|e| AppError::storage(e.to_string()))?,
+            locator_verified: row.get(16).map_err(|e| AppError::storage(e.to_string()))?,
+            content_hash_verified: row.get(17).map_err(|e| AppError::storage(e.to_string()))?,
+            header_message_id: row.get(15).map_err(|e| AppError::storage(e.to_string()))?,
+            state_revision: row.get(13).map_err(|e| AppError::storage(e.to_string()))?,
+            changes: crate::message_changes::statuses(conn, &id)?,
+            draft: None,
             id: id.clone(),
             account_id: row.get(1).map_err(|e| AppError::storage(e.to_string()))?,
             remote_id: row.get(2).map_err(|e| AppError::storage(e.to_string()))?,
@@ -594,6 +701,21 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         None
     };
     Ok(MessagePage { items, next_cursor })
+}
+
+pub fn message_by_id(conn: &Connection, account: &str, id: &str) -> Result<MessageRow, AppError> {
+    page_messages(
+        conn,
+        &MessageQuery {
+            account_id: Some(account.into()),
+            message_id: Some(id.into()),
+            ..Default::default()
+        },
+    )?
+    .items
+    .into_iter()
+    .next()
+    .ok_or_else(|| AppError::invalid("邮件不存在或不属于此账号"))
 }
 
 fn label_ids_for(conn: &Connection, message_id: &str) -> Result<Vec<String>, AppError> {
@@ -703,6 +825,64 @@ mod tests {
         storage::migrate(&mut conn).unwrap();
         seed_workspace(&mut conn, &seed_fixture()).unwrap();
         conn
+    }
+
+    #[test]
+    fn reseeding_preserves_demo_read_star_archive_intents() {
+        let mut conn = setup();
+        crate::message_changes::update(
+            &mut conn,
+            "a",
+            "m1",
+            &crate::message_changes::Patch {
+                unread: Some(false),
+                starred: Some(true),
+                archive: Some(true),
+            },
+        )
+        .unwrap();
+        seed_workspace(&mut conn, &seed_fixture()).unwrap();
+        let saved = message_by_id(&conn, "a", "m1").unwrap();
+        assert!(!saved.unread && saved.starred);
+        assert_eq!(saved.mailbox, "archive");
+        assert!(saved.changes.iter().all(|c| c.state == "local"));
+        crate::message_changes::update(
+            &mut conn,
+            "a",
+            "t1",
+            &crate::message_changes::Patch {
+                starred: Some(true),
+                archive: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for query in [
+            MessageQuery {
+                mailbox: Some("starred".into()),
+                ..Default::default()
+            },
+            MessageQuery {
+                label_id: Some("design".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(page_messages(&conn, &query)
+                .unwrap()
+                .items
+                .iter()
+                .any(|message| message.id == "t1" && message.mailbox == "archive"));
+        }
+    }
+
+    #[test]
+    fn refreshing_demo_messages_preserves_persisted_drafts() {
+        let mut conn = setup();
+        conn.execute("INSERT INTO drafts (id,account_id,subject,body_text,updated_at) VALUES ('draft-retained','a','Keep','Do not delete','2026-11-11T00:00:00Z')", []).unwrap();
+        seed_workspace(&mut conn, &seed_fixture()).unwrap();
+        let drafts = crate::drafts::list(&conn).unwrap();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].body_text, "Do not delete");
     }
 
     fn all_ids(conn: &Connection, query: &MessageQuery) -> Vec<String> {

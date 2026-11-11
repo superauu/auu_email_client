@@ -38,14 +38,15 @@ test('drafts persist, update in place, and storage failures reject the save', as
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
   const draft: MailDraft = { id: 'draft-test', accountId: 'personal', to: 'friend@example.test', subject: 'Draft', bodyText: 'First', updatedAt: '2026-11-10T00:00:00Z' };
   try {
-    await demoMailGateway.saveDraft(draft);
-    await demoMailGateway.saveDraft({ ...draft, bodyText: 'Updated' });
+    const first = await demoMailGateway.saveDraft(draft);
+    const second = await demoMailGateway.saveDraft({ ...first.draft!, bodyText: 'Updated' });
+    await assert.rejects(demoMailGateway.saveDraft({ ...draft, bodyText: 'Stale overwrite' }), { code: 'conflict' });
     const workspace = await demoMailGateway.loadWorkspace();
     const drafts = workspace.messages.filter(message => message.id === draft.id);
     assert.equal(drafts.length, 1);
     assert.equal(drafts[0].bodyText, 'Updated');
     storage.setItem = () => { throw new Error('Quota'); };
-    await assert.rejects(demoMailGateway.saveDraft({ ...draft, bodyText: 'Unsaved' }));
+    await assert.rejects(demoMailGateway.saveDraft({ ...second.draft!, bodyText: 'Unsaved' }), /未能保存/);
   } finally { Reflect.deleteProperty(globalThis, 'localStorage'); }
 });
 

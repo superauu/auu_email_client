@@ -17,6 +17,7 @@ const EHLO_NAME: &str = "auumail.local";
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeOutcome {
+    pub skipped: bool,
     pub ok: bool,
     pub error: Option<String>,
     /// "network" or "auth"; lets the wizard point at the right fix.
@@ -35,8 +36,12 @@ pub struct VerifyReport {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Endpoints {
+    #[serde(default)]
+    pub receive_only: bool,
     pub imap_host: String,
     pub imap_port: u16,
+    #[serde(default)]
+    pub imap_security: crate::imap_transport::Security,
     pub smtp_host: String,
     pub smtp_port: u16,
     pub auth_user: String,
@@ -58,15 +63,20 @@ pub fn verify(endpoints: &Endpoints, secret: &str) -> VerifyReport {
     let imap = imap_probe(
         &endpoints.imap_host,
         endpoints.imap_port,
+        endpoints.imap_security,
         &endpoints.auth_user,
         secret,
     );
-    let smtp = smtp_probe(
-        &endpoints.smtp_host,
-        endpoints.smtp_port,
-        &endpoints.auth_user,
-        secret,
-    );
+    let smtp = if endpoints.receive_only {
+        Ok(())
+    } else {
+        smtp_probe(
+            &endpoints.smtp_host,
+            endpoints.smtp_port,
+            &endpoints.auth_user,
+            secret,
+        )
+    };
     let (imap_ok, imap_error, imap_code, folder_count) = match imap {
         Ok(count) => (true, None, None, Some(count)),
         Err(error) => (false, Some(error.message), Some(error.code), None),
@@ -77,12 +87,14 @@ pub fn verify(endpoints: &Endpoints, secret: &str) -> VerifyReport {
     };
     VerifyReport {
         imap: ProbeOutcome {
+            skipped: false,
             ok: imap_ok,
             error: imap_error,
             code: imap_code,
         },
         smtp: ProbeOutcome {
-            ok: smtp_ok,
+            skipped: endpoints.receive_only,
+            ok: smtp_ok && !endpoints.receive_only,
             error: smtp_error,
             code: smtp_code,
         },
@@ -95,6 +107,12 @@ pub fn ensure_verified(report: &VerifyReport) -> Result<(), AppError> {
     let mut failures = Vec::new();
     let mut code = "network";
     for (label, probe) in [("IMAP", &report.imap), ("SMTP", &report.smtp)] {
+        if probe.skipped && label == "SMTP" {
+            continue;
+        }
+        if !probe.ok && probe.error.is_none() {
+            failures.push(format!("{label}：连接验证未通过"));
+        }
         match (&probe.error, probe.code) {
             (Some(error), Some(kind)) => {
                 if kind == "auth" {
@@ -116,21 +134,27 @@ pub fn ensure_verified(report: &VerifyReport) -> Result<(), AppError> {
 }
 
 /// TLS login + LIST: returns the real folder count on success.
-fn imap_probe(host: &str, port: u16, user: &str, secret: &str) -> Result<usize, AppError> {
+fn imap_probe(
+    host: &str,
+    port: u16,
+    security: crate::imap_transport::Security,
+    user: &str,
+    secret: &str,
+) -> Result<usize, AppError> {
     let host = sanitize_host(host)?;
-    let tls = tls_connect(host, port)?;
-    let client = imap::Client::new(tls);
+    let tls = crate::imap_transport::connect(host, port, security)?;
+    let client = imap::Client::new(crate::imap_limits::LimitedStream::new(tls));
     let mut session = client
         .login(user, secret)
         .map_err(|(error, _)| match error {
             imap::Error::No(_) | imap::Error::Bad(_) => {
                 AppError::auth("IMAP 服务器拒绝了登录，请核对登录用户与密码")
             }
-            _ => AppError::network("IMAP 会话未能建立"),
+            _ => crate::imap_limits::network(error, "IMAP 会话未能建立"),
         })?;
     let folders = session
         .list(Some(""), Some("*"))
-        .map_err(|_| AppError::network("无法读取邮箱文件夹列表"))?;
+        .map_err(|error| crate::imap_limits::network(error, "无法读取邮箱文件夹列表"))?;
     let count = folders.len();
     let _ = session.logout();
     Ok(count)
@@ -334,7 +358,7 @@ mod tests {
             .login("alex@example.test", "wrong")
             .map_err(|(error, _)| match error {
                 imap::Error::No(_) | imap::Error::Bad(_) => AppError::auth("IMAP 服务器拒绝了登录"),
-                _ => AppError::network("IMAP 会话未能建立"),
+                _ => crate::imap_limits::network(error, "IMAP 会话未能建立"),
             });
         assert_eq!(result.unwrap_err().code, "auth");
     }
@@ -356,8 +380,10 @@ mod tests {
     fn full_verify_reports_each_endpoint_independently() {
         // Both probes against a nonexistent local port must fail honestly, each with its own result.
         let endpoints = Endpoints {
+            receive_only: false,
             imap_host: "127.0.0.1".into(),
             imap_port: 1,
+            imap_security: Default::default(),
             smtp_host: "127.0.0.1".into(),
             smtp_port: 1,
             auth_user: "u".into(),
