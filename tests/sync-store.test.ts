@@ -91,3 +91,29 @@ test('stopping a running sync refreshes committed batches while cancelling a que
   setSnapshot({revision:2,jobs:[job('queued','cancelled'),{...job('running','cancelled'),startedAt:'2026-11-11T00:00:00Z'}]});
   await store.getState().refresh();assert.equal(refreshes(),1);
 });
+
+test('a running sync surfaces committed batches progressively without waiting for the terminal state', async () => {
+  const { transport, setSnapshot, refreshes } = setup();
+  const store = createSyncStore(transport, 5, 5000, 0); // runningRefreshMs=0：每个运行中快照都允许刷新
+  setSnapshot({ revision: 1, jobs: [job('a', 'running')] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 1, '运行中快照即触发工作区刷新');
+  setSnapshot({ revision: 2, jobs: [job('a', 'running')] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 2, '无终态也继续刷新');
+  setSnapshot({ revision: 3, jobs: [job('a', 'succeeded')] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 3, '终态后仍立即刷新');
+});
+
+test('running-batch refreshes are throttled to the configured interval', async () => {
+  const { transport, setSnapshot, refreshes } = setup();
+  const store = createSyncStore(transport, 5, 5000, 2000);
+  setSnapshot({ revision: 1, jobs: [job('a', 'running')] });
+  await store.getState().refresh(); // 首个运行中快照（lastWorkspaceRefresh 尚为 0）触发一次刷新
+  setSnapshot({ revision: 2, jobs: [job('a', 'running')] });
+  await store.getState().refresh(); // 距上次刷新不足 2000ms：不刷新
+  setSnapshot({ revision: 3, jobs: [job('a', 'running')] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 1, '节流间隔内不再重复刷新');
+});

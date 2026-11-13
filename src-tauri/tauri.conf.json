@@ -5,7 +5,7 @@
   "identifier": "com.auu.mailclient",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:4317",
+    "devUrl": "http://127.0.0.1:7317",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -21,8 +21,8 @@
       "dragDropEnabled": false
     }],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:4317; object-src 'none'; base-uri 'none'; frame-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' https: data:; img-src 'self' https: data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'self' data: about:",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' https: data:; img-src 'self' https: data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:7317; object-src 'none'; base-uri 'none'; frame-src 'self' data: about:"
     }
   },
   "bundle": { "active": true, "targets": ["nsis"], "icon": ["icons/icon.ico"] }

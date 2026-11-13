@@ -7,7 +7,7 @@
 - 本轮环境：Windows、Node 20.19.0、npm 11.21.1、Rust 1.98.1；未验证 macOS / Linux 打包。
 - 使用 `npm ci` 安装已锁定依赖。新增依赖前确认现有组件和标准库不能直接完成任务。
 
-前端端口固定为 **4317**，仅监听 127.0.0.1。原先尝试 1420 时本机 Windows 返回 EACCES，因此已统一改用 4317；如需修改，必须同步 Vite、Playwright、Tauri devUrl 与 devCsp。
+前端端口固定为 **7317**，仅监听 127.0.0.1。原先尝试 1420 时本机 Windows 返回 EACCES（落入 Hyper-V 保留区 1327–1426），后改用 4317；2026-11-14 发现 4317 也被保留区 4311–4410 占用，统一改用 7317。这类保留区间随重启漂移，如再次遇到 EACCES，用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看后另选端口；修改时必须同步 Vite、Playwright、Tauri devUrl 与 devCsp。
 
 ## 日常工作顺序
 
@@ -80,3 +80,9 @@ CI 包含 Ubuntu 前端 / Chromium 与 Windows Rust 检查；工作流只是已�
 修改 durable request 须测试同代次 request_version、取消后立即重排、旧完成 / 新 generation、启动 running 恢复和 unknown MOVE。修改池连接须重绑当前 Control；IDLE DONE / SASL continuation 不补新预算，半行超时丢连接。MODSEQ 不能越过本地编辑 / 恢复保护，空增量仍核对 UID 存在性。网络 / keyring / MIME / 缓存 I/O 不持 DB 锁。
 
 测试只用 synthetic 账号 / 邮件 / keyring 项；OAuth UI harness 不打开真实浏览器，不称为服务器验证。真实验收所需 Client ID 在界面配置，无需把账号、授权码、令牌写进仓库。
+
+## 应用图标与窗口交互维护
+
+public/logo.svg 是唯一图标源。使用 node node_modules/@tauri-apps/cli/tauri.js icon public/logo.svg --output src-tauri/icons 统一生成各平台资源，提交生成的 ICO / PNG / ICNS；见 [Tauri 图标文档](https://v2.tauri.app/develop/icons/)。不要只替换网页 logo。Windows ICO 需含 16 / 24 / 32 / 48 / 64 / 256 多尺寸，检查每帧图案居中且接近全画布，不能只位于左上半宽高。更新资源后重新编译 / 启动桌面版，不以 Vite 热更新代表原生图标已更新。
+
+标题栏自动测试用 test-only IPC 验证拖动、双击和按钮隔离；仍须在真实 WebView 验证空白 / 品牌拖动、双击最大化 / 还原和新进程图标。不能把浏览器 dispatchEvent 通过称为 Windows 系统拖动成功。

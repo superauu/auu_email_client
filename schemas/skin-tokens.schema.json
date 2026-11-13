@@ -135,7 +135,7 @@
         },
         "list-row-height": {
           "type": "integer",
-          "minimum": 88,
+          "minimum": 68,
           "maximum": 128
         }
       }

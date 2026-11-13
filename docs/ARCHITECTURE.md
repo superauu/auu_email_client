@@ -85,7 +85,7 @@ flowchart LR
 
 Rust 业务失败使用 `{ code, message, retryable }`；前端统一处理 unknown 错误。字段以 camelCase 序列化。桥接类型当前手工维护，变更时必须两端一起修改和验证。
 
-主窗口为本地页面，CSP 禁止外部脚本、远程字体、frame 和任意前端网络连接；没有通用 shell、filesystem、HTTP 插件权限。应用自定义命令由注册 handler 暴露。凭据命令只接受已知 provider 标识并做输入长度约束，错误信息不含机密内容。未来添加 WebView 或处理远程 HTML 时必须重新审查权限边界，不得让邮件正文进入可调用 IPC 的页面。
+主窗口为本地页面，CSP 禁止外部脚本与任意前端网络连接；没有通用 shell、filesystem、HTTP 插件权限。应用自定义命令由注册 handler 暴露。凭据命令只接受已知 provider 标识并做输入长度约束，错误信息不含机密内容。邮件 HTML 正文按三层防御处理：ammonia 消毒（剥脚本 / 事件处理器 / 相对地址，`cid:` 内联图转 data: URI，尺寸上限）→ 唯一源沙箱 iframe（`sandbox=""`，srcdoc）→ iframe 内 CSP 仅放行按内容哈希锁定的桥接脚本（链接点击经 postMessage 转发，父页校验后走 `open_external` 的 scheme 白名单在系统应用打开）。应用 CSP 相应允许 `frame-src about:`（srcdoc）与 `img-src` / `font-src` 的 https:（远程图片仍默认被 iframe 内 CSP 拦截，每封邮件可手动允许）；不得让邮件正文进入可调用 IPC 的页面，禁止放宽 `sandbox` 或为邮件 HTML 引入 allow-scripts。
 
 ## 存储
 
@@ -135,6 +135,6 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 - mail_oauth / oauth_flow / account_service：公共配置、PKCE loopback、keyring 刷新、保存补偿与代次。仅公开配置可经 mail_account_config 返回，不返回机密。
 - v9 追加 original_remote_id / raw_cache_key / attachments_json / remote_missing、auto_continue、imap_settings / folder_state / history / sync_requests / body_requests / modseq；不重写旧迁移。原连接邮件重配后标缺失，遇相同远端 ID 退休旧存储键并保留旧定位 / 本机 ID，不能直接 UPSERT 套用旧修改。
 
-新增 IPC：mail_imap_settings(accountId)、mail_save_imap_settings(accountId, settings)、mail_request_body(accountId, messageId, revision)、mail_export_attachment(accountId, messageId, index)、mail_account_config(id)、mail_oauth_start(account, config)、mail_oauth_status(flowId)、mail_oauth_cancel(flowId)。返回类型见 domain/imap.ts、domain/oauth.ts 和 platform/desktop.ts；附件返回 bool 区分用户取消，OAuth 阶段不能当作已保存。请求恢复增加 auto-continue，完整确认契约不变。
+新增 IPC：mail_imap_settings(accountId)、mail_save_imap_settings(accountId, settings)、mail_request_body(accountId, messageId, revision)、mail_export_attachment(accountId, messageId, index)、mail_account_config(id)、mail_oauth_start(account, config)、mail_oauth_status(flowId)、mail_oauth_cancel(flowId)、mail_message_html(accountId, messageId, allowRemoteImages)（返回消毒后的沙箱 srcdoc；缓存缺失 / 账号不匹配报错，前端回退纯文本）、open_external(url)（scheme 白名单 http/https/mailto，经系统默认应用打开）。返回类型见 domain/imap.ts、domain/oauth.ts 和 platform/desktop.ts；附件返回 bool 区分用户取消，OAuth 阶段不能当作已保存。请求恢复增加 auto-continue，完整确认契约不变。
 
 上述当前行为优先于早期版本说明；配置 / 默认值与锁边界详见 SYNCHRONIZATION、IMAP_LIMITS、OAUTH_SETUP、IMAP_COMPLETION。

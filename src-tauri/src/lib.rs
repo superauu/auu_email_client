@@ -12,6 +12,7 @@ mod imap_transport;
 mod imap_writeback;
 mod mail_attachments;
 mod mail_cache;
+mod mail_html;
 mod mail_oauth;
 mod mail_recovery;
 mod mail_store;
@@ -144,6 +145,43 @@ fn open_skin_directory(app: tauri::AppHandle, paths: State<'_, AppPaths>) -> Res
     app.opener()
         .open_path(paths.skins.to_string_lossy(), None::<&str>)
         .map_err(|_| AppError::storage("无法打开皮肤目录"))
+}
+
+#[derive(Serialize)]
+struct MailHtmlPayload {
+    html: String,
+}
+
+/// 邮件 HTML 正文：从已验证的完整原文缓存按需提取、消毒并拼装沙箱 srcdoc。
+#[tauri::command]
+fn mail_message_html(
+    db: State<'_, Db>,
+    account_id: String,
+    message_id: String,
+    allow_remote_images: bool,
+) -> Result<MailHtmlPayload, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    mail_html::render(&conn, &account_id, &message_id, allow_remote_images)
+        .map(|html| MailHtmlPayload { html })
+}
+
+/// 邮件内链接只在系统默认应用打开；scheme 白名单外的地址一律拒绝。
+#[tauri::command]
+fn open_external(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
+    if url.len() > 2048 || url.chars().any(char::is_control) {
+        return Err(AppError::invalid("链接无效"));
+    }
+    let parsed = url::Url::parse(&url).map_err(|_| AppError::invalid("链接格式无效"))?;
+    if !matches!(parsed.scheme(), "http" | "https" | "mailto") {
+        return Err(AppError::invalid("不支持打开此类型的链接"));
+    }
+    app.opener()
+        .open_url(parsed.as_str().to_string(), None::<&str>)
+        .map_err(|_| AppError::invalid("无法调用系统应用打开链接"))
 }
 
 #[tauri::command]
@@ -506,7 +544,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mail_export_attachment,
+            mail_message_html,
             mail_request_body,
+            open_external,
             mail_oauth_start,
             mail_account_config,
             mail_oauth_status,

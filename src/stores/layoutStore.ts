@@ -3,7 +3,8 @@ import { readPreference, writePreference } from '../lib/preferences';
 
 const KEY = 'auumail.ui.layout.v1';
 export const MIN_LIST_WIDTH = 280;
-export const MAX_LIST_WIDTH = 440;
+export const MAX_LIST_WIDTH = 900;
+export const MIN_READER_WIDTH = 320;
 export const DEFAULT_LIST_WIDTH = 340;
 export const MIN_SIDEBAR_WIDTH = 190;
 export const MAX_SIDEBAR_WIDTH = 320;

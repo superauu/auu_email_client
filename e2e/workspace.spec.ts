@@ -140,7 +140,7 @@ test('event completion, associated mail, and keyboard resizing', async ({ page }
   await page.keyboard.press('ArrowRight');
   await expect(handle).toHaveAttribute('aria-valuenow', '360');
   await page.keyboard.press('End');
-  await expect(handle).toHaveAttribute('aria-valuenow', '440');
+  await expect.poll(async () => Number(await handle.getAttribute('aria-valuenow'))).toBeGreaterThan(600);
   await handle.dblclick();
   await expect(handle).toHaveAttribute('aria-valuenow', '340');
   await page.getByRole('button', { name: '事件与待办' }).click();
@@ -158,4 +158,38 @@ test('narrow desktop navigation remains usable without horizontal overflow', asy
   await page.getByRole('button', { name: '返回邮件列表' }).click();
   await expect(page.getByRole('region', { name: '邮件列表' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
+
+test('compact Outlook-style list fits more mail and unread filtering remains scoped',async ({page},info)=>{
+  await page.goto('/');const list=page.getByRole('region',{name:'邮件列表'});await expect(list.getByRole('button',{name:'全部',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(list.getByText('YOUR MAIL, IN ORDER')).toHaveCount(0);await expect(list.getByText('所有账号的邮件，尽在一处')).toHaveCount(0);
+  const bounds=await list.locator('article').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().height));expect(bounds.length).toBe(6);expect(bounds.every(height=>height<=81)).toBeTruthy();
+  await list.getByRole('button',{name:'未读',exact:true}).click();await expect(list.locator('article')).toHaveCount(3);
+  await page.getByRole('button',{name:'独立邮箱',exact:true}).click();await expect(list.getByRole('heading',{name:'没有未读邮件',exact:true})).toBeVisible();
+  await list.getByRole('button',{name:'全部',exact:true}).click();await expect(list.locator('article')).toHaveCount(1);
+  await page.getByRole('button',{name:/^全部账号/}).click();await page.screenshot({path:info.outputPath('compact-mail-list.png')});
+});
+
+
+test('reading an unread result keeps that message open after marking read and account changes isolate it',async ({page})=>{
+  await page.goto('/');const list=page.getByRole('region',{name:'邮件列表'});await list.getByRole('button',{name:'未读',exact:true}).click();
+  await list.getByRole('button',{name:'阅读邮件：让下一版界面，多一点呼吸感',exact:true}).click();
+  await expect(list.locator('article')).toHaveCount(2);await expect(page.getByRole('heading',{name:'让下一版界面，多一点呼吸感',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'独立邮箱',exact:true}).click();await expect(page.getByRole('heading',{name:'让下一版界面，多一点呼吸感',exact:true})).toHaveCount(0);
+});
+
+
+test('aligned toolbars and wide list resizing preserve reader space and stored preference',async ({page},info)=>{
+  await page.setViewportSize({width:1920,height:1080});await page.goto('/');
+  const list=page.getByRole('region',{name:'邮件列表'});const handle=page.getByRole('separator',{name:'调整邮件列表宽度'});
+  await expect(list.getByRole('button',{name:'全部',exact:true})).toBeVisible();
+  const bars=await page.locator('.list-toolbar, .reader-toolbar').evaluateAll(bars=>bars.map(bar=>{const r=bar.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};}));
+  expect(bars).toHaveLength(2);expect(bars[0]).toEqual(bars[1]);expect(bars[0].height).toBe(44);
+  await handle.focus();await page.keyboard.press('End');await expect(list).toHaveCSS('width','900px');
+  await page.reload();await expect(list).toHaveCSS('width','900px');
+  await page.setViewportSize({width:1100,height:800});await expect.poll(async()=>Number(await handle.getAttribute('aria-valuemax'))).toBeLessThan(900);
+  const reader=page.locator('.mail-reader');expect((await reader.boundingBox())!.width).toBeGreaterThanOrEqual(320);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  await page.setViewportSize({width:1920,height:1080});await expect(list).toHaveCSS('width','900px');await page.screenshot({path:info.outputPath('wide-list-aligned-toolbars.png')});
 });

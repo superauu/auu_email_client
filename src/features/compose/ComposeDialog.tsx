@@ -53,7 +53,7 @@ export function ComposeDialog({ initial, onClose }: { initial: MailDraft; onClos
     }
   }
   const status = state.error ? '保存失败，内容仍保留在窗口中' : state.saving ? '正在保存草稿…' : state.dirty ? '尚未保存，将自动保存' : state.saved ? '草稿已保存' : '修改后将自动保存草稿';
-  return <Dialog open onOpenChange={open => { if (!open) requestClose(); }} title={initial.replyToId ? '回复邮件' : '写一封邮件'} description={isDesktop() ? '草稿自动保存在这台设备上，不会上传或发送。' : '浏览器演示 · 草稿自动保存在本机。'} className="compose-dialog">
+  return <Dialog open onOpenChange={open => { if (!open) requestClose(); }} title={initial.replyToId ? /^转发[:：]/.test(initial.subject) ? '转发邮件' : '回复邮件' : '写一封邮件'} description={isDesktop() ? '草稿自动保存在这台设备上，不会上传或发送。' : '浏览器演示 · 草稿自动保存在本机。'} className="compose-dialog">
     <form onSubmit={event => { event.preventDefault(); void save(false); }}>
       <div className="compose-fields">
         <label><span id="compose-from-label">发件人</span><select aria-labelledby="compose-from-label" value={draft.accountId} onChange={e => session.update({ accountId: e.target.value })} disabled={!!draft.replyToId} title={draft.replyToId ? '回复草稿使用原邮件所属账号' : undefined}>{accounts.map(a => <option key={a.id} value={a.id}>{a.name} &lt;{a.email}&gt;</option>)}</select></label>

@@ -1,21 +1,82 @@
-import { Archive, ArrowLeft, CornerUpLeft, Mail, MailOpen, PenLine, Sparkles, Star } from 'lucide-react';
-import { useState } from 'react';
+import { Archive, ArrowLeft, CornerUpLeft, Forward, Image, Mail, MailOpen, PenLine, ReplyAll, Sparkles, Star } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { MailMessage, RecoveryAction } from '../../domain/mail';
+import { linkifyText } from '../../domain/linkify';
+import { errorMessage } from '../../domain/errors';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { Button } from '../../components/ui/Button';
 import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { selectMessages } from './selectors';
 import { useSyncStore } from '../../stores/syncStore';
+import { desktop, isDesktop } from '../../platform/desktop';
 
-export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: MailMessage, editing?: boolean) => void; onAi: () => void; onBack: () => void }) {
-  const { messages, selectedId, accounts, labels, query, savingIds, toggleStar, toggleUnread, keepMessageLocal, archiveMessage, requestRecovery } = useWorkspaceStore(useShallow(s => ({
+type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean };
+
+function PlainBody({ text, empty, onOpen }: { text: string; empty: string; onOpen: (href: string) => void }) {
+  const segments = useMemo(() => linkifyText(text), [text]);
+  const inDesktop = isDesktop();
+  if (!text) return <div className="message-body">{empty}</div>;
+  return <div className="message-body">{segments.map((segment, index) => {
+    if (segment.kind === 'text') return <span key={index}>{segment.value}</span>;
+    // 仅放行 http/https/mailto；tel: 等其余 scheme 保持纯文本。
+    if (!/^(https?:\/\/|mailto:)/i.test(segment.href)) return <span key={index}>{segment.value}</span>;
+    return inDesktop
+      ? <button key={index} type="button" className="mail-link" title={segment.href} onClick={() => onOpen(segment.href)}>{segment.value}</button>
+      : <a key={index} className="mail-link" href={segment.href} target="_blank" rel="noreferrer">{segment.value}</a>;
+  })}</div>;
+}
+
+export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: MailMessage, editing?: boolean, mode?: 'reply' | 'reply-all' | 'forward') => void; onAi: () => void; onBack: () => void }) {
+  const { messages, selectedId, accounts, labels, query, savingIds, toggleStar, toggleUnread, keepMessageLocal, archiveMessage, requestRecovery, messageHtml } = useWorkspaceStore(useShallow(s => ({
     messages: s.messages, selectedId: s.selectedId, accounts: s.accounts, labels: s.labels, query: s.query,
-    savingIds: s.savingIds, toggleStar: s.toggleStar, toggleUnread: s.toggleUnread, keepMessageLocal: s.keepMessageLocal, archiveMessage: s.archiveMessage, requestRecovery: s.requestRecovery,
+    savingIds: s.savingIds, toggleStar: s.toggleStar, toggleUnread: s.toggleUnread, keepMessageLocal: s.keepMessageLocal, archiveMessage: s.archiveMessage, requestRecovery: s.requestRecovery, messageHtml: s.messageHtml,
   })));
   const { enqueue, jobs, submitting, syncError } = useSyncStore(useShallow(s => ({ enqueue: s.enqueue, jobs: s.jobs, submitting: s.submitting, syncError: s.error })));
-  const message = selectMessages(messages, query).find(m => m.id === selectedId);
+  const [html, setHtml] = useState<HtmlState>({ state: 'plain', doc: '', allowImages: false });
+  const [frameHeight, setFrameHeight] = useState<number | null>(null);
+  const [openError, setOpenError] = useState('');
+  const openExternalLink = useCallback((href: string) => {
+    setOpenError('');
+    void desktop.openExternal(href).catch(error => setOpenError(errorMessage(error)));
+  }, []);
+  // 沙箱 iframe 的唯一通信通道：只接受已知形状的消息，链接再经 Rust scheme 白名单校验。
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'auumail-frame-height' && typeof data.height === 'number' && Number.isFinite(data.height)) {
+        setFrameHeight(Math.min(Math.max(220, Math.round(data.height)), 20000));
+      }
+      if (data.type === 'auumail-mail-link' && typeof data.href === 'string' && data.href.length <= 2048) {
+        openExternalLink(data.href);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [openExternalLink]);
+  const message = selectMessages(messages, { ...query, unreadOnly: false }).find(m => m.id === selectedId);
+  const messageId = message?.id ?? null;
+  const htmlEligible = !!message && !message.draft && (accounts.find(a => a.id === message.accountId)?.status ?? 'demo') !== 'demo';
+  const messageHtmlAction = useWorkspaceStore.getState().messageHtml;
+  useEffect(() => {
+    if (!messageId || !htmlEligible) { setHtml({ state: 'plain', doc: '', allowImages: false }); setFrameHeight(null); return; }
+    let active = true;
+    setHtml({ state: 'loading', doc: '', allowImages: false });
+    setFrameHeight(null);
+    async function load() {
+      const target = useWorkspaceStore.getState().messages.find(m => m.id === messageId);
+      if (!target || target.draft) return;
+      try {
+        const doc = await messageHtmlAction(target.accountId, target.id, false);
+        if (!active) return;
+        setHtml({ state: 'ready', doc, allowImages: false });
+      } catch { if (active) setHtml({ state: 'plain', doc: '', allowImages: false }); }
+    }
+    void load();
+    return () => { active = false; };
+  }, [messageId, htmlEligible, messageHtmlAction]);
   if (!message) return <section className="mail-reader"><EmptyState title="留一点空间，给重要的消息" description="从左侧选择一封邮件，开始阅读。" /></section>;
   const account = accounts.find(a => a.id === message.accountId);
   const localDraft = Boolean(message.draft);
@@ -33,8 +94,20 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
     if (action === 'check' && message.recovery?.state === 'queued') { await enqueue([message.accountId]); return; }
     if (await requestRecovery(message.id, action)) await enqueue([message.accountId]);
   }
+  function loadWithImages() {
+    if (!message) return;
+    const current = message;
+    void (async () => {
+      try {
+        const doc = await messageHtml(current.accountId, current.id, true);
+        setHtml({ state: 'ready', doc, allowImages: true });
+        setOpenError('');
+      } catch (error) { setHtml({ state: 'plain', doc: '', allowImages: false }); setOpenError(errorMessage(error)); }
+    })();
+  }
+  const richAvailable = html.state === 'ready' && !!html.doc;
   return <section className="mail-reader" aria-label="邮件阅读区">
-    <div className="reader-toolbar"><div><Button variant="ghost" iconOnly className="reader-back" aria-label="返回邮件列表" onClick={onBack}><ArrowLeft size={17} /></Button><Button variant="ghost" iconOnly title="归档" aria-label="归档当前邮件" disabled={saving || message.mailbox === 'archive' || localDraft} onClick={() => archiveMessage(message.id)}><Archive size={17} /></Button><Button variant="ghost" iconOnly aria-label="切换当前邮件星标" disabled={saving || localDraft} aria-pressed={message.starred} onClick={() => toggleStar(message.id)}><Star size={17} fill={message.starred ? 'currentColor' : 'none'} /></Button><Button variant="ghost" iconOnly disabled={saving || localDraft} aria-label={message.unread ? '标为已读' : '标为未读'} onClick={() => toggleUnread(message.id)}>{message.unread ? <MailOpen size={17} /> : <Mail size={17} />}</Button></div><Button variant="ghost" onClick={onAi}><Sparkles size={16} /> AI 助手</Button></div>
+    <div className="reader-toolbar"><div><Button variant="ghost" iconOnly className="reader-back" aria-label="返回邮件列表" onClick={onBack}><ArrowLeft size={17} /></Button><Button variant="ghost" iconOnly title="归档" aria-label="归档当前邮件" disabled={saving || message.mailbox === 'archive' || localDraft} onClick={() => archiveMessage(message.id)}><Archive size={17} /></Button><Button variant="ghost" iconOnly disabled={saving || localDraft} aria-label="切换当前邮件星标" aria-pressed={message.starred} onClick={() => toggleStar(message.id)}><Star size={17} fill={message.starred ? 'currentColor' : 'none'} /></Button><Button variant="ghost" iconOnly disabled={saving || localDraft} aria-label={message.unread ? '标为已读' : '标为未读'} onClick={() => toggleUnread(message.id)}>{message.unread ? <MailOpen size={17} /> : <Mail size={17} />}</Button></div><Button variant="ghost" onClick={onAi}><Sparkles size={16} /> AI 助手</Button></div>
     <div className="reader-scroll"><div className="reader-content">
       {(saving || changes.length > 0 || recovery) && <div className="message-change-status" role="status" aria-live="polite">
         <span>{saving ? '正在保存到本机…' : remote.length ? needsReview ? '本机已保存 · 回写需要处理' : '本机已保存 · 等待同步此账号回写' : '已保存在本机'}</span>
@@ -60,16 +133,29 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
       <div className="reader-labels"><span className={`label tone-${account?.color ?? 'teal'}`}>{account?.name}</span>{message.labelIds.map(id => { const label = labels.find(l => l.id === id); return label && <span key={id} className={`label tone-${label.color}`}>{label.name}</span>; })}{localDraft && <span className="label">本地草稿</span>}{serverDraft && <span className="label">服务器草稿副本</span>}</div>
       <h2>{message.subject}</h2>
       <div className="message-sender"><Avatar text={message.from.name.slice(0, 1)} color={account?.color} /><div><strong>{message.from.name}</strong><span>{message.from.email}</span><span>收件人：{message.to.join(', ') || '尚未填写'}</span></div><time dateTime={message.receivedAt}>{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(message.receivedAt))}</time></div>
-      <div className="message-body">{message.bodyText || (localDraft ? '这封草稿还没有正文。' : '这封邮件没有纯文本正文。')}</div>
-      {account?.status !== 'demo' && !localDraft && <div className="message-change-status">
-        <Button variant="ghost" disabled={saving || active || checking || message.remoteMissing} onClick={() => void (async () => {
+      <div className="reader-actions" role="toolbar" aria-label="邮件操作">
+        <Button variant="primary" onClick={() => onCompose(message, message.mailbox === 'drafts')}>{localDraft ? <PenLine size={15} /> : <CornerUpLeft size={15} />}{localDraft ? '编辑草稿' : serverDraft ? '复制为本地草稿' : '回复邮件'}</Button>
+        {!localDraft && !serverDraft && <>
+          <Button variant="secondary" disabled={!message.to.some(address => address.trim().toLowerCase() !== account?.email.toLowerCase())} title={message.to.some(address => address.trim().toLowerCase() !== account?.email.toLowerCase()) ? undefined : '这封邮件没有其他收件人'} onClick={() => onCompose(message, false, 'reply-all')}><ReplyAll size={15} />回复全部</Button>
+          <Button variant="secondary" onClick={() => onCompose(message, false, 'forward')}><Forward size={15} />转发</Button>
+        </>}
+        <span>{localDraft ? '草稿已保存在这台设备上。' : serverDraft ? '复制后在本机编辑，不覆盖服务器草稿。' : `使用 ${account?.email} 回复或转发`}</span>
+      </div>
+      {(account?.status !== 'demo' && !localDraft || message.remoteMissing) && <div className="message-meta">
+        {account?.status !== 'demo' && !localDraft && <Button variant="ghost" disabled={saving || active || checking || message.remoteMissing} onClick={() => void (async () => {
           if (message.bodyDownload?.state === 'queued' || await requestBody(message.id)) await enqueue([message.accountId]);
-        })()}>{active && message.bodyDownload?.state === 'queued' ? '正在下载原文…' : message.bodyDownload?.state === 'queued' ? '继续已登记原文下载' : '重新下载完整原文'}</Button>
+        })()}>{active && message.bodyDownload?.state === 'queued' ? '正在下载原文…' : message.bodyDownload?.state === 'queued' ? '继续已登记原文下载' : '重新下载完整原文'}</Button>}
         {message.bodyDownload?.error && <p role="status">{message.bodyDownload.error}</p>}
+        {message.remoteMissing && <p className="muted" role="status">远端原定位已不存在，本机内容和修改已保留。可核对远端定位。</p>}
       </div>}
-      {message.remoteMissing && <p className="message-change-status" role="status">远端原定位已不存在，本机内容和修改已保留。可核对远端定位。</p>}
       {!!message.attachments?.length && <AttachmentList key={message.id} message={message} />}
-      <div className="reply-card"><span className="reply-symbol"><CornerUpLeft size={20} /></span><div><strong>{message.mailbox === 'drafts' ? '继续写下你的想法' : '让交流继续'}</strong><p>{localDraft ? '草稿已保存在这台设备上。' : serverDraft ? '复制后在本机编辑，不覆盖服务器草稿。' : `使用 ${account?.email} 回复`}</p></div><Button onClick={() => onCompose(message, message.mailbox === 'drafts')}>{message.mailbox === 'drafts' ? <PenLine size={15} /> : <CornerUpLeft size={15} />}{localDraft ? '编辑草稿' : serverDraft ? '复制为本地草稿' : '回复邮件'}</Button></div>
+      {richAvailable
+        ? <div className="mail-html-wrapper">
+          {html.allowImages ? null : <div className="html-remote-note" role="status"><span>已拦截远程图片，防止发件人追踪读取行为。</span><Button variant="ghost" onClick={loadWithImages}><Image size={14} />加载远程图片</Button></div>}
+          <iframe className="mail-html-frame" sandbox="allow-scripts" srcDoc={html.doc} title="邮件正文（富文本）" style={frameHeight ? { height: `${frameHeight}px` } : undefined} />
+        </div>
+        : <PlainBody text={message.bodyText} empty={localDraft ? '这封草稿还没有正文。' : '这封邮件没有纯文本正文。'} onOpen={openExternalLink} />}
+      {openError && <p className="inline-error" role="alert">{openError}</p>}
     </div></div>
   </section>;
 }

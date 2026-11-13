@@ -56,7 +56,9 @@
 | radius-md | 0–24 |
 | radius-lg | 0–32 |
 | control-height | 30–44 |
-| list-row-height | 88–128 |
+| list-row-height | 68–128 |
+
+紧凑三行列表当前内置 Paper / Graphite / Linen 分别为 76 / 72 / 80px，示例 Ocean 为 76px。v1 允许范围从 88–128 扩为 68–128，已有皮肤无需修改仍可加载；该 token 是最小行高，发件人 / 主题 / 摘要保持三行，账号放在右侧，不新增一整行。
 
 完整可运行模板见 `examples/skins/ocean/tokens.json`。不要仅复制此文档中的 manifest 然后使用不完整的 tokens。
 

@@ -13,3 +13,6 @@ artifacts/
 *.db-shm
 *.db-wal
 *.log
+
+# Local agent tooling config
+.zcode/

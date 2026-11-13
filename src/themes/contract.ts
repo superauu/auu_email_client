@@ -4,7 +4,7 @@ export const colorTokens = [
 ] as const;
 export const metricRanges = {
   'radius-sm': [0, 16], 'radius-md': [0, 24], 'radius-lg': [0, 32],
-  'control-height': [30, 44], 'list-row-height': [88, 128],
+  'control-height': [30, 44], 'list-row-height': [68, 128],
 } as const;
 
 export type ColorToken = typeof colorTokens[number];

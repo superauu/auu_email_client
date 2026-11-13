@@ -23,20 +23,21 @@ interface SyncState {
 }
 
 /** UI observes the native queue; closing Settings never owns or cancels a task. */
-export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePollMs = 5000) {
+export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePollMs = 5000, runningRefreshMs = 2000) {
   let monitors = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reading: Promise<void> | null = null;
   let needsWorkspaceRefresh = false;
   let refreshingWorkspace = false;
   let pollingFailed = false;
+  let lastWorkspaceRefresh = 0;
   const acknowledged = new Set<string>();
   const store = create<SyncState>((set, get) => {
     async function refreshWorkspace() {
       if (refreshingWorkspace) return;
       refreshingWorkspace = true;
       try {
-        while (needsWorkspaceRefresh) { needsWorkspaceRefresh = false; await transport.refreshWorkspace(); }
+        while (needsWorkspaceRefresh) { needsWorkspaceRefresh = false; await transport.refreshWorkspace(); lastWorkspaceRefresh = Date.now(); }
         if (get().error?.startsWith('同步结果已保存，但工作区刷新失败：')) set({ error: null });
       } catch (error) { needsWorkspaceRefresh = true; set({ error: `同步结果已保存，但工作区刷新失败：${errorMessage(error)}` }); }
       finally { refreshingWorkspace = false; }
@@ -49,6 +50,8 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
           acknowledged.add(job.id);
           if ((job.status !== 'cancelled' || job.startedAt !== null) && job.outcome?.refreshNeeded !== false) needsWorkspaceRefresh = true;
         }
+        // 运行中节流刷新：后端每个批次提交落库后，新邮件随轮询逐步进入列表（终态仍立即刷新）。
+        if (job.status === 'running' && Date.now() - lastWorkspaceRefresh >= runningRefreshMs) needsWorkspaceRefresh = true;
       }
       const retained = new Set(snapshot.jobs.map(job => job.id));
       for (const id of acknowledged) if (!retained.has(id)) acknowledged.delete(id);

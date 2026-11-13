@@ -123,6 +123,7 @@ export interface WorkspaceSnapshot {
 }
 
 export interface MailQuery {
+  unreadOnly?: boolean;
   folderId?: string | null;
   accountId: string | null;
   mailbox: MailboxKind;
@@ -134,6 +135,8 @@ export interface MailFolder { id: string; accountId: string; name: string; kind:
 export interface MailGateway {
   requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
+  /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
+  messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string>;
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;

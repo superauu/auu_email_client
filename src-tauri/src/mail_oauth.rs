@@ -22,6 +22,14 @@ pub(crate) enum Provider {
 fn common() -> String {
     "common".into()
 }
+/// 内置的 Google 公共桌面应用标识。Client ID 本身是公开信息（明文出现在授权 URL 中），
+/// 不是机密；桌面客户端按 PKCE 流程使用，不需要也不保存 client secret。
+pub(crate) const GOOGLE_BUILTIN_CLIENT_ID: &str =
+    "968245167784-7t1n7fbgjqh8iu04ha9scm43jjkevjmp.apps.googleusercontent.com";
+/// Google 桌面应用的 client secret。Google 明确桌面应用是公共客户端、secret 不作为机密
+/// （安全由 PKCE 保证），但其令牌端点当前仍要求请求携带该值（缺失返回 invalid_request）。
+/// 随应用分发是桌面客户端的标准做法；它不是用户凭据，不进入 keyring / SQLite / 日志。
+const GOOGLE_BUILTIN_CLIENT_SECRET: &str = "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";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Config {
@@ -31,9 +39,22 @@ pub(crate) struct Config {
     pub tenant: String,
 }
 impl Config {
+    /// 公共桌面客户端允许省略 Client ID：Google 使用内置应用标识兜底，
+    /// Microsoft 仍需显式配置。归一化必须发生在持久化之前，使 profile 与
+    /// keyring Secret 携带同一份配置（见 start 的存储路径）。
+    pub(crate) fn with_builtin_client_id(mut self) -> Self {
+        if self.provider == Provider::Google && self.client_id.trim().is_empty() {
+            self.client_id = GOOGLE_BUILTIN_CLIENT_ID.into();
+        }
+        self
+    }
     pub(crate) fn validate(&self) -> Result<(), AppError> {
-        if self.client_id.is_empty()
-            || self.client_id.len() > 512
+        if self.client_id.is_empty() {
+            return Err(AppError::invalid(
+                "请先在服务商控制台注册公共桌面应用并填入 Client ID",
+            ));
+        }
+        if self.client_id.len() > 512
             || self.client_id.chars().any(char::is_whitespace)
             || self.client_id.chars().any(char::is_control)
             || self.tenant.is_empty()
@@ -132,8 +153,19 @@ fn parse_token(raw: &[u8], config: &Config) -> Result<Token, AppError> {
     }
     Ok(token)
 }
-fn token_request(config: &Config, fields: &[(String, String)]) -> Result<Token, AppError> {
+/// 仅当使用内置 Google 应用标识时附带内置 secret；自定义 Client ID 的客户端自行负责其配置。
+fn with_builtin_secret(
+    config: &Config,
+    mut fields: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    if config.provider == Provider::Google && config.client_id == GOOGLE_BUILTIN_CLIENT_ID {
+        fields.push(("client_secret".into(), GOOGLE_BUILTIN_CLIENT_SECRET.into()));
+    }
+    fields
+}
+fn token_request(config: &Config, fields: Vec<(String, String)>) -> Result<Token, AppError> {
     config.validate()?;
+    let fields = with_builtin_secret(config, fields);
     crate::sync_control::check()?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -143,7 +175,7 @@ fn token_request(config: &Config, fields: &[(String, String)]) -> Result<Token, 
         .map_err(|_| AppError::network("无法初始化 OAuth TLS 连接"))?;
     let response = client
         .post(config.token_endpoint())
-        .form(fields)
+        .form(&fields)
         .send()
         .map_err(|_| AppError::network("OAuth 服务连接失败或超时"))?;
     let status = response.status();
@@ -154,11 +186,28 @@ fn token_request(config: &Config, fields: &[(String, String)]) -> Result<Token, 
         .map_err(|_| AppError::network("OAuth 响应读取失败"))?;
     crate::sync_control::check()?;
     if !status.is_success() {
-        return Err(if status.as_u16() == 429 || status.is_server_error() {
-            AppError::network("OAuth 服务限流或暂不可用")
-        } else {
-            AppError::auth("OAuth 授权已撤销或客户端配置被拒绝，请核对配置并重新授权")
-        });
+        if status.as_u16() == 429 || status.is_server_error() {
+            return Err(AppError::network("OAuth 服务限流或暂不可用"));
+        }
+        // 仅透出服务商返回的机器错误码（如 invalid_grant），用于区分配置与授权码问题；
+        // 不回显响应正文、URL 或任何令牌内容。
+        let code: Option<String> = serde_json::from_slice::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .map(str::to_owned)
+            })
+            .filter(|name| {
+                !name.is_empty()
+                    && name.len() <= 64
+                    && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+            });
+        let detail = code.map(|name| format!("（{name}）")).unwrap_or_default();
+        return Err(AppError::auth(format!(
+            "OAuth 服务拒绝了授权交换{detail}，请重新授权"
+        )));
     }
     parse_token(&raw, config)
 }
@@ -228,7 +277,7 @@ pub(crate) fn access(
         }
         let token = token_request(
             config,
-            &[
+            vec![
                 ("client_id".into(), config.client_id.clone()),
                 ("grant_type".into(), "refresh_token".into()),
                 ("refresh_token".into(), secret.refresh_token.clone()),
@@ -309,6 +358,65 @@ pub(crate) fn login<S: Read + Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn builtin_secret_attaches_only_for_builtin_google_client() {
+        let google = Config {
+            provider: Provider::Google,
+            client_id: GOOGLE_BUILTIN_CLIENT_ID.into(),
+            tenant: "common".into(),
+        };
+        let fields =
+            with_builtin_secret(&google, vec![("grant_type".into(), "refresh_token".into())]);
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[1].0, "client_secret");
+        assert!(!fields[1].1.is_empty());
+        let custom = Config {
+            provider: Provider::Google,
+            client_id: "custom-id.apps.googleusercontent.com".into(),
+            tenant: "common".into(),
+        };
+        let fields =
+            with_builtin_secret(&custom, vec![("grant_type".into(), "refresh_token".into())]);
+        assert_eq!(fields.len(), 1, "自定义 Client ID 不附带内置 secret");
+        let microsoft = Config {
+            provider: Provider::Microsoft,
+            client_id: "public-id".into(),
+            tenant: "common".into(),
+        };
+        let fields = with_builtin_secret(
+            &microsoft,
+            vec![("grant_type".into(), "refresh_token".into())],
+        );
+        assert_eq!(fields.len(), 1, "Microsoft 公共客户端不使用 secret");
+    }
+    #[test]
+    fn google_empty_client_id_falls_back_to_builtin_registration() {
+        let config = Config {
+            provider: Provider::Google,
+            client_id: String::new(),
+            tenant: "common".into(),
+        }
+        .with_builtin_client_id();
+        assert_eq!(config.client_id, GOOGLE_BUILTIN_CLIENT_ID);
+        config.validate().expect("内置 Client ID 应通过校验");
+        let explicit = Config {
+            provider: Provider::Google,
+            client_id: "explicit-id.apps.googleusercontent.com".into(),
+            tenant: "common".into(),
+        }
+        .with_builtin_client_id();
+        assert_eq!(explicit.client_id, "explicit-id.apps.googleusercontent.com");
+        let microsoft = Config {
+            provider: Provider::Microsoft,
+            client_id: String::new(),
+            tenant: "common".into(),
+        }
+        .with_builtin_client_id();
+        assert!(
+            microsoft.validate().is_err(),
+            "Microsoft 空 Client ID 仍应报错"
+        );
+    }
     #[test]
     fn token_validation_and_sasl_errors_never_echo_credentials() {
         let config = Config {

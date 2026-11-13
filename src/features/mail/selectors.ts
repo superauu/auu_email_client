@@ -3,6 +3,7 @@ import type { MailMessage, MailQuery } from '../../domain/mail';
 export function selectMessages(messages: MailMessage[], query: MailQuery): MailMessage[] {
   const needle = query.search.trim().toLocaleLowerCase();
   return messages.filter(message => {
+    if (query.unreadOnly && !message.unread) return false;
     if (query.accountId && message.accountId !== query.accountId) return false;
     if (query.folderId) {
       if (!message.folderIds?.includes(query.folderId)) return false;

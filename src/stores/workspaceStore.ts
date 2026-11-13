@@ -26,6 +26,8 @@ interface WorkspaceState extends WorkspaceSnapshot {
   requestBody: (id: string) => Promise<boolean>;
   archiveMessage: (id: string) => void;
   exportAttachment: (id: string, index: number) => Promise<boolean>;
+  /** Sanitized sandbox srcdoc for rich rendering; rejects when the environment has no verified raw cache. */
+  messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean) => Promise<string>;
   toggleEvent: (id: string) => void;
   setView: (view: 'mail' | 'events') => void;
   saveDraft: (draft: MailDraft, options?: DraftSaveOptions) => Promise<MailDraft>;
@@ -53,7 +55,9 @@ function mutateMessage(id: string, patch: (message: MailMessage) => MessagePatch
       store.setState(state => {
         const messages = state.messages.map(current => current.id === id && (saved.stateRevision ?? 0) >= (current.stateRevision ?? 0) ? saved : current);
         const visible = selectMessages(messages, state.query);
-        return { messages, selectedId: visible.some(m => m.id === state.selectedId) ? state.selectedId : visible[0]?.id ?? null };
+        const readingMarkedRead = state.query.unreadOnly && state.selectedId === id && changes.unread === false
+          && selectMessages(messages.filter(message => message.id === id), { ...state.query, unreadOnly: false }).length > 0;
+        return { messages, selectedId: readingMarkedRead || visible.some(m => m.id === state.selectedId) ? state.selectedId : visible[0]?.id ?? null };
       });
       return true;
     } catch (error) { store.setState({ error: errorMessage(error) }); return false; }
@@ -72,6 +76,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ error: null });
     try { return await gateway.exportAttachment(message.accountId, id, index); }
     catch (error) { set({ error: errorMessage(error) }); return false; }
+  },
+  async messageHtml(accountId, messageId, allowRemoteImages) {
+    if (!gateway.messageHtml) throw new Error('当前环境不支持富文本正文。');
+    return gateway.messageHtml(accountId, messageId, allowRemoteImages);
   },
   async load() {
     if (get().status === 'loading' || get().status === 'ready') return;

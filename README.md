@@ -2,7 +2,7 @@
 
 一款以漂亮界面、独立皮肤和多邮箱统一管理为中心的本地桌面邮件客户端。技术栈：Tauri 2 / Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、Radix UI、Zustand、SQLite。
 
-**当前包含演示工作区与桌面 IMAP 收信 / 同步：TLS / STARTTLS、系统凭据、Google / Microsoft OAuth 配置入口、多目录 / 历史、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实服务器及 OAuth 授权仍待注册应用 / 测试账号验收。发信、POP3、AI 和日历尚未接入。**
+**当前包含演示工作区与桌面 IMAP 收信 / 同步：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实服务器及真实 Gmail 授权验收仍待执行。发信、POP3、AI 和日历尚未接入。**
 
 ## 运行
 
@@ -10,7 +10,7 @@ Node.js 20.19+（或 22.12+）；桌面开发另需 Rust stable、Windows C++ Bu
 
 ```powershell
 npm ci
-npm run dev             # http://127.0.0.1:4317，浏览器预览
+npm run dev             # http://127.0.0.1:7317，浏览器预览
 npm run desktop:dev     # Tauri 桌面窗口
 ```
 
@@ -38,10 +38,10 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 - 指纹补齐与分段：可信原定位仍在时可重新读取完整原文，经二次核对与明确确认补齐指纹；弱正文观察不升级为历史证据。大范围候选按 UID 区间分段，完成原文检查和全段集合复核后才可确认，保留本地修改。
 - IMAP 限额：库缓冲前限制 literal / 响应 / 协议行 / SEARCH 输入，超限停止连接并保留已提交数据。密集邮箱采用更小的固定核对区间，保留每页集合检查与完整确认重扫。
 - IMAP 收尾：独立目录导航 / 历史回填、缺失 UID 复核、可信指纹跨目录恢复 / 明确自动续页、按大小 FETCH 与分块缓存、附件另存为、原文重取；同步设置默认关闭自动同步，支持 IDLE / CONDSTORE 回退。
-- 授权：系统浏览器 PKCE / loopback / XOAUTH2、keyring 刷新与重新授权，密码账号可原地重配；需先注册公共应用 Client ID，见 OAuth 配置文档。
+- 授权：添加账号按提供商卡片选择（Gmail、QQ、163、其他 IMAP；Office 即将支持），Gmail 公共应用 Client ID 已内置、系统浏览器 PKCE / loopback / XOAUTH2、keyring 刷新与重新授权，密码账号可原地重配，详见 OAuth 配置文档。
 - 工程：类型契约、检查命令、浏览器回归测试、Windows 原生 CI。
 
-**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿与邮件状态存 localStorage。事件完成状态仍仅本次会话有效。撰写界面为纯文本，尚未实现发送、富文本和撰写附件；收到的附件可从完整原文另存为。
+**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿与邮件状态存 localStorage。事件完成状态仍仅本次会话有效。撰写界面为纯文本，尚未实现发送、富文本和撰写附件；收到的附件可从完整原文另存为。收到的邮件支持 HTML 沙箱渲染：正文从已验证的完整原文缓存按需提取并消毒，在唯一源沙箱 iframe 中显示；远程图片默认拦截、每封可手动允许，缓存被淘汰时回退纯文本（链接可点击，统一经系统应用打开）。
 
 ## 开发入口
 

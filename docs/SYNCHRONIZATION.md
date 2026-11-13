@@ -48,7 +48,7 @@ CONDSTORE 可用时保存每目录 generation / UIDVALIDITY / HIGHESTMODSEQ，�
 
 mail_enqueue_sync / mail_sync_jobs / mail_cancel_sync 返回带 revision 的快照；mail_sync_account 兼容入口也经同一队列。Job 包含 cancelRequested、起止时间、outcome / error。outcome 的 hasMore、moreMail、listening、retryNeeded、refreshNeeded 区分续跑、通知、部分失败和是否需要刷新。
 
-syncStore 在 App 层活动每 750ms、空闲每 5 秒读进度，发现后台任务；旧 revision 不覆盖新状态。每个需要刷新的终态只刷新一次，失败 / 运行中停止也刷新已提交批次，排队取消和纯 IDLE 不刷新。后台 reload 合并草稿 revision / 邮件 stateRevision，不丢期间编辑；刷新失败可重读本机结果，不重新发网络动作。
+syncStore 在 App 层活动每 750ms、空闲每 5 秒读进度，发现后台任务；旧 revision 不覆盖新状态。每个需要刷新的终态只刷新一次，失败 / 运行中停止也刷新已提交批次，排队取消和纯 IDLE 不刷新。任务运行中按默认 2 秒节流触发工作区刷新，使已提交批次的邮件逐步进入列表（终态仍立即刷新；节流间隔由 createSyncStore 的 runningRefreshMs 参数控制）。后台 reload 合并草稿 revision / 邮件 stateRevision，不丢期间编辑；刷新失败可重读本机结果，不重新发网络动作。
 
 mail_imap_settings / mail_save_imap_settings 读写账号选项；mail_request_body 只登记原文请求；mail_export_attachment 调系统保存窗口。OAuth 生命周期与连接重配见 [OAUTH_SETUP](OAUTH_SETUP.md)。
 

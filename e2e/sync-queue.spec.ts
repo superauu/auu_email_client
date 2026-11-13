@@ -16,14 +16,17 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       message.attachments = [{index:0,name:'report.txt',size:1024,mediaType:'text/plain'}];
       message.folderIds=['project-1'];
       workspace.messages.push({...message,id:'server-draft',mailbox:'drafts',subject:'服务器草稿测试',changes:[],attachments:[]});
+      workspace.messages.push({...fixture.messages[1], id:'plain-link', accountId: fixture.accounts[0].id, subject:'纯文本链接测试', bodyText:'请联系 help@anoma.ly 或访问 https://example.com/help。', unread:false, changes:[], attachments:[]});
     }
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting';
+    const htmlRequests: Array<{ id: string; allow: boolean }> = []; const openCalls: string[] = [];
     const recoveryActions = new Map<string, string>();
     let nextRecovery: 'located' | 'source-present' | 'unresolved' | 'scanning' = 'located';
     let segmentPhase: 'collecting' | 'validating' | 'located' | 'unresolved' = 'collecting';
     let revision = 0; let sequence = 0;
     const jobs: SyncJob[] = []; const drafts = new Map<string, MailDraft>();
+    const windowCalls: string[] = [];
     const snapshot = () => structuredClone({ revision, jobs });
     function project(draft: MailDraft): MailMessage {
       const account = workspace.accounts.find(account => account.id === draft.accountId)!;
@@ -31,6 +34,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     }
     const invoke = async (command: string, input: Record<string, unknown> = {}) => {
       switch (command) {
+        case 'plugin:window|start_dragging': case 'plugin:window|toggle_maximize': case 'plugin:window|minimize': windowCalls.push(command);return;
         case 'get_app_info': return { version: '0.1.0', dataDirectory: 'test-only', skinDirectory: 'test-only/skins', databaseReady: true };
         case 'list_user_skins': return { skins: [], warnings: [] };
         case 'mail_seed_workspace': case 'mail_import_legacy_drafts': case 'plugin:event|unlisten': return;
@@ -74,6 +78,14 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_oauth_status': return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
         case 'mail_oauth_cancel': oauthState='cancelled';return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
         case 'mail_export_attachment': exportCalls++;if(exportCalls===2) throw new Error('原文缓存已被清理，请重新下载');return exportCalls>2;
+        case 'mail_message_html': {
+          const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
+          if (!message) throw new Error('邮件不存在或不属于此账号');
+          htmlRequests.push({ id: message.id, allow: Boolean(input.allowRemoteImages) });
+          const images = input.allowRemoteImages ? 'img-src https: data:' : 'img-src \'none\'';
+          return { html: `<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${images}"></head><body><p>富文本正文（${input.allowRemoteImages ? '远程图片已允许' : '远程图片被拦截'}）</p><a href="https://example.test/receipt">收据链接</a></body></html>` };
+        }
+        case 'open_external': openCalls.push(input.url as string); return;
         case 'mail_sync_jobs': return snapshot();
         case 'mail_enqueue_sync': {
           for (const id of input.ids as string[]) {
@@ -98,6 +110,9 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: { invoke, metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } }, transformCallback: () => 1, unregisterCallback: () => {} } });
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__syncTest', { value: {
+      windowCalls: () => [...windowCalls],
+      openCalls: () => [...openCalls],
+      htmlRequests: () => [...htmlRequests],
       recoveryResult(result: 'located' | 'source-present' | 'unresolved' | 'scanning') { nextRecovery = result; },
       segmentPhase(phase: 'collecting' | 'validating' | 'located' | 'unresolved') { segmentPhase = phase; },
       finish(id: string, failure: boolean) {
@@ -315,13 +330,37 @@ test('connection editing supports mandatory STARTTLS and reports SMTP as skipped
 });
 
 test('OAuth configuration waits for actual authorization and can be cancelled without a saved success', async ({page},info) => {
-  await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'添加 IMAP 账号',exact:true}).click();
-  await page.getByLabel('账号名称',{exact:true}).fill('OAuth 测试');await page.getByLabel('邮箱地址',{exact:true}).fill('oauth@example.test');
-  await page.getByRole('button',{name:'使用 Gmail / Microsoft 授权',exact:true}).click();const dialog=page.getByRole('dialog',{name:'使用 OAuth 添加 IMAP 账号'});
-  await dialog.getByLabel('Client ID',{exact:true}).fill('synthetic-public-id');await dialog.getByRole('button',{name:'在浏览器中授权',exact:true}).click();
-  await expect(dialog.getByText('等待系统浏览器授权…')).toBeVisible();await expect(dialog.getByRole('button',{name:'刷新账号列表',exact:true})).toHaveCount(0);
-  await page.screenshot({path:info.outputPath('oauth-waiting.png')});await dialog.getByRole('button',{name:'取消授权',exact:true}).click();await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('dialog',{name:'添加 IMAP 邮箱账号'}).getByLabel('邮箱地址',{exact:true})).toHaveValue('oauth@example.test');
+  await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'添加账号',exact:true}).click();
+  const wizard=page.getByRole('dialog',{name:'添加邮箱账号'});
+  await wizard.getByRole('button',{name:'添加 Gmail 账号',exact:true}).click();
+  const gmail=page.getByRole('dialog',{name:'添加 Gmail 账号'});
+  await expect(gmail.getByLabel('Client ID',{exact:true})).toHaveCount(0);
+  await gmail.getByLabel('账号名称',{exact:true}).fill('OAuth 测试');await gmail.getByLabel('邮箱地址',{exact:true}).fill('oauth@gmail.test');
+  await gmail.getByRole('button',{name:'在浏览器中授权',exact:true}).click();
+  await expect(gmail.getByText('等待系统浏览器授权…')).toBeVisible();await expect(gmail.getByRole('button',{name:'刷新账号列表',exact:true})).toHaveCount(0);
+  await page.screenshot({path:info.outputPath('oauth-waiting.png')});
+  await gmail.getByRole('button',{name:'取消授权',exact:true}).click();
+  await expect(gmail.getByText('授权已取消，账号未保存。')).toBeVisible();
+  await expect(gmail.getByRole('button',{name:'重新授权',exact:true})).toBeVisible();
+  await expect(gmail.getByLabel('邮箱地址',{exact:true})).toHaveValue('oauth@gmail.test');
+});
+
+test('provider picker disables unregistered platforms and prefills password IMAP presets', async ({page},info) => {
+  await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'添加账号',exact:true}).click();
+  const wizard=page.getByRole('dialog',{name:'添加邮箱账号'});
+  await expect(wizard.getByRole('button',{name:'Outlook / Microsoft 365，即将支持',exact:true})).toBeDisabled();
+  await wizard.getByRole('button',{name:'添加 QQ 邮箱 账号',exact:true}).click();
+  const qq=page.getByRole('dialog',{name:'添加 QQ 邮箱 账号'});
+  await expect(qq.getByLabel('IMAP 服务器')).toHaveValue('imap.qq.com');
+  await expect(qq.getByLabel('SMTP 服务器')).toHaveValue('smtp.qq.com');
+  await expect(qq.getByLabel('授权码',{exact:true})).toBeVisible();
+  await qq.getByLabel('账号名称',{exact:true}).fill('QQ 测试');await qq.getByLabel('邮箱地址',{exact:true}).fill('user@qq.test');
+  await expect(qq.getByLabel('登录用户')).toHaveValue('user@qq.test');
+  await qq.getByRole('button',{name:'返回',exact:true}).click();
+  await expect(wizard.getByRole('button',{name:'添加 Gmail 账号',exact:true})).toBeVisible();
+  await page.screenshot({path:info.outputPath('provider-picker.png')});
 });
 
 test('attachment cancellation and missing raw cache never report success; later retry can save',async ({page})=>{
@@ -340,4 +379,56 @@ test('server folders follow the chosen account and server drafts create a separa
   await page.getByRole('textbox',{name:'邮件正文'}).fill('新的本地副本');await expect(page.getByRole('status').filter({hasText:'草稿已保存'})).toBeVisible();
   await page.getByRole('dialog').getByRole('button',{name:'关闭对话框',exact:true}).click();
   await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(2);
+});
+
+
+test('titlebar blank and brand drag while double-click maximizes, controls stay independent',async ({page})=>{
+  await mockDesktop(page);await page.goto('/');await expect(page.getByRole('region',{name:'邮件列表'})).toBeVisible();
+  const calls=()=>page.evaluate(()=>(window as unknown as {__syncTest:{windowCalls:()=>string[]}}).__syncTest.windowCalls());
+  await page.getByRole('searchbox',{name:'搜索邮件'}).click();await expect.poll(calls).toEqual([]);
+  await page.getByRole('banner').getByRole('button',{name:'设置',exact:true}).click();await page.keyboard.press('Escape');await expect.poll(calls).toEqual([]);
+  await page.locator('.brand strong').dispatchEvent('mousedown',{button:0,buttons:1,detail:1});await expect.poll(calls).toEqual(['plugin:window|start_dragging']);
+  await page.getByRole('banner').dispatchEvent('mousedown',{button:0,buttons:1,detail:2});await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize']);
+  await page.getByRole('banner').dispatchEvent('mousedown',{button:2,buttons:2,detail:1});await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize']);
+  await page.getByRole('button',{name:'最大化或还原',exact:true}).click();await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize','plugin:window|toggle_maximize']);
+});
+
+test('rich mail renders in a sandboxed iframe, remote images stay gated and links open externally', async ({page},info) => {
+  await mockDesktop(page,true,undefined,true);await page.goto('/');await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
+  // Playwright 无法进入 opaque-origin 的 srcdoc 框架，断言落在 srcdoc 属性与父页通路上。
+  const frame=page.locator('iframe.mail-html-frame');
+  await expect(frame).toHaveAttribute('sandbox','allow-scripts');
+  await expect(frame).toHaveAttribute('srcdoc',/富文本正文（远程图片被拦截）/);
+  await expect(page.getByText('已拦截远程图片，防止发件人追踪读取行为。')).toBeVisible();
+  await page.screenshot({path:info.outputPath('mail-html.png')});
+  await page.getByRole('button',{name:'加载远程图片',exact:true}).click();
+  await expect(frame).toHaveAttribute('srcdoc',/富文本正文（远程图片已允许）/);
+  await expect(frame).toHaveAttribute('srcdoc',/img-src https: data:/);
+  await expect(page.getByText('已拦截远程图片，防止发件人追踪读取行为。')).toHaveCount(0);
+  // 邮件内链接点击在真实浏览器里由桥接脚本转发；这里验证父页通路到 open_external。
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent('message',{data:{type:'auumail-mail-link',href:'https://example.test/receipt'}})));
+  await page.getByRole('button',{name:'阅读邮件：纯文本链接测试',exact:true}).click();
+  await expect(page.locator('.mail-link',{hasText:'https://example.com/help'})).toBeVisible();
+  await page.locator('.mail-link',{hasText:'https://example.com/help'}).click();
+  const calls=await page.evaluate(() => (window as unknown as { __syncTest: { openCalls: () => string[]; htmlRequests: () => Array<{ id: string; allow: boolean }> } }).__syncTest.openCalls());
+  const requests=await page.evaluate(() => (window as unknown as { __syncTest: { htmlRequests: () => Array<{ id: string; allow: boolean }> } }).__syncTest.htmlRequests());
+  await expect(calls).toEqual(['https://example.test/receipt','https://example.com/help']);
+  // 开发模式 StrictMode 会对首次选择双触发 effect；语义断言：默认拦截请求在前、允许请求存在、
+  // 且从未为演示账号的纯文本邮件请求富文本。
+  await expect(requests[0]).toEqual({id:'real-message',allow:false});
+  await expect(requests.some(request => request.allow)).toBe(true);
+  await expect(requests.every(request => request.id === 'real-message')).toBe(true);
+  // 操作区在正文上方：回复 / 回复全部 / 转发创建本地草稿（发送尚未接入）。
+  await page.getByRole('button',{name:'转发',exact:true}).click();
+  const composeDialog=page.getByRole('dialog',{name:'转发邮件'});
+  await expect(composeDialog.getByLabel('主题')).toHaveValue(/^转发：/);
+  await expect(composeDialog.getByRole('textbox',{name:'邮件正文'})).toHaveValue(/---------- 转发的邮件 ----------/);
+  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
+  await page.getByRole('button',{name:'回复全部',exact:true}).click();
+  const replyAll=page.getByRole('dialog',{name:'回复邮件'});
+  await expect(replyAll.getByLabel('主题')).toHaveValue('Re: 离线状态测试');
+  await expect(replyAll.getByLabel('收件人')).toHaveValue(/zhixia@example\.test/);
+  await expect(replyAll.getByLabel('收件人')).toHaveValue(/alex@example\.test/);
+  await expect(replyAll.getByLabel('收件人')).not.toHaveValue(/test1@mail\.example/);
 });

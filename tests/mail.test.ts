@@ -55,3 +55,13 @@ test('aborted workspace requests reject', async () => {
   controller.abort();
   await assert.rejects(demoMailGateway.loadWorkspace(controller.signal));
 });
+
+
+test('unread filtering combines with account folder label and search without changing mail',()=>{
+  const messages=demoWorkspace.messages.map((message,index)=>({...message,folderIds:['folder'],unread:index===0}));
+  const original=structuredClone(messages);
+  const selected=messages[0];
+  assert.deepEqual(selectMessages(messages,{...query,unreadOnly:true,accountId:selected.accountId,folderId:'folder',search:selected.subject}),[selected]);
+  assert.equal(selectMessages(messages,{...query,unreadOnly:true,accountId:'other',folderId:'folder',search:selected.subject}).length,0);
+  assert.deepEqual(messages,original);
+});

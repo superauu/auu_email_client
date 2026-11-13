@@ -1,3 +1,4 @@
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { SkinCatalog } from '../themes/contract';
 import type { SyncQueueSnapshot, SyncOutcome } from '../domain/sync';
@@ -46,9 +47,13 @@ export const desktop = {
     if (!isDesktop()) throw new Error('请在桌面版中打开皮肤目录。');
     await invoke('open_skin_directory');
   },
+  /** Open a mail link in the system browser / mail app; Rust enforces the scheme allowlist. */
+  async openExternal(url: string): Promise<void> {
+    if (!isDesktop()) throw new Error('请在桌面版中打开外部链接。');
+    await invoke('open_external', { url });
+  },
   async windowAction(action: 'minimize' | 'maximize' | 'close' | 'drag'): Promise<void> {
     if (!isDesktop()) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const window = getCurrentWindow();
     if (action === 'minimize') await window.minimize();
     if (action === 'maximize') await window.toggleMaximize();
@@ -57,7 +62,6 @@ export const desktop = {
   },
   async guardWindowClose(shouldBlock: () => boolean, onBlocked: () => void): Promise<() => void> {
     if (!isDesktop()) return () => {};
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     return getCurrentWindow().onCloseRequested(event => {
       if (shouldBlock()) { event.preventDefault(); onBlocked(); }
     });
@@ -65,6 +69,7 @@ export const desktop = {
 };
 
 export const desktopMail = {
+  async messageHtml(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string> { return invoke<{ html: string }>('mail_message_html', { accountId, messageId, allowRemoteImages }).then(payload => payload.html); },
   async requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage> { return invoke('mail_request_body', { accountId, messageId, revision }); },
   async imapSettings(accountId: string): Promise<import('../domain/imap').ImapSettings> { return invoke('mail_imap_settings', { accountId }); },
   async saveImapSettings(accountId: string, settings: import('../domain/imap').ImapSettings): Promise<void> { return invoke('mail_save_imap_settings', { accountId, settings }); },

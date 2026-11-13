@@ -1,6 +1,45 @@
 # 当前状态
 
-更新时间：2026-11-11。A3.8 IMAP 收信 / 同步整批收尾已完成代码与自动检查；真实服务器、OAuth 注册应用、原生 WebView 和性能验收仍未完成。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-14。A3.8 IMAP 收信 / 同步整批收尾已完成代码与自动检查；真实服务器、原生 WebView 和性能验收仍未完成。本轮完成添加账号提供商卡片重构与 Gmail 内置 Client ID，真实 Gmail 授权验收待执行。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+
+## 最新增量：提供商卡片添加账号与内置 Gmail Client ID（2026-11-14）
+
+- 添加账号重构为两步：提供商卡片网格（Gmail、Microsoft 365「即将支持」禁用卡、QQ 邮箱、163 邮箱、其他 IMAP）→ 按提供商分流表单。Gmail 只填名称和邮箱即授权；QQ / 163 预填 IMAP / SMTP 服务器并使用授权码提示；其他 IMAP 保留原手动表单。编辑既有账号仍直接进入连接表单。
+- Google 公共桌面应用 Client ID 内置于 `mail_oauth.rs`（`GOOGLE_BUILTIN_CLIENT_ID`），在授权流开始、持久化之前归一化，profile 与 keyring Secret 携带同一份配置；显式填写的 Client ID 优先于兜底，Microsoft 空 Client ID 仍拒绝。新增 `src/domain/providers.ts` 注册表与 `detectProvider` 域名启发式，品牌图标内联为本地 SVG path（Simple Icons / MDI，`fill=currentColor` 跟随主题），163 / 其他 IMAP 用字母色块兜底。
+- 开发端口 4317 因 Windows 保留区（4311–4410）不可绑定，统一改为 7317，同步 Vite / Playwright / Tauri devUrl 与 devCsp。OAuth 应用注册背景见下方「外部配置进展」。
+
+### 验证证据（本轮）
+
+- `npm run check`：lint / 皮肤 schema / 类型检查 / 生产构建与 **37 个 TS 领域测试**通过（新增提供商注册表完整性与 detectProvider 域名映射）。
+- `npm run check:native`：rustfmt、**160 个 Rust 测试**、Clippy -D warnings 通过（新增 Google 空 Client ID 内置兜底 / 显式值不覆盖 / Microsoft 仍拒绝）。
+- `npm run test:ui`：**33 个 Chromium 回归**通过；e2e 更新为卡片流程（Gmail 免填 Client ID、Office 卡禁用、QQ 预填服务器 / 授权码、返回导航）并新增提供商卡片回归。
+- 追加：Gmail 步骤单击「在浏览器中授权」即开始授权并内嵌显示进度（取消 / 重新授权 / 刷新账号列表在同一对话框完成），不再弹出第二层对话框；OAuth 轮询逻辑抽为共享 `useOAuthFlow`。令牌交换失败时固定文案附带服务商机器错误码（仅 `error` 字段，不回显正文），用于区分 invalid_grant / invalid_client 等原因。
+- 真实授权排查（2026-11-14）：首次真实 Gmail 授权在令牌交换阶段失败，机器错误码显示 `invalid_request`；用假授权码探测 Google 端点确认原因为「Desktop 类型客户端要求携带 client secret」。修复：内置 Google secret（`GOOGLE_BUILTIN_CLIENT_SECRET`）仅在 Client ID 等于内置值时附加到授权码交换与刷新令牌请求；探测确认请求结构已被接受（错误转为预期 `invalid_grant`）。secret 不进入 keyring / SQLite / 日志，见 OAUTH_SETUP。
+- 系统浏览器授权回调页从纯文本改为品牌化静态 HTML：编译期内嵌 logo.svg，深色卡片 + 状态点 + 中文文案，无脚本、无外部资源；回调校验失败显示警示色变体。测试断言页面不含脚本与外部引用。
+- **真实 Gmail OAuth 授权验收通过（2026-11-14）**：真实 Gmail 账号经系统浏览器同意授权，XOAUTH2 登录 + LIST 成功，账号保存为「IMAP · 已连接」，keyring 刷新令牌落盘。授权流程在提供商卡片 → 名称 / 邮箱 → 单击授权后无人工配置完成（内置 Client ID / secret 生效）。真实 FETCH 同步验收进行中；刷新轮转、到期、撤销与 7 天过期重授权仍待观察。
+- 同步进行中改为渐进显示：任务运行时工作区按默认 2 秒节流合并已提交批次（`syncStore` 的 `runningRefreshMs` 参数），新邮件逐步进入列表而非等终态一次出现；终态立即刷新行为不变，后台 reload 合并语义保护期间编辑。新增 2 个 sync-store 回归（运行中刷新、节流间隔），39 个 TS 测试全过，33 个 UI 回归全过。
+- HTML 邮件沙箱渲染（2026-11-14）：正文优先从已验证的完整原文缓存按需提取 `text/html`（复用附件管道，零迁移、零 IMAP 往返；缓存被配额淘汰时回退纯文本），经 ammonia 消毒（保留 style 排版、剥脚本/事件处理器/相对地址；内联 `cid:` 图转 data: URI，单件 2 MiB / 合计 8 MiB、HTML 上限 2 MiB）后拼装 srcdoc，由唯一源沙箱 iframe（`sandbox="allow-scripts"`，配合哈希 CSP 仅桥接脚本可运行，无 allow-same-origin）渲染。iframe 内 CSP 仅放行按内容哈希锁定的桥接脚本（转发链接点击 postMessage + 上报高度，正文高度随内容自适应、无内层滚动条）；远程图片默认拦截、每封可点「加载远程图片」，应用 CSP 相应放宽 `frame-src`（srcdoc 需要）/ `img-src`、`font-src`（https:）。纯文本正文经 linkify 链接化（URL 尾随标点 / 括号平衡 / 中文截断；邮箱转 mailto），链接统一走 `open_external` 命令（scheme 白名单 http/https/mailto）在系统应用打开。阅读区布局对齐主流客户端：回复邮件 / 转发按钮置于正文上方（转发创建引用原文的本地草稿，发送尚未接入），原文重取与附件区随其上移，正文区域占满下方；底部回复卡片移除。新增 mail_html 3 个 Rust 测试、linkify 5 个 TS 测试、1 个 e2e 富文本回归（沙箱属性 / 图片门控 / 桥接通路 / 转发草稿）；本轮 `npm run check`（44 个 TS 测试）、`npm run check:native`（165 个 Rust 测试 + Clippy）、`npm run test:ui`（34 个 Chromium 回归）全部通过。
+
+### 明确边界与下一步
+
+1. Microsoft 授权仍未开放（应用未注册，卡片禁用）；注册 Entra 应用后移除 `providers.ts` 的 `available: false` 即可。
+2. 真实 Gmail 授权 / 刷新 / 撤销验收待执行；QQ / 163 预设的真实 IMAP 登录验收同样待授权账号。
+3. `detectProvider` 仅用于后续交互增强，当前向导未自动跳转卡片。
+
+## 外部配置进展：Google OAuth 应用注册（2026-11-14）
+
+- 已在 Google Cloud 注册项目 `auumail`：OAuth 同意屏幕为外部 / 测试状态，凭据类型为桌面应用。Client ID：`968245167784-7t1n7fbgjqh8iu04ha9scm43jjkevjmp.apps.googleusercontent.com`。
+- 按本项目约定桌面公共客户端不使用 client secret；Google 下载的 secret JSON 未保存到仓库或本机数据目录。
+- 测试状态限制：refresh token 约 7 天过期需重新授权；`https://mail.google.com/` 为 restricted scope，授权页会出现未验证应用警告。真实 Gmail 测试账号的授权 / 刷新 / 撤销验收仍待执行，结果将记入本文件。
+
+## 最新界面修复：标题栏 / 图标 / 紧凑列表（2026-11-11）
+
+- 标题栏品牌和空白区域支持左键拖动、双击最大化 / 还原；搜索 / 设置 / 窗口控件隔离，不触发拖动。窗口 API 静态加载，错误仍通过现有提示返回。
+- 从 public/logo.svg 重新生成平台图标，修复旧 ICO / PNG 内容只占左上半宽高的问题；ICO 16–256 各帧均验证接近全画布，资源需重新编译启动才能进入 Windows 窗口。
+- 参考 Outlook 的三行紧凑列表，移除大标题 / 描述区，保留辅助语义标题；44px 全部 / 未读工具栏，日期最新在前。账号信息放右侧，保留星标、未读点和长标题截断。打开未读结果后保留当前阅读内容，换账号仍隔离。
+- 两侧工具栏统一 44px；列表宽度从最大 440px 放宽到 900px，根据实际窗口保留 320px 阅读区；首选宽度持久保存，收窄不丢偏好，ARIA 显示实际范围。
+- 内置行高改为 Paper 76 / Graphite 72 / Linen 80px，Ocean 示例 76px；v1 token 合法范围扩为 68–128，旧包仍有效，校验 / schema / 文档同步。
+- npm run check：35 个 TS 测试及 lint / schema / 类型 / 构建通过。npm run check:native：159 个 Rust 测试、fmt / Clippy 通过。npm run test:ui：32 个 Chromium 回归通过，新增标题栏 IPC、紧凑密度 / 未读过滤、阅读保持、工具栏对齐及宽列表收窄 / 恢复回归；已在真实 Windows WebView 目视确认紧凑布局、对齐工具栏和正常大小的任务栏图标；原生拖动 / 双击动作因检测到用户正在操作而未完成自动验收，IPC 分发回归已通过。
 
 ## 最新增量：IMAP 整批收尾（A3.8）
 
