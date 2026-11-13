@@ -21,6 +21,10 @@ export class DraftSession {
   private revision: number;
   private owner: string;
   private paused = false;
+  /** 当前已持久化的草稿修订；发送登记必须核对它（docs/SENDING.md）。 */
+  get currentRevision(): number {
+    return this.revision;
+  }
 
   constructor(initial: MailDraft, private readonly write: SaveDraft, private readonly debounceMs = 800) {
     this.revision = initial.revision ?? 0;

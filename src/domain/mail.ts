@@ -9,6 +9,8 @@ export interface MailCapabilities {
   readStateSync: boolean;
   threads: boolean;
   calendar: boolean;
+  /** SMTP 发送能力：仅收信账号、Microsoft（未授权 SMTP.Send）与演示账号为 false。 */
+  send: boolean;
 }
 
 export interface MailAccount {
@@ -137,6 +139,8 @@ export interface MailGateway {
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
   /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
   messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string>;
+  /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
+  sendDraft?(draftId: string, revision: number): Promise<import('./outbox').OutboxEntry>;
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;

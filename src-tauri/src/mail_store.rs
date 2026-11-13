@@ -297,7 +297,8 @@ pub fn save_real_account(
         "avatar": account.avatar,
         "color": account.color,
         "status": "connected",
-        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": true, "threads": true, "calendar": false },
+        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": true, "threads": true, "calendar": false,
+          "send": !account.receive_only && account.oauth.as_ref().map(|config| config.provider != crate::mail_oauth::Provider::Microsoft).unwrap_or(true) },
         "imapHost": account.imap_host,
         "imapPort": account.imap_port,
         "imapSecurity": account.imap_security,
@@ -490,7 +491,10 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
                 color: profile["color"].as_str().unwrap_or("teal").to_string(),
                 status: profile["status"].as_str().unwrap_or("offline").to_string(),
                 capabilities: if row.get::<_,String>(3)?=="imap" && profile["status"]!="demo" {
-                    let mut capabilities=profile["capabilities"].as_object().cloned().unwrap_or_default();capabilities.insert("readStateSync".into(),Value::Bool(true));Value::Object(capabilities)
+                    let mut capabilities=profile["capabilities"].as_object().cloned().unwrap_or_default();capabilities.insert("readStateSync".into(),Value::Bool(true));
+                    let send = !profile["receiveOnly"].as_bool().unwrap_or(false)
+                        && profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) != Some("microsoft");
+                    capabilities.insert("send".into(),Value::Bool(send));Value::Object(capabilities)
                 } else {profile["capabilities"].clone()},
             })
         },
@@ -550,7 +554,7 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
 }
 
 fn default_profile() -> Value {
-    serde_json::json!({ "avatar": "·", "color": "teal", "status": "offline", "capabilities": { "folders": false, "serverLabels": false, "readStateSync": false, "threads": false, "calendar": false } })
+    serde_json::json!({ "avatar": "·", "color": "teal", "status": "offline", "capabilities": { "folders": false, "serverLabels": false, "readStateSync": false, "threads": false, "calendar": false, "send": false } })
 }
 
 pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessagePage, AppError> {
@@ -735,7 +739,7 @@ mod tests {
     use crate::storage;
 
     fn seed_fixture() -> SeedWorkspace {
-        let capabilities = serde_json::json!({ "folders": true, "serverLabels": true, "readStateSync": true, "threads": true, "calendar": true });
+        let capabilities = serde_json::json!({ "folders": true, "serverLabels": true, "readStateSync": true, "threads": true, "calendar": true, "send": false });
         let account = |id: &str, provider: &str, email: &str| SeedAccount {
             id: id.into(),
             provider: provider.into(),

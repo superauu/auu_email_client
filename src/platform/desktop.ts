@@ -70,6 +70,11 @@ export const desktop = {
 
 export const desktopMail = {
   async messageHtml(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string> { return invoke<{ html: string }>('mail_message_html', { accountId, messageId, allowRemoteImages }).then(payload => payload.html); },
+  async sendDraft(draftId: string, revision: number): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_send_draft', { draftId, revision }); },
+  async outboxList(): Promise<import('../domain/outbox').OutboxEntry[]> { return invoke('mail_outbox_list'); },
+  async cancelOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_cancel', { id }); },
+  async resolveOutbox(id: string, action: 'keep-local' | 'retry'): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_resolve', { id, action }); },
+  async retryOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_retry_outbox', { id }); },
   async requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage> { return invoke('mail_request_body', { accountId, messageId, revision }); },
   async imapSettings(accountId: string): Promise<import('../domain/imap').ImapSettings> { return invoke('mail_imap_settings', { accountId }); },
   async saveImapSettings(accountId: string, settings: import('../domain/imap').ImapSettings): Promise<void> { return invoke('mail_save_imap_settings', { accountId, settings }); },

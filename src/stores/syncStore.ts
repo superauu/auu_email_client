@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { desktopMail, isDesktop } from '../platform/desktop';
 import { isSyncActive, type SyncJob, type SyncQueueSnapshot } from '../domain/sync';
+import type { OutboxEntry } from '../domain/outbox';
 import { errorMessage } from '../domain/errors';
 import { useWorkspaceStore } from './workspaceStore';
 
@@ -10,15 +11,24 @@ interface SyncTransport {
   read: () => Promise<SyncQueueSnapshot>;
   cancel: (id: string) => Promise<SyncQueueSnapshot>;
   refreshWorkspace: () => Promise<void>;
+  /** Outbox 队列（docs/SENDING.md）；浏览器 harness 可缺省。 */
+  outboxList?: () => Promise<OutboxEntry[]>;
+  cancelOutbox?: (id: string) => Promise<OutboxEntry>;
+  resolveOutbox?: (id: string, action: 'keep-local' | 'retry') => Promise<OutboxEntry>;
+  retryOutbox?: (id: string) => Promise<OutboxEntry>;
 }
 interface SyncState {
   revision: number;
   jobs: SyncJob[];
   submitting: string[];
+  outbox: OutboxEntry[];
   error: string | null;
   enqueue: (ids: string[]) => Promise<void>;
   refresh: () => Promise<void>;
   cancel: (jobId: string) => Promise<void>;
+  outboxCancel: (id: string) => Promise<void>;
+  outboxResolve: (id: string, action: 'keep-local' | 'retry') => Promise<void>;
+  outboxRetry: (id: string) => Promise<void>;
   monitor: () => () => void;
 }
 
@@ -63,7 +73,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       if (monitors && transport.available()) timer = setTimeout(() => { void get().refresh(); }, get().jobs.some(isSyncActive) || pollingFailed ? pollMs : idlePollMs);
     }
     return {
-      revision: -1, jobs: [], submitting: [], error: null,
+      revision: -1, jobs: [], submitting: [], outbox: [], error: null,
       async enqueue(ids) {
         if (!transport.available()) { set({ error: '请在桌面版中同步真实邮箱。' }); return; }
         const pending = new Set(get().submitting);
@@ -78,7 +88,16 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         if (!transport.available()) return Promise.resolve();
         if (reading) return reading;
         reading = (async () => {
-          try { const snapshot = await transport.read(); pollingFailed = false; if (get().error?.startsWith('无法读取同步进度：')) set({ error: null }); apply(snapshot); }
+          try {
+            const snapshot = await transport.read();
+            pollingFailed = false;
+            if (get().error?.startsWith('无法读取同步进度：')) set({ error: null });
+            apply(snapshot);
+            if (transport.outboxList) {
+              const outbox = await transport.outboxList();
+              set({ outbox });
+            }
+          }
           catch (error) { pollingFailed = true; set({ error: `无法读取同步进度：${errorMessage(error)}` }); }
           finally { reading = null; schedule(); }
         })();
@@ -89,6 +108,21 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         try { apply(await transport.cancel(jobId)); set({ error: null }); }
         catch (error) { set({ error: errorMessage(error) }); }
         finally { schedule(); }
+      },
+      async outboxCancel(id) {
+        if (!transport.cancelOutbox) return;
+        try { await transport.cancelOutbox(id); set({ error: null }); await get().refresh(); }
+        catch (error) { set({ error: errorMessage(error) }); }
+      },
+      async outboxResolve(id, action) {
+        if (!transport.resolveOutbox) return;
+        try { await transport.resolveOutbox(id, action); set({ error: null }); await get().refresh(); }
+        catch (error) { set({ error: errorMessage(error) }); }
+      },
+      async outboxRetry(id) {
+        if (!transport.retryOutbox) return;
+        try { await transport.retryOutbox(id); set({ error: null }); await get().refresh(); }
+        catch (error) { set({ error: errorMessage(error) }); }
       },
       monitor() {
         monitors += 1;
@@ -106,4 +140,8 @@ export const useSyncStore = createSyncStore({
   read: desktopMail.syncJobs,
   cancel: desktopMail.cancelSync,
   refreshWorkspace: () => useWorkspaceStore.getState().reload(),
+  outboxList: desktopMail.outboxList,
+  cancelOutbox: desktopMail.cancelOutbox,
+  resolveOutbox: desktopMail.resolveOutbox,
+  retryOutbox: desktopMail.retryOutbox,
 });

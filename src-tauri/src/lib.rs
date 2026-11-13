@@ -20,9 +20,11 @@ mod mail_sync;
 mod mail_verify;
 mod message_changes;
 mod skins;
+mod smtp_send;
 mod storage;
 mod sync_control;
 mod sync_scheduler;
+mod outbox;
 
 use error::AppError;
 use serde::Serialize;
@@ -67,6 +69,69 @@ fn mail_request_body(
         .lock()
         .map_err(|_| AppError::storage("数据库忙"))?;
     imap_body::request(&mut conn, &account_id, &message_id, revision)
+}
+
+/// 发送入口：登记 outbox（语义见 docs/SENDING.md）并唤醒账号队列；发送本身由 runner 执行。
+#[tauri::command]
+fn mail_send_draft(
+    db: State<'_, Db>,
+    scheduler: State<'_, sync_scheduler::SyncScheduler>,
+    draft_id: String,
+    revision: u32,
+) -> Result<outbox::Entry, AppError> {
+    let entry = {
+        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        outbox::enqueue(&conn, &draft_id, revision)?
+    };
+    scheduler.enqueue(std::slice::from_ref(&entry.account_id))?;
+    Ok(entry)
+}
+
+#[tauri::command]
+fn mail_outbox_list(db: State<'_, Db>) -> Result<Vec<outbox::Entry>, AppError> {
+    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    outbox::list(&conn)
+}
+
+#[tauri::command]
+fn mail_outbox_cancel(
+    db: State<'_, Db>,
+    id: String,
+) -> Result<outbox::Entry, AppError> {
+    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    outbox::cancel(&conn, &id)
+}
+
+/// unknown 的两个用户出口：仅保留本机（failed）或确认重试（queued 并唤醒队列）。
+#[tauri::command]
+fn mail_outbox_resolve(
+    db: State<'_, Db>,
+    scheduler: State<'_, sync_scheduler::SyncScheduler>,
+    id: String,
+    action: String,
+) -> Result<outbox::Entry, AppError> {
+    let entry = {
+        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        outbox::resolve(&conn, &id, &action)?
+    };
+    if entry.state == "queued" {
+        scheduler.enqueue(std::slice::from_ref(&entry.account_id))?;
+    }
+    Ok(entry)
+}
+
+#[tauri::command]
+fn mail_retry_outbox(
+    db: State<'_, Db>,
+    scheduler: State<'_, sync_scheduler::SyncScheduler>,
+    id: String,
+) -> Result<outbox::Entry, AppError> {
+    let entry = {
+        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        outbox::retry(&conn, &id)?
+    };
+    scheduler.enqueue(std::slice::from_ref(&entry.account_id))?;
+    Ok(entry)
 }
 #[tauri::command]
 async fn mail_export_attachment(
@@ -532,8 +597,21 @@ pub fn run() {
             let conn = storage::initialize(&data.join("mail.db")).map_err(std::io::Error::other)?;
             let conn = std::sync::Arc::new(Mutex::new(conn));
             let sync_db = conn.clone();
+            // 调度 runner：同账号先处理 queued 发送（docs/SENDING.md），再执行同步；
+            // 同步完成后核对 Sent 目录，命中则把 unknown 发送自动转为已发送。
             let scheduler =
-                sync_scheduler::SyncScheduler::new(move |id| imap_jobs::run(&sync_db, id))
+                sync_scheduler::SyncScheduler::new(move |id| {
+                    let sends = outbox::run(&sync_db, id)?;
+                    let mut outcome = imap_jobs::run(&sync_db, id)?;
+                    {
+                        let conn = sync_db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+                        outbox::resolve_unknown_after_sync(&conn)?;
+                    }
+                    if sends {
+                        outcome.refresh_needed = true;
+                    }
+                    Ok(outcome)
+                })
                     .map_err(|error| std::io::Error::other(error.message))?;
             imap_jobs::spawn(conn.clone(), scheduler.clone())
                 .map_err(|error| std::io::Error::other(error.message))?;
@@ -546,6 +624,11 @@ pub fn run() {
             mail_export_attachment,
             mail_message_html,
             mail_request_body,
+            mail_send_draft,
+            mail_outbox_list,
+            mail_outbox_cancel,
+            mail_outbox_resolve,
+            mail_retry_outbox,
             open_external,
             mail_oauth_start,
             mail_account_config,

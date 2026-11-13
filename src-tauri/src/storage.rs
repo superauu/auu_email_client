@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i64 = 9;
+const LATEST_VERSION: i64 = 10;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_foundation.sql")),
     (2, include_str!("../migrations/002_mail_store.sql")),
@@ -15,6 +15,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/008_fingerprint_provenance.sql"),
     ),
     (9, include_str!("../migrations/009_imap_completion.sql")),
+    (10, include_str!("../migrations/010_outbox_send.sql")),
 ];
 
 pub fn initialize(path: &Path) -> Result<Connection, String> {
@@ -26,6 +27,7 @@ pub fn initialize(path: &Path) -> Result<Connection, String> {
     crate::message_changes::recover(&mut connection).map_err(|error| error.message)?;
     crate::mail_recovery::recover(&mut connection).map_err(|error| error.message)?;
     crate::imap_jobs::recover(&connection).map_err(|error| error.message)?;
+    crate::outbox::recover(&connection).map_err(|error| error.message)?;
     Ok(connection)
 }
 

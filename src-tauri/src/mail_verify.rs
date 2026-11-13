@@ -222,11 +222,11 @@ fn smtp_verify_stream<S: Read + Write>(
     Ok(())
 }
 
-fn main_line(detail: &str) -> String {
+pub(crate) fn main_line(detail: &str) -> String {
     detail.lines().next().unwrap_or("").trim().to_string()
 }
 
-fn write_command<S: Write>(stream: &mut S, command: &str) -> Result<(), AppError> {
+pub(crate) fn write_command<S: Write>(stream: &mut S, command: &str) -> Result<(), AppError> {
     stream
         .write_all(command.as_bytes())
         .and_then(|_| stream.write_all(b"\r\n"))
@@ -236,7 +236,7 @@ fn write_command<S: Write>(stream: &mut S, command: &str) -> Result<(), AppError
 
 /// Reads a possibly-multiline reply, returning the final status code and the full text.
 /// A reply ends at the first line whose 4th byte is a space after three digits.
-fn read_response<R: Read>(reader: &mut R) -> Result<(u16, String), AppError> {
+pub(crate) fn read_response<R: Read>(reader: &mut R) -> Result<(u16, String), AppError> {
     let mut text: Vec<u8> = Vec::new();
     let mut line: Vec<u8> = Vec::new();
     let mut byte = [0u8; 1];

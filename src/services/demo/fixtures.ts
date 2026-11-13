@@ -1,6 +1,6 @@
 import type { MailMessage, WorkspaceSnapshot } from '../../domain/mail';
 
-const capabilities = { folders: true, serverLabels: true, readStateSync: true, threads: true, calendar: true };
+const capabilities = { folders: true, serverLabels: true, readStateSync: true, threads: true, calendar: true, send: false };
 const account = 'personal';
 function message(id: string, overrides: Partial<MailMessage>): MailMessage {
   return {

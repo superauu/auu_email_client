@@ -9,6 +9,7 @@ export const desktopMailGateway: MailGateway = {
   mode: 'desktop-local',
   async requestBody(accountId, messageId, revision) { return desktopMail.requestBody(accountId, messageId, revision); },
   async messageHtml(accountId, messageId, allowRemoteImages) { return desktopMail.messageHtml(accountId, messageId, allowRemoteImages); },
+  async sendDraft(draftId, revision) { return desktopMail.sendDraft(draftId, revision); },
   async exportAttachment(accountId, messageId, index) { return desktopMail.exportAttachment(accountId, messageId, index); },
   async requestRecovery(accountId, messageId, revision, action) { return desktopMail.requestRecovery(accountId, messageId, revision, action); },
   async loadWorkspace(signal) {

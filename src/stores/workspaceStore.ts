@@ -28,6 +28,8 @@ interface WorkspaceState extends WorkspaceSnapshot {
   exportAttachment: (id: string, index: number) => Promise<boolean>;
   /** Sanitized sandbox srcdoc for rich rendering; rejects when the environment has no verified raw cache. */
   messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean) => Promise<string>;
+  /** Register a persisted draft into the outbox queue (docs/SENDING.md). */
+  sendDraft: (draftId: string, revision: number) => Promise<import('../domain/outbox').OutboxEntry>;
   toggleEvent: (id: string) => void;
   setView: (view: 'mail' | 'events') => void;
   saveDraft: (draft: MailDraft, options?: DraftSaveOptions) => Promise<MailDraft>;
@@ -80,6 +82,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async messageHtml(accountId, messageId, allowRemoteImages) {
     if (!gateway.messageHtml) throw new Error('当前环境不支持富文本正文。');
     return gateway.messageHtml(accountId, messageId, allowRemoteImages);
+  },
+  async sendDraft(draftId, revision) {
+    if (!gateway.sendDraft) throw new Error('当前环境不能发送邮件。');
+    set({ error: null });
+    return gateway.sendDraft(draftId, revision);
   },
   async load() {
     if (get().status === 'loading' || get().status === 'ready') return;

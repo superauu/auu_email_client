@@ -5,7 +5,7 @@ import type { SyncJob } from '../src/domain/sync';
 
 /** Test-only IPC harness. Validates UI behavior, not a real server or the Rust queue. */
 async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false) {
-  const accounts: MailAccount[] = [1, 2, 3].map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline' }));
+  const accounts: MailAccount[] = [1, 2, 3].map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
   await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion }) => {
     const workspace = { ...fixture, accounts: [...fixture.accounts, ...accounts] };
     if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }] });
@@ -21,6 +21,9 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting';
     const htmlRequests: Array<{ id: string; allow: boolean }> = []; const openCalls: string[] = [];
+    const outboxActions: Array<{ id: string; action: string }> = [];
+    let outboxState: 'queued' | 'sending' | 'unknown' | 'failed' | 'sent' | null = null;
+    const outboxEntry = () => outboxState === null ? null : { id: 'ob-1', draftId: 'sent-draft', accountId: 'real-1', messageId: '<m@auumail.local>', state: outboxState, attempts: 1, lastError: outboxState === 'unknown' ? '邮件已提交给服务器，但未能确认投递结果' : outboxState === 'failed' ? '已按仅保留本机处理；服务器是否投递未被确认，不会自动重试' : null, queuedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), resolvedBy: null };
     const recoveryActions = new Map<string, string>();
     let nextRecovery: 'located' | 'source-present' | 'unresolved' | 'scanning' = 'located';
     let segmentPhase: 'collecting' | 'validating' | 'located' | 'unresolved' = 'collecting';
@@ -78,6 +81,17 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_oauth_status': return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
         case 'mail_oauth_cancel': oauthState='cancelled';return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
         case 'mail_export_attachment': exportCalls++;if(exportCalls===2) throw new Error('原文缓存已被清理，请重新下载');return exportCalls>2;
+        case 'mail_send_draft': {
+          const draft = drafts.get(input.draftId as string);
+          if (!draft) throw new Error('草稿不存在');
+          if (draft.revision !== input.revision) throw new Error('草稿已被修改，请保存后重新发送');
+          outboxState = 'queued';
+          return outboxEntry()!;
+        }
+        case 'mail_outbox_list': return outboxEntry() ? [outboxEntry()!] : [];
+        case 'mail_outbox_cancel': outboxState = null; return outboxEntry()!;
+        case 'mail_outbox_resolve': outboxActions.push({ id: input.id as string, action: input.action as string }); outboxState = input.action === 'retry' ? 'queued' : 'failed'; return outboxEntry()!;
+        case 'mail_retry_outbox': outboxState = 'queued'; return outboxEntry()!;
         case 'mail_message_html': {
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
           if (!message) throw new Error('邮件不存在或不属于此账号');
@@ -113,6 +127,8 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       windowCalls: () => [...windowCalls],
       openCalls: () => [...openCalls],
       htmlRequests: () => [...htmlRequests],
+      outboxState(state: 'queued' | 'sending' | 'unknown' | 'failed' | 'sent' | null) { outboxState = state; },
+      outboxActions: () => [...outboxActions],
       recoveryResult(result: 'located' | 'source-present' | 'unresolved' | 'scanning') { nextRecovery = result; },
       segmentPhase(phase: 'collecting' | 'validating' | 'located' | 'unresolved') { segmentPhase = phase; },
       finish(id: string, failure: boolean) {
@@ -431,4 +447,32 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await expect(replyAll.getByLabel('收件人')).toHaveValue(/zhixia@example\.test/);
   await expect(replyAll.getByLabel('收件人')).toHaveValue(/alex@example\.test/);
   await expect(replyAll.getByLabel('收件人')).not.toHaveValue(/test1@mail\.example/);
+});
+
+test('send is capability-gated, the outbox queue surfaces state, and unknown offers explicit exits', async ({page},info) => {
+  await mockDesktop(page,true,undefined,true);await page.goto('/');
+  // 演示账号草稿：发送按钮禁用并说明原因。
+  await page.getByRole('button',{name:'阅读邮件：让下一版界面，多一点呼吸感',exact:true}).click();
+  await page.getByRole('button',{name:'回复邮件',exact:true}).click();
+  const demoCompose=page.getByRole('dialog',{name:'回复邮件'});
+  await expect(demoCompose.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
+  await demoCompose.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  // 真实账号：回复 → 发送 → 队列徽标。
+  await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
+  await page.getByRole('button',{name:'回复邮件',exact:true}).click();
+  const compose=page.getByRole('dialog',{name:'回复邮件'});
+  await compose.getByRole('textbox',{name:'邮件正文'}).fill('发送测试');
+  await compose.getByRole('button',{name:'发送',exact:true}).click();
+  await expect(compose.getByText('已进入发送队列')).toBeVisible();
+  await page.screenshot({path:info.outputPath('send-queued.png')});
+  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  await page.getByRole('banner').getByRole('button',{name:'设置',exact:true}).click();
+  await expect(page.getByText('发送排队中')).toBeVisible();
+  // 结果不明：两个明确出口，不自动重发。
+  await page.evaluate(() => (window as unknown as { __syncTest: { outboxState: (state: string) => void } }).__syncTest.outboxState('unknown'));
+  await expect(page.getByText(/结果不明（已尝试 1 次）/)).toBeVisible({timeout:7000});
+  await page.getByRole('tabpanel',{name:'邮箱账号'}).getByRole('button',{name:'仅保留本机',exact:true}).click();
+  await expect(page.getByText(/发送失败：已按仅保留本机处理/)).toBeVisible({timeout:7000});
+  const actions=await page.evaluate(() => (window as unknown as { __syncTest: { outboxActions: () => Array<{ id: string; action: string }> } }).__syncTest.outboxActions());
+  await expect(actions).toEqual([{id:'ob-1',action:'keep-local'}]);
 });
