@@ -490,10 +490,15 @@ pub fn load_workspace(conn: &Connection) -> Result<WorkspaceBase, AppError> {
                 avatar: profile["avatar"].as_str().unwrap_or("·").to_string(),
                 color: profile["color"].as_str().unwrap_or("teal").to_string(),
                 status: profile["status"].as_str().unwrap_or("offline").to_string(),
-                capabilities: if row.get::<_,String>(3)?=="imap" && profile["status"]!="demo" {
-                    let mut capabilities=profile["capabilities"].as_object().cloned().unwrap_or_default();capabilities.insert("readStateSync".into(),Value::Bool(true));
-                    let send = !profile["receiveOnly"].as_bool().unwrap_or(false)
-                        && profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) != Some("microsoft");
+                capabilities: if profile["status"]!="demo" {
+                    // send 能力每次加载动态计算：不依赖账号保存时的旧 profile（避免既有账号缺字段）。
+                    let mut capabilities=profile["capabilities"].as_object().cloned().unwrap_or_default();
+                    if row.get::<_,String>(3)?=="imap" {capabilities.insert("readStateSync".into(),Value::Bool(true));}
+                    // Google OAuth 发送走 smtp.gmail.com，不受历史「仅收信」标记限制（OAuth 曾默认只收信）。
+                    let google_oauth = profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) == Some("google");
+                    let send = google_oauth
+                        || (!profile["receiveOnly"].as_bool().unwrap_or(false)
+                            && profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) != Some("microsoft"));
                     capabilities.insert("send".into(),Value::Bool(send));Value::Object(capabilities)
                 } else {profile["capabilities"].clone()},
             })

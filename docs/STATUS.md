@@ -1,13 +1,14 @@
 # 当前状态
 
-更新时间：2026-11-14。A3.8 IMAP 收信 / 同步整批收尾已完成；真实 Gmail OAuth 授权已验收；本轮完成 SMTP 发送队列（outbox）实现，真实发送验收待执行。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md) 与 [SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-14。A3.8 IMAP 收信 / 同步整批收尾已完成；真实 Gmail OAuth 授权与真实发送均已验收；本轮完成 SMTP 发送队列（outbox）实现。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md) 与 [SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
 ## 最新增量：SMTP 发送队列（outbox）与真实授权验收（2026-11-14）
 
 - **真实 Gmail OAuth 授权验收通过**：系统浏览器 PKCE 同意 → XOAUTH2 登录 + LIST 成功 → 账号落盘（IMAP · 已连接）；期间发现并修复「Desktop 类型客户端令牌交换必须携带 client secret」（内置 secret 仅在 Client ID 等于内置值时附加）。
 - 发送实现按 [SENDING](SENDING.md) 设计落地：v10 迁移为 outbox 补列（message_id / attempts / last_error / queued_at / resolved_by）；`smtp_send.rs` 实现信封 + DATA 点填充 + 465 TLS / 587 STARTTLS（fail-closed 能力确认）+ XOAUTH2 错误挑战；**DATA 终点号写出后未读到 2xx 一律 unknown，不自动重试、不自动判失败**。`outbox.rs` 完成 RFC5322 组装（RFC2047 CJK 显示名 / 主题、base64 正文折行、头部注入中和、收件人语法校验）、Message-ID 一次生成全程复用、调度 runner 先发送后同步、启动恢复 sending → unknown、同步提交后按 Sent 目录命中把 unknown 自动转已发送。
 - 能力门控：capabilities.send（仅收信账号 / Microsoft 未授权 SMTP.Send / 演示账号 = false）；撰写页发送按钮禁用并说明原因。UI：发送进入队列的提示、设置页账号行发送状态徽标、unknown 提供「仅保留本机 / 确认未送达并重试」两个出口。
-- 验证：`npm run check` 44 个 TS 测试、`npm run check:native` 185 个 Rust 测试 + Clippy、`npm run test:ui` 35 个 Chromium 回归（新增发送门控 / 队列徽标 / unknown 出口回归）全部通过。真实验收（Gmail 实际发送、发送中重启、断网 unknown → Sent 核对）待执行。
+- 验证：`npm run check` 44 个 TS 测试、`npm run check:native` 186 个 Rust 测试 + Clippy、`npm run test:ui` 35 个 Chromium 回归（新增发送门控 / 队列徽标 / unknown 出口回归）全部通过。
+- **真实发送验收通过（2026-11-14）**：真实 Gmail 账号回复邮件经 outbox → smtp.gmail.com XOAUTH2 投递成功。验收中发现两处修复：OAuth 账号的历史「仅收信」标记不再阻塞 Google 发送（send 能力每次加载动态计算）；OAuth 账号未存 SMTP 主机时默认 smtp.gmail.com:465。已知 UX 待改进：发送登记成功后撰写框不自动关闭；同步入口只在设置页（下一步重设计）。
 
 ## 历史增量：提供商卡片添加账号与内置 Gmail Client ID（2026-11-14）
 

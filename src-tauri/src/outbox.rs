@@ -203,10 +203,12 @@ pub(crate) fn enqueue(conn: &Connection, draft_id: &str, revision: u32) -> Resul
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器，也不能发送邮件"));
     }
-    if profile["receiveOnly"].as_bool().unwrap_or(false) {
+    let google_oauth = profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) == Some("google");
+    // Google OAuth 发送走 smtp.gmail.com，不受历史「仅收信」标记限制（OAuth 曾默认只收信）。
+    if !google_oauth && profile["receiveOnly"].as_bool().unwrap_or(false) {
         return Err(AppError::invalid("仅收信账号不支持发送，请使用完整 SMTP 账号"));
     }
-    if profile["smtpHost"].as_str().unwrap_or("").trim().is_empty() {
+    if profile["smtpHost"].as_str().unwrap_or("").trim().is_empty() && !google_oauth {
         return Err(AppError::invalid("账号未配置 SMTP 服务器，无法发送"));
     }
     if profile
@@ -319,6 +321,15 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
     }))
 }
 
+/// Google OAuth 空 SMTP 端口时默认 465 TLS。
+fn smtp_port(job: &SendJob, smtp_host: &str) -> u16 {
+    if job.smtp_port == 0 || (job.smtp_host.is_empty() && smtp_host == "smtp.gmail.com" && job.smtp_port != 587) {
+        465
+    } else {
+        job.smtp_port
+    }
+}
+
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -340,10 +351,13 @@ fn finish(conn: &Connection, entry_id: &str, result: &Result<(), AppError>) -> R
 
 /// 锁外投递：凭据读取与 SMTP 会话都不持有 DB 锁。
 fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppError> {
-    if job.smtp_host.is_empty() {
+    let google_oauth = matches!(&job.oauth, Some(config) if config.provider == mail_oauth::Provider::Google);
+    if job.smtp_host.is_empty() && !google_oauth {
         return Err(AppError::invalid("账号未配置 SMTP 服务器，无法发送"));
     }
-    let security = if job.smtp_port == 587 {
+    // Google OAuth 账号固定走 smtp.gmail.com（scope https://mail.google.com/ 覆盖 SMTP）。
+    let smtp_host = if job.smtp_host.is_empty() { "smtp.gmail.com".to_string() } else { job.smtp_host.clone() };
+    let security = if smtp_port(job, &smtp_host) == 587 {
         imap_transport::Security::Starttls
     } else {
         imap_transport::Security::Tls
@@ -356,7 +370,7 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
         &job.body_text,
         &job.message_id,
     );
-    let stream = smtp_send::open(&job.smtp_host, job.smtp_port, security)?;
+    let stream = smtp_send::open(&smtp_host, job.smtp_port, security)?;
     enum PreparedAuth {
         Plain(String),
         Xoauth2(String),
@@ -369,6 +383,7 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
                 ));
             }
             if config.provider == mail_oauth::Provider::Google
+                && !job.smtp_host.is_empty()
                 && !job.smtp_host.eq_ignore_ascii_case("smtp.gmail.com")
             {
                 return Err(AppError::invalid("Google OAuth 账号只能使用 smtp.gmail.com 发送"));
@@ -564,8 +579,17 @@ mod tests {
     #[test]
     fn receive_only_and_microsoft_and_bad_recipients_are_rejected_at_enqueue() {
         let conn = db();
+        // Google OAuth 即使带历史「仅收信」标记也可发送（走 smtp.gmail.com）。
         conn.execute(
-            "UPDATE accounts SET profile_json = json_set(profile_json, '$.receiveOnly', json('true')) WHERE id = 'real'",
+            "UPDATE accounts SET profile_json = json_set(json_set(profile_json, '$.receiveOnly', json('true')), '$.oauth', json('{\"provider\":\"google\",\"clientId\":\"id\",\"tenant\":\"common\"}')) WHERE id = 'real'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(enqueue(&conn, "draft-1", 3).unwrap().state, "queued");
+        conn.execute("DELETE FROM outbox", []).unwrap();
+        // 非 OAuth 的仅收信账号仍然拒绝。
+        conn.execute(
+            "UPDATE accounts SET profile_json = json_set(json_set(profile_json, '$.receiveOnly', json('true')), '$.oauth', json('null')) WHERE id = 'real'",
             [],
         )
         .unwrap();
@@ -584,6 +608,19 @@ mod tests {
     fn draft_revision_mismatch_blocks_enqueue() {
         let conn = db();
         assert_eq!(enqueue(&conn, "draft-1", 99).unwrap_err().code, "conflict");
+    }
+
+    #[test]
+    fn google_oauth_without_smtp_host_still_enqueues() {
+        // OAuth 账号创建时只填 IMAP：发送默认 smtp.gmail.com，不能因空 SMTP 主机被拒。
+        let conn = db();
+        conn.execute(
+            "UPDATE accounts SET profile_json = json_set(json_set(profile_json, '$.oauth', json('{\"provider\":\"google\",\"clientId\":\"id\",\"tenant\":\"common\"}')), '$.smtpHost', '') WHERE id = 'real'",
+            [],
+        )
+        .unwrap();
+        let entry = enqueue(&conn, "draft-1", 3).unwrap();
+        assert_eq!(entry.state, "queued");
     }
 
     #[test]
