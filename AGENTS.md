@@ -36,6 +36,7 @@
 - 数据库迁移按版本追加，不重写已发布迁移；新版本数据库不得被旧程序静默降级。每个连接启用 foreign_keys。
 - `npm run check` 必须通过。UI 改动运行相关 `npm run test:ui`；Rust / SQL 改动运行 `npm run check:native`。
 - 修改已读 / 星标 / 归档先读 `docs/MESSAGE_CHANGES.md`：本机状态与字段意图同事务；回写核对 generation / revision，unknown 归档不自动重试；网络不得占用 DB 锁。
+- 发送 / outbox 先读 `docs/SENDING.md`：Message-ID 一次生成全程复用；DATA 提交后无法确认即为 unknown，不自动重试、不自动判失败；明确拒绝才 failed；发送复用账号队列且网络不占 DB 锁；发送能力未接通的提供商必须禁用并说明。
 - 远端定位恢复先读 `docs/REMOTE_RECOVERY.md`：复用账号队列，只读核对后展示证据，明确确认时再次核对；请求保护原缓存，有编辑的目标副本不自动覆盖。恢复仅重新排队，核对过程不发送 MOVE。
 - 跨 UIDVALIDITY 重绑定必须有已保存的完整原文指纹；分页扫描未完成时不能确认唯一性。继续页与确认重扫均核对候选集合、代次及本机版本；后页重复不得采用第一页匹配。
 - 指纹补齐要求可信原定位与重复完整原文读取，不得对 bodyText 造原文摘要或升级弱历史证据。大范围分段必须核对 UIDNEXT 边界、区间响应和全段滚动摘要；仅完成原文收集不能绑定，旧检查点也要验证可信来源。

@@ -59,6 +59,7 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 | [docs/MESSAGE_CHANGES.md](docs/MESSAGE_CHANGES.md) | 邮件状态持久化、离线意图、IMAP 回写与冲突处理 |
 | [docs/REMOTE_RECOVERY.md](docs/REMOTE_RECOVERY.md) | 旧缓存验证、未知归档核对、明确恢复及副本合并 |
 | [docs/IMAP_COMPLETION.md](docs/IMAP_COMPLETION.md) | 本轮 IMAP 收尾验收范围与剩余事项 |
+| [docs/SENDING.md](docs/SENDING.md) | SMTP 发送与 outbox 设计：未知发送结果语义、幂等与验收标准 |
 | [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md) | Google / Microsoft 公共应用注册、授权与安全边界 |
 | [docs/IMAP_LIMITS.md](docs/IMAP_LIMITS.md) | IMAP 流式限额、失败保留及密集邮箱分段成本 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 分阶段开发与验收 |
