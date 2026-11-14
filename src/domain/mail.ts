@@ -142,6 +142,8 @@ export interface MailGateway {
   /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
   messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
+  /** Persist event completion state (desktop: SQLite; demo: localStorage overlay). */
+  updateEvent?(id: string, completed: boolean): Promise<void>;
   /** Sanitized HTML fragment for reply/forward quoting; rejects when no verified raw cache exists. */
   messageHtmlFragment?(accountId: string, messageId: string): Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */

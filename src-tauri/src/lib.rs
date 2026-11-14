@@ -28,6 +28,7 @@ mod sync_scheduler;
 mod outbox;
 
 use error::AppError;
+use rusqlite::params;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -216,6 +217,18 @@ fn open_skin_directory(app: tauri::AppHandle, paths: State<'_, AppPaths>) -> Res
 #[derive(Serialize)]
 struct MailHtmlPayload {
     html: String,
+}
+
+/// 事件完成状态持久化（mail_events.completed；重开数据库后保留）。
+#[tauri::command]
+fn mail_update_event(db: State<'_, Db>, id: String, completed: bool) -> Result<(), AppError> {
+    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    conn.execute(
+        "UPDATE mail_events SET completed=?2 WHERE id=?1",
+        params![id, i64::from(completed)],
+    )
+    .map_err(|_| AppError::storage("无法更新事件状态"))?;
+    Ok(())
 }
 
 /// 邮件 HTML 正文：从已验证的完整原文缓存按需提取、消毒并拼装沙箱 srcdoc。
@@ -641,6 +654,7 @@ pub fn run() {
             mail_export_attachment,
             mail_message_html,
             mail_message_html_fragment,
+            mail_update_event,
             mail_request_body,
             mail_send_draft,
             mail_outbox_list,

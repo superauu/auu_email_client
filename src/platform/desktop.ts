@@ -76,6 +76,7 @@ export const desktopMail = {
   async cancelOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_cancel', { id }); },
   async resolveOutbox(id: string, action: 'keep-local' | 'retry'): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_resolve', { id, action }); },
   async retryOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_retry_outbox', { id }); },
+  async updateEvent(id: string, completed: boolean): Promise<void> { return invoke('mail_update_event', { id, completed }); },
   async requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage> { return invoke('mail_request_body', { accountId, messageId, revision }); },
   async imapSettings(accountId: string): Promise<import('../domain/imap').ImapSettings> { return invoke('mail_imap_settings', { accountId }); },
   async saveImapSettings(accountId: string, settings: import('../domain/imap').ImapSettings): Promise<void> { return invoke('mail_save_imap_settings', { accountId, settings }); },

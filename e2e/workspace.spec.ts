@@ -193,3 +193,12 @@ test('aligned toolbars and wide list resizing preserve reader space and stored p
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
   await page.setViewportSize({width:1920,height:1080});await expect(list).toHaveCSS('width','900px');await page.screenshot({path:info.outputPath('wide-list-aligned-toolbars.png')});
 });
+
+test('demo event completion persists across reloads', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '事件与待办', exact: true }).click();
+  await page.getByRole('button', { name: '完成：阅读体验 · 设计讨论', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: '事件与待办', exact: true }).click();
+  await expect(page.getByRole('button', { name: '标记未完成：阅读体验 · 设计讨论', exact: true })).toBeVisible();
+});

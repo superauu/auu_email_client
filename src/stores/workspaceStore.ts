@@ -163,7 +163,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   archiveMessage(id) {
     mutateMessage(id, message => message.mailbox === 'archive' ? null : { archive: true });
   },
-  toggleEvent(id) { set(state => ({ events: state.events.map(e => e.id === id ? { ...e, completed: !e.completed } : e) })); },
+  toggleEvent(id) {
+    let completed: boolean | undefined;
+    set(state => ({ events: state.events.map(e => e.id === id ? (completed = !e.completed, { ...e, completed }) : e) }));
+    if (completed !== undefined) void gateway.updateEvent?.(id, completed).catch(error => set({ error: errorMessage(error) }));
+  },
   setView(view) { set({ view }); },
   async saveDraft(draft, options) {
     const message = await gateway.saveDraft(draft, options);

@@ -2,6 +2,7 @@ import type { MailGateway } from '../../domain/mail';
 import { demoWorkspace } from './fixtures';
 import { draftAsMessage, loadDraftMessages, persistDraft } from './drafts';
 import { loadDemoMessageChanges, persistDemoMessage } from './messageChanges';
+import { loadDemoEvents, persistDemoEvent } from './events';
 
 export const demoMailGateway: MailGateway = {
   mode: 'demo',
@@ -13,11 +14,13 @@ export const demoMailGateway: MailGateway = {
     const snapshot = structuredClone(demoWorkspace);
     snapshot.messages = loadDemoMessageChanges(snapshot.messages);
     snapshot.messages.push(...loadDraftMessages(demoWorkspace.accounts));
+    snapshot.events = loadDemoEvents(snapshot.events);
     return snapshot;
   },
   async saveDraft(draft, options) {
     return draftAsMessage(persistDraft(draft, options), demoWorkspace.accounts);
   },
   async updateMessage(accountId, id, patch) { return persistDemoMessage(accountId, id, patch); },
+  async updateEvent(id, completed) { persistDemoEvent(id, completed); },
   async keepMessageLocal(accountId, id) { return persistDemoMessage(accountId, id, {}); },
 };

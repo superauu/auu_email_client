@@ -1,8 +1,12 @@
 # 当前状态
 
-更新时间：2026-11-14。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写重构：右栏工作区撰写 + 富文本工具栏（Outlook 式）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-14。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写重构（右栏工作区 + 富文本工具栏）、SMTP 发送队列（outbox）、同步入口进主工作区、事件完成状态持久化与 POP3 收信。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：POP3 收信（阶段 B，2026-11-14）
+## 最新增量：事件完成状态持久化（2026-11-14）
+
+- 事件完成状态持久化：桌面经 `mail_update_event` 写 `mail_events.completed`（重开数据库保留），演示经 localStorage 覆盖层（`auumail.demo.events.v1`，loadWorkspace 应用）；「事件完成状态仅本次会话有效」的已知限制解除。验证：44 TS + 191 Rust + 37 UI 全过（新增事件持久化回归）。
+
+## 历史增量：POP3 收信（阶段 B，2026-11-14）
 
 - 新增 `pop3.rs`：POP3S（995 TLS）会话（USER/PASS、STAT、UIDL 多行解析、RETR 点填充还原、单响应 20s 超时、响应行与正文上限）、wizard「测试连接」探针（USER/PASS/STAT 返回邮件数）。
 - 增量语义：UIDL 集合为已见游标（`sync_states` scope `pop3:inbox`，JSON 数组），只拉取未见 UIDL，单次最多 50 封，旧 → 新，续跑拉取；服务器邮件不删除（DELE 不使用）；提交在 `mail_sync::commit_pop3`（单收件箱目录 upsert、消息 upsert、已见游标，一个事务；代次核对失败整体回滚；完整原文验哈希 → locator/content_hash_verified 置位）。
