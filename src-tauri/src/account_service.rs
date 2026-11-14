@@ -13,8 +13,8 @@ pub(crate) fn configuration(
     let (provider,email,name,profile): (String,String,String,String) = conn.query_row("SELECT provider,email,display_name,COALESCE(profile_json,'{}') FROM accounts WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|AppError::invalid("账号不存在"))?;
     let p: serde_json::Value =
         serde_json::from_str(&profile).map_err(|_| AppError::storage("账号配置损坏"))?;
-    if provider != "imap" || p["status"] == "demo" {
-        return Err(AppError::invalid("请选择真实 IMAP 账号"));
+    if !matches!(provider.as_str(), "imap" | "pop3") || p["status"] == "demo" {
+        return Err(AppError::invalid("请选择真实的 IMAP 或 POP3 账号"));
     }
     let value = serde_json::json!({"id":id,"name":name,"email":email,"imapHost":p["imapHost"],"imapPort":p["imapPort"],"imapSecurity":p.get("imapSecurity").cloned().unwrap_or(serde_json::json!("tls")),"smtpHost":p.get("smtpHost").cloned().unwrap_or(serde_json::json!("")),"smtpPort":p.get("smtpPort").cloned().unwrap_or(serde_json::json!(465)),"authUser":p["authUser"],"avatar":p["avatar"],"color":p["color"],"receiveOnly":p.get("receiveOnly").cloned().unwrap_or(serde_json::json!(false)),"oauth":p["oauth"]});
     serde_json::from_value(value).map_err(|_| AppError::storage("账号配置不完整，请重新配置"))
@@ -35,7 +35,7 @@ pub(crate) fn existing_generation(
         let Some((provider, generation, profile)) = row else {
             return Err(AppError::invalid("原账号已不存在"));
         };
-        if provider != "imap"
+        if !matches!(provider.as_str(), "imap" | "pop3")
             || profile
                 .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
                 .is_some_and(|p| p["status"] == "demo")
@@ -53,10 +53,14 @@ pub(crate) fn persist(
     expected: Option<String>,
     secret: String,
 ) -> Result<String, AppError> {
+    let provider = match account.provider.as_str() {
+        "pop3" => "pop3",
+        _ => "imap",
+    };
     let id = account
         .id
         .clone()
-        .unwrap_or_else(|| format!("imap:{}", uuid::Uuid::new_v4()));
+        .unwrap_or_else(|| format!("{provider}:{}", uuid::Uuid::new_v4()));
     account.id = Some(id.clone());
     credentials::with_account("imap", &id, || {
         {
@@ -122,6 +126,7 @@ mod tests {
         }
         let _cleanup = Cleanup(id.clone());
         let account = RealAccount {
+            provider: "imap".into(),
             id: Some(id.clone()),
             name: "Account".into(),
             email: "test@example.test".into(),

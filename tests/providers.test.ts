@@ -6,7 +6,8 @@ test('provider presets stay complete and honest about availability', () => {
   const ids = new Set(PROVIDER_PRESETS.map(preset => preset.id));
   assert.equal(ids.size, PROVIDER_PRESETS.length, '提供商 id 不得重复');
   for (const preset of PROVIDER_PRESETS) {
-    if (preset.available && !preset.oauth && preset.id !== 'imap') {
+    // imap 与 pop3 都是手动填服务器，不携带预设地址。
+    if (preset.available && !preset.oauth && preset.id !== 'imap' && preset.id !== 'pop3') {
       assert.ok(preset.endpoints, `${preset.id} 的密码 IMAP 预设必须提供服务器地址`);
       assert.equal(preset.endpoints.imapPort, 993);
       assert.equal(preset.endpoints.imapSecurity, 'tls');

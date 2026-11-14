@@ -2,7 +2,7 @@
 
 一款以漂亮界面、独立皮肤和多邮箱统一管理为中心的本地桌面邮件客户端。技术栈：Tauri 2 / Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、Radix UI、Zustand、SQLite。
 
-**当前包含演示工作区与桌面 IMAP 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）、富文本撰写（右栏工作区 + Word 式工具栏）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权与真实发送均已验收；POP3、AI 和日历仍待接入。**
+**当前包含演示工作区与桌面 IMAP / POP3 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）、富文本撰写（右栏工作区 + Word 式工具栏）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史（POP3 为单一收件箱 + UIDL 增量）、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权与真实发送均已验收；POP3、AI 和日历仍待接入。**
 
 ## 运行
 

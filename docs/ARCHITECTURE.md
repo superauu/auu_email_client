@@ -134,6 +134,7 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 - imap_settings / imap_jobs / imap_live / imap_condstore：账号选项、持久请求 / 请求版本、两 worker 公平通知、保守 MODSEQ 增量。
 - mail_oauth / oauth_flow / account_service：公共配置、PKCE loopback、keyring 刷新、保存补偿与代次。仅公开配置可经 mail_account_config 返回，不返回机密。
 - v9 追加 original_remote_id / raw_cache_key / attachments_json / remote_missing、auto_continue、imap_settings / folder_state / history / sync_requests / body_requests / modseq；不重写旧迁移。原连接邮件重配后标缺失，遇相同远端 ID 退休旧存储键并保留旧定位 / 本机 ID，不能直接 UPSERT 套用旧修改。
+- POP3 收信（provider 'pop3'）：`pop3.rs` 协议 + 同步；UIDL 集合游标存 `sync_states`（scope `pop3:inbox`，无新迁移）；调度 runner 按 `accounts.provider` 分支；消息经 `parse_raw` 复用解析与原文缓存，`mail_sync::commit_pop3` 提交（单收件箱，UIDL 已见集合判重，完整原文验哈希置 verified 位）。POP3 无标记回写（readStateSync=false），SMTP 发送与密码账号一致。
 - v11 为 drafts 补 body_html（撰写编辑器产出，写入时经 compose 专用 ammonia 配置消毒——比收件消毒更严：剥 <style> 块 / img / data: URI；上限 200k UTF-16）。发送组装在有 HTML 时输出 multipart/alternative（纯文本 + HTML 两个 base64 部分）。
 - v10 为 outbox 表补列（message_id / attempts / last_error / queued_at / resolved_by；状态机自 v1 已存在）。发送经账号队列（runner 先处理 queued 发送再同步），Message-ID 一次生成全程复用，DATA 终点号后的不明确结果一律 unknown 且不自动重试；启动恢复 sending → unknown；同步提交后按 Sent 目录 Message-ID 命中把 unknown 转为已发送。capabilities 含 send（仅收信账号与 Microsoft 为 false）。
 

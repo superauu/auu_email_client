@@ -118,10 +118,10 @@ fn complete_version(
     Ok(())
 }
 pub(crate) fn run(db: &SharedDb, id: &str) -> Result<SyncOutcome, AppError> {
-    let (generation, version) = {
+    let (generation, provider, version) = {
         let conn = db.lock().map_err(|_| storage())?;
-        let row:Option<(String,String,String,i64)>=conn.query_row("SELECT r.generation,a.sync_generation,r.state,r.request_version FROM imap_sync_requests r JOIN accounts a ON a.id=r.account_id WHERE r.account_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|storage())?;
-        let Some((generation, current, state, version)) = row else {
+        let row:Option<(String,String,String,String,i64)>=conn.query_row("SELECT r.generation,a.sync_generation,r.state,a.provider,r.request_version FROM imap_sync_requests r JOIN accounts a ON a.id=r.account_id WHERE r.account_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|_|storage())?;
+        let Some((generation, current, state, provider, version)) = row else {
             return Err(AppError::invalid("同步请求已移除"));
         };
         if generation != current || state == "paused" {
@@ -131,10 +131,15 @@ pub(crate) fn run(db: &SharedDb, id: &str) -> Result<SyncOutcome, AppError> {
             ));
         }
         conn.execute("UPDATE imap_sync_requests SET state='running',attempts=attempts+1,updated_at=?2 WHERE account_id=?1",params![id,crate::now_utc()]).map_err(|_|storage())?;
-        (generation, version)
+        (generation, provider, version)
     };
+    // POP3 账号走 POP3 分支（UIDL 增量）；IMAP 保持原路径。
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::mail_sync::sync_account_generation(db, id, &generation)
+        if provider == "pop3" {
+            crate::pop3::sync_account(db, id, &generation)
+        } else {
+            crate::mail_sync::sync_account_generation(db, id, &generation)
+        }
     }))
     .unwrap_or_else(|_| {
         Err(AppError::invalid(
@@ -171,7 +176,7 @@ pub(crate) fn spawn(db: SharedDb, scheduler: SyncScheduler) -> Result<(), AppErr
             let active=scheduler.snapshot().map(|snapshot|snapshot.jobs.into_iter().filter(|job|matches!(job.status,crate::sync_scheduler::JobStatus::Running|crate::sync_scheduler::JobStatus::Queued)).map(|job|job.account_id).collect::<std::collections::HashSet<_>>()).unwrap_or_default();
             let due=(||->Result<Vec<String>,AppError>{
                 let conn=db.lock().map_err(|_|storage())?;let now=Utc::now().to_rfc3339_opts(SecondsFormat::Secs,true);
-                conn.execute("INSERT OR IGNORE INTO imap_sync_requests(account_id,generation,state,origin,due_at,updated_at) SELECT a.id,a.sync_generation,'queued','auto',?1,?1 FROM accounts a JOIN imap_settings s ON s.account_id=a.id WHERE s.auto_sync_seconds>0 AND a.provider='imap' AND COALESCE(json_extract(CASE WHEN json_valid(a.profile_json) THEN a.profile_json ELSE '{}' END,'$.status'),'')!='demo'",[&now]).map_err(|_|storage())?;
+                conn.execute("INSERT OR IGNORE INTO imap_sync_requests(account_id,generation,state,origin,due_at,updated_at) SELECT a.id,a.sync_generation,'queued','auto',?1,?1 FROM accounts a JOIN imap_settings s ON s.account_id=a.id WHERE s.auto_sync_seconds>0 AND a.provider IN ('imap','pop3') AND COALESCE(json_extract(CASE WHEN json_valid(a.profile_json) THEN a.profile_json ELSE '{}' END,'$.status'),'')!='demo'",[&now]).map_err(|_|storage())?;
                 conn.execute("DELETE FROM imap_sync_requests WHERE origin='auto' AND state='queued' AND EXISTS(SELECT 1 FROM imap_settings s WHERE s.account_id=imap_sync_requests.account_id AND s.auto_sync_seconds=0)",[]).map_err(|_|storage())?;
                 let mut stmt=conn.prepare("SELECT account_id FROM imap_sync_requests WHERE state IN ('queued','failed') AND due_at<=?1 ORDER BY due_at,account_id LIMIT 128").map_err(|_|storage())?;
                 let result=stmt.query_map([now],|r|r.get::<_,String>(0)).map_err(|_|storage())?.collect::<Result<Vec<_>,_>>().map_err(|_|storage())?;Ok(result)

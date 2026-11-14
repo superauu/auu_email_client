@@ -376,6 +376,12 @@ test('provider picker disables unregistered platforms and prefills password IMAP
   await qq.getByLabel('账号名称',{exact:true}).fill('QQ 测试');await qq.getByLabel('邮箱地址',{exact:true}).fill('user@qq.test');
   await expect(qq.getByLabel('登录用户')).toHaveValue('user@qq.test');
   await qq.getByRole('button',{name:'返回',exact:true}).click();
+  // POP3 卡片可手动填服务器（无预设地址）。
+  await wizard.getByRole('button',{name:'添加 POP3 邮箱 账号',exact:true}).click();
+  const pop3=page.getByRole('dialog',{name:'添加 POP3 邮箱 账号'});
+  await expect(pop3.getByLabel('POP3 服务器')).toBeVisible();
+  await expect(pop3.getByLabel('密码',{exact:true})).toBeVisible();
+  await pop3.getByRole('button',{name:'返回',exact:true}).click();
   await expect(wizard.getByRole('button',{name:'添加 Gmail 账号',exact:true})).toBeVisible();
   await page.screenshot({path:info.outputPath('provider-picker.png')});
 });

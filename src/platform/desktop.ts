@@ -107,6 +107,8 @@ export const desktopCredentials = {
 };
 
 export interface MailEndpoints {
+  /** 'imap'（默认）或 'pop3'：收件探针选择。 */
+  provider?: string;
   receiveOnly?: boolean;
   imapHost: string;
   imapPort: number;
@@ -127,6 +129,8 @@ export interface MailVerifyReport {
   folderCount: number | null;
 }
 export interface RealAccountInput {
+  /** 'imap'（默认）或 'pop3'：决定保存的账号协议与同步分支。 */
+  provider?: string;
   receiveOnly?: boolean;
   id?: string | null;
   name: string;

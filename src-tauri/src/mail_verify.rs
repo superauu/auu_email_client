@@ -36,6 +36,9 @@ pub struct VerifyReport {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Endpoints {
+    /// 'imap'（默认）或 'pop3'：决定收件探针走 IMAP LIST 还是 POP3 STAT。
+    #[serde(default = "default_provider")]
+    pub provider: String,
     #[serde(default)]
     pub receive_only: bool,
     pub imap_host: String,
@@ -58,15 +61,24 @@ fn sanitize_host(host: &str) -> Result<&str, AppError> {
     Ok(host)
 }
 
+fn default_provider() -> String {
+    "imap".into()
+}
+
 /// Runs both probes independently so one broken endpoint does not hide the other's result.
 pub fn verify(endpoints: &Endpoints, secret: &str) -> VerifyReport {
-    let imap = imap_probe(
-        &endpoints.imap_host,
-        endpoints.imap_port,
-        endpoints.imap_security,
-        &endpoints.auth_user,
-        secret,
-    );
+    let receive_probe = if endpoints.provider == "pop3" {
+        crate::pop3::probe(&endpoints.imap_host, endpoints.imap_port, &endpoints.auth_user, secret)
+    } else {
+        imap_probe(
+            &endpoints.imap_host,
+            endpoints.imap_port,
+            endpoints.imap_security,
+            &endpoints.auth_user,
+            secret,
+        )
+    };
+    let imap = receive_probe;
     let smtp = if endpoints.receive_only {
         Ok(())
     } else {
@@ -380,6 +392,7 @@ mod tests {
     fn full_verify_reports_each_endpoint_independently() {
         // Both probes against a nonexistent local port must fail honestly, each with its own result.
         let endpoints = Endpoints {
+            provider: "imap".into(),
             receive_only: false,
             imap_host: "127.0.0.1".into(),
             imap_port: 1,

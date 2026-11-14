@@ -261,6 +261,9 @@ pub struct RealAccount {
     pub receive_only: bool,
     #[serde(default)]
     pub oauth: Option<crate::mail_oauth::Config>,
+    /// 账号协议：'imap'（默认）或 'pop3'；决定同步分支与能力标记。
+    #[serde(default = "default_provider")]
+    pub provider: String,
     #[serde(default)]
     pub id: Option<String>,
     pub name: String,
@@ -278,6 +281,10 @@ pub struct RealAccount {
 
 /// Persists a wizard-verified real IMAP account. Caller owns the connection probe and the
 /// keyring write; if the DB insert fails afterwards the caller compensates by deleting the entry.
+fn default_provider() -> String {
+    "imap".into()
+}
+
 pub fn save_real_account(
     conn: &mut Connection,
     account: &RealAccount,
@@ -289,16 +296,20 @@ pub fn save_real_account(
     {
         return Err(AppError::invalid("账号信息不完整"));
     }
+    let provider = match account.provider.as_str() {
+        "imap" | "pop3" => account.provider.as_str(),
+        _ => "imap",
+    };
     let id = account
         .id
         .clone()
-        .unwrap_or_else(|| format!("imap:{}", uuid::Uuid::new_v4()));
+        .unwrap_or_else(|| format!("{provider}:{}", uuid::Uuid::new_v4()));
     let profile = serde_json::json!({
         "avatar": account.avatar,
         "color": account.color,
         "status": "connected",
-        "capabilities": { "folders": true, "serverLabels": false, "readStateSync": true, "threads": true, "calendar": false,
-          "send": !account.receive_only && account.oauth.as_ref().map(|config| config.provider != crate::mail_oauth::Provider::Microsoft).unwrap_or(true) },
+        "capabilities": { "folders": provider == "imap", "serverLabels": false, "readStateSync": provider == "imap", "threads": false, "calendar": false,
+          "send": provider == "pop3" || (!account.receive_only && account.oauth.as_ref().map(|config| config.provider != crate::mail_oauth::Provider::Microsoft).unwrap_or(true)) },
         "imapHost": account.imap_host,
         "imapPort": account.imap_port,
         "imapSecurity": account.imap_security,
@@ -325,9 +336,9 @@ pub fn save_real_account(
     }
     transaction
         .execute(
-            "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, 'imap', ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET email = excluded.email, display_name = excluded.display_name, profile_json = excluded.profile_json",
-            params![id, account.email, account.name.trim(), profile.to_string(), crate::now_utc()],
+            "INSERT INTO accounts (id, provider, email, display_name, profile_json, created_at) VALUES (?1, ?6, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, email = excluded.email, display_name = excluded.display_name, profile_json = excluded.profile_json",
+            params![id, account.email, account.name.trim(), profile.to_string(), crate::now_utc(), provider],
         )
         .map_err(|e| AppError::storage(e.to_string()))?;
     transaction
@@ -336,6 +347,16 @@ pub fn save_real_account(
             [&id],
         )
         .map_err(|_| AppError::storage("无法保存 IMAP 设置"))?;
+    if provider == "pop3" {
+        // POP3 账号只有一个收件箱目录。
+        transaction
+            .execute(
+                "INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES (?1,?2,'INBOX','收件箱','inbox')
+                 ON CONFLICT(account_id,remote_id) DO UPDATE SET name=excluded.name,kind=excluded.kind",
+                params![format!("{id}:folder:INBOX"), id],
+            )
+            .map_err(|e| AppError::storage(e.to_string()))?;
+    }
     transaction
         .execute(
             "DELETE FROM sync_states WHERE account_id=?1 AND scope LIKE 'imap:%'",

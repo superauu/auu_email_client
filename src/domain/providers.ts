@@ -1,6 +1,6 @@
 // 提供商注册表：新增平台只需追加一条记录。
 // available=false 的卡片显示为禁用「即将支持」，不伪装可用能力。
-export type ProviderId = 'gmail' | 'microsoft' | 'qq' | '163' | 'imap';
+export type ProviderId = 'gmail' | 'microsoft' | 'qq' | '163' | 'pop3' | 'imap';
 
 export interface ProviderEndpoints {
   imapHost: string;
@@ -54,6 +54,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     oauth: false,
     endpoints: { imapHost: 'imap.163.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.163.com', smtpPort: 465 },
     authHint: '需要在 163 邮箱网页版开启 IMAP 服务，并使用客户端授权密码。',
+  },
+  {
+    id: 'pop3',
+    label: 'POP3 邮箱',
+    description: '手动填写 POP3 / SMTP 服务器',
+    available: true,
+    oauth: false,
   },
   {
     id: 'imap',

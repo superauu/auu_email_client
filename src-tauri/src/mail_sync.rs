@@ -994,6 +994,108 @@ fn commit_batch(
         .map_err(|_| AppError::storage("邮件批次未完成提交"))
 }
 
+/// POP3 提交（provider 'pop3'）：单一收件箱目录，UIDL 集合作为已见游标（scope pop3:inbox）。
+/// 完整原文已验哈希 → locator_verified / content_hash_verified 置位；服务器邮件不删除。
+pub(crate) fn commit_pop3(
+    db: &SharedDb,
+    account_id: &str,
+    generation: &str,
+    uidl_list: &[String],
+    downloaded: &[(String, ParsedMessage)],
+) -> Result<(), AppError> {
+    let mut conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    let tx = conn
+        .transaction()
+        .map_err(|_| AppError::storage("无法开始 POP3 提交"))?;
+    let current: String = tx
+        .query_row(
+            "SELECT sync_generation FROM accounts WHERE id=?1 AND provider='pop3'",
+            [account_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| AppError::storage("无法核对账号代次"))?;
+    if current != generation {
+        return Err(AppError::conflict("账号代次已变化，本次结果不提交"));
+    }
+    let folder_id = format!("{account_id}:folder:INBOX");
+    tx.execute(
+        "INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES (?1,?2,'INBOX','收件箱','inbox')
+         ON CONFLICT(account_id,remote_id) DO UPDATE SET name=excluded.name,kind=excluded.kind",
+        params![folder_id, account_id],
+    )
+    .map_err(|_| AppError::storage("无法写入收件箱目录"))?;
+    for (uidl, message) in downloaded {
+        let remote_id = format!("pop3:{uidl}");
+        let generated = format!("{account_id}:{remote_id}");
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1)",
+                [&generated],
+                |r| r.get(0),
+            )
+            .map_err(|_| AppError::storage("无法核对本机 ID"))?;
+        let id = if exists {
+            format!("{account_id}:{}", uuid::Uuid::new_v4())
+        } else {
+            generated
+        };
+        tx.execute(
+            "INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation,content_hash,header_message_id,locator_verified,content_hash_verified)
+             VALUES (?1,?2,?3,?1,?4,?5,?6,?7,?8,?9,?10,?11,'INBOX',0,?12,?13,?14,?15,1,1)
+             ON CONFLICT(account_id,remote_id) DO UPDATE SET
+               subject=excluded.subject,sender_name=excluded.sender_name,sender_email=excluded.sender_email,
+               recipients_json=excluded.recipients_json,body_text=excluded.body_text,received_at=excluded.received_at,
+               unread=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='unread'),excluded.unread),
+               starred=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='starred'),excluded.starred),
+               remote_generation=excluded.remote_generation,content_hash=excluded.content_hash,
+               header_message_id=excluded.header_message_id,locator_verified=1,content_hash_verified=1,state_revision=messages.state_revision+1",
+            params![
+                id,
+                account_id,
+                remote_id,
+                message.subject,
+                message.sender_name,
+                message.sender_email,
+                message.recipients_json,
+                message.body_text,
+                message.received_at,
+                message.unread,
+                message.starred,
+                message.uid,
+                generation,
+                message.content_hash,
+                message.header_message_id
+            ],
+        )
+        .map_err(|_| AppError::storage("POP3 邮件未能保存"))?;
+        let row_id: String = tx
+            .query_row(
+                "SELECT id FROM messages WHERE account_id=?1 AND remote_id=?2",
+                params![account_id, remote_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| AppError::storage("无法读取稳定邮件 ID"))?;
+        tx.execute(
+            "UPDATE messages SET raw_cache_key=COALESCE(?1,raw_cache_key),attachments_json=?2,remote_missing=0 WHERE account_id=?3 AND id=?4",
+            params![message.raw_cache_key, serde_json::to_string(&message.attachments).map_err(|_| AppError::storage("无法保存附件信息"))?, account_id, row_id],
+        )
+        .map_err(|_| AppError::storage("无法保存原文缓存信息"))?;
+        tx.execute(
+            "INSERT OR IGNORE INTO message_folders VALUES (?1,?2,?3)",
+            params![account_id, row_id, folder_id],
+        )
+        .map_err(|_| AppError::storage("邮件文件夹关联未能保存"))?;
+    }
+    tx.execute(
+        "INSERT INTO sync_states (account_id,scope,cursor,updated_at) VALUES (?1,?2,?3,?4)
+         ON CONFLICT(account_id,scope) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at",
+        params![account_id, "pop3:inbox", serde_json::to_string(&uidl_list).map_err(|_| AppError::invalid("POP3 游标无效"))?, crate::now_utc()],
+    )
+    .map_err(|_| AppError::storage("POP3 游标未能保存"))?;
+    tx.commit()
+        .map_err(|_| AppError::storage("POP3 邮件批次未完成提交"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

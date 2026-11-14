@@ -2,7 +2,15 @@
 
 更新时间：2026-11-14。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写重构：右栏工作区撰写 + 富文本工具栏（Outlook 式）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：撰写重构——右栏工作区撰写与富文本（2026-11-14）
+## 最新增量：POP3 收信（阶段 B，2026-11-14）
+
+- 新增 `pop3.rs`：POP3S（995 TLS）会话（USER/PASS、STAT、UIDL 多行解析、RETR 点填充还原、单响应 20s 超时、响应行与正文上限）、wizard「测试连接」探针（USER/PASS/STAT 返回邮件数）。
+- 增量语义：UIDL 集合为已见游标（`sync_states` scope `pop3:inbox`，JSON 数组），只拉取未见 UIDL，单次最多 50 封，旧 → 新，续跑拉取；服务器邮件不删除（DELE 不使用）；提交在 `mail_sync::commit_pop3`（单收件箱目录 upsert、消息 upsert、已见游标，一个事务；代次核对失败整体回滚；完整原文验哈希 → locator/content_hash_verified 置位）。
+- 账号打通：provider 贯通（RealAccount / RealAccountInput / Endpoints.provider 默认 'imap'，保存写入 provider 并在重配时更新），POP3 账号复用 SMTP 发送（capabilities.send）与同一同步队列（调度 runner 按账号 provider 分支，自动同步 SQL 放宽含 pop3）；设置页标签 POP3；向导新增「POP3 邮箱」卡片（手动填 POP3 / SMTP，端口 995）。
+- 边界：POP3 无标记 / 目录 / CONDSTORE —— 已读 / 星标回写不适用（readStateSync=false）；UIDL 集合随邮箱增长（游标 JSON 随之增大，属已知可接受成本）；真实 POP3 服务器验收待执行（QQ / 163 等 POP 授权码账号）。
+- 验证：`npm run check:native` 191 个 Rust 测试 + Clippy（POP3 会话脚本 / 游标 / 代次 / 日期转换回归）、`npm run check` 44 个 TS、`npm run test:ui` 37 个 Chromium（POP3 卡片用例）全部通过。
+
+## 历史增量：撰写重构——右栏工作区撰写与富文本（2026-11-14）
 
 - 撰写从弹窗改为右栏工作区（Outlook 式）：`draft` 打开时阅读窗格切换为 `ComposePane`（发件人 / 收件人 / 主题 + 工具栏 + 编辑器占满下方），返回列表按钮在左上；窄屏沿用 mobile-reading 机制；发送 / 保存 / 关闭保护 / Escape 确认 / 能力门控全部从对话框迁移。
 - 富文本编辑器为内置轻量实现（contentEditable + execCommand，零新依赖，WebView2/Chromium 固定目标）：加粗 / 斜体 / 下划线 / 删除线、正文 / 标题 1-3、有序 / 无序列表、引用块、文字色板、插入链接（scheme 白名单）、清除格式、撤销 / 重做，按钮激活态随选区同步。

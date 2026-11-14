@@ -20,6 +20,7 @@ mod mail_sync;
 mod mail_verify;
 mod message_changes;
 mod skins;
+mod pop3;
 mod smtp_send;
 mod storage;
 mod sync_control;
@@ -425,6 +426,7 @@ async fn mail_save_account(
             account_service::existing_generation(&conn, &account)?
         };
         let endpoints = mail_verify::Endpoints {
+            provider: account.provider.clone(),
             receive_only: account.receive_only,
             imap_host: account.imap_host.clone(),
             imap_port: account.imap_port,

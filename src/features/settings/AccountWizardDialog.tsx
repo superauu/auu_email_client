@@ -24,9 +24,9 @@ function validate(form: Form): string | null {
   return null;
 }
 
-function toInput(form: Form, tone: Tone, id?: string | null): RealAccountInput {
+function toInput(form: Form, tone: Tone, id?: string | null, provider: 'imap' | 'pop3' = 'imap'): RealAccountInput {
   return {
-    id, receiveOnly: form.receiveOnly, name: form.name.trim(), email: form.email.trim(),
+    id, provider, receiveOnly: form.receiveOnly, name: form.name.trim(), email: form.email.trim(),
     imapHost: form.imapHost.trim(), imapPort: Number(form.imapPort) || 993,
     imapSecurity: form.imapSecurity,
     smtpHost: form.smtpHost.trim(), smtpPort: Number(form.smtpPort) || 465,
@@ -79,6 +79,9 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     if (target.endpoints) {
       setForm(current => ({ ...current, imapHost: target.endpoints!.imapHost, imapPort: String(target.endpoints!.imapPort), imapSecurity: target.endpoints!.imapSecurity, smtpHost: target.endpoints!.smtpHost, smtpPort: String(target.endpoints!.smtpPort), authUser: current.authUser.trim() || current.email.trim() }));
     }
+    if (id === 'pop3') {
+      setForm(current => ({ ...current, imapPort: current.imapPort === '993' ? '995' : current.imapPort }));
+    }
   }
 
   function backToProviders() {
@@ -94,6 +97,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     setTesting(true); setReport(null); setSaveError('');
     try {
       setReport(await desktopAccounts.verify({
+        provider: providerId === 'pop3' ? 'pop3' : 'imap',
         receiveOnly: form.receiveOnly,
         imapHost: form.imapHost.trim(), imapPort: Number(form.imapPort),
         imapSecurity: form.imapSecurity,
@@ -108,7 +112,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     if (problem) { setFormError(problem); return; }
     setSaving(true); setSaveError('');
     try {
-      await desktopAccounts.save(toInput(form, tone, initial?.id), form.password);
+      await desktopAccounts.save(toInput(form, tone, initial?.id, providerId === 'pop3' ? 'pop3' : 'imap'), form.password);
       await onSaved();
       setForm(initialForm); setReport(null);
       onClose();
@@ -143,7 +147,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
           <small>{item.description}</small>
         </button>
       ))}</div>
-      <p className="provider-step-note">Gmail 通过系统浏览器授权，无需填写服务器信息；QQ / 163 使用授权码登录；其他邮箱手动填写 IMAP / SMTP。密码只写入系统凭据库。</p>
+      <p className="provider-step-note">Gmail 通过系统浏览器授权，无需填写服务器信息；QQ / 163 使用授权码登录；POP3 与其他邮箱手动填写服务器。密码只写入系统凭据库。</p>
     </>}
     {!providerStep && preset && <>
       {oauthOnly && <div className="oauth-hero">
@@ -157,7 +161,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
         <label><span>账号名称</span><input value={form.name} onChange={update('name')} placeholder="例如：工作邮箱" autoComplete="off" /></label>
         <label><span>邮箱地址</span><input value={form.email} onChange={update('email')} type="email" placeholder={oauthOnly ? 'you@gmail.com' : 'you@example.com'} autoComplete="off" /></label>
         {!oauthOnly && <>
-          <label><span>IMAP 服务器</span><input value={form.imapHost} onChange={update('imapHost')} placeholder="imap.example.com" autoComplete="off" /></label>
+          <label><span>{providerId === 'pop3' ? 'POP3 服务器' : 'IMAP 服务器'}</span><input value={form.imapHost} onChange={update('imapHost')} placeholder={providerId === 'pop3' ? 'pop3.example.com' : 'imap.example.com'} autoComplete="off" /></label>
           <label><span>IMAP 端口</span><input value={form.imapPort} onChange={update('imapPort')} inputMode="numeric" autoComplete="off" /></label>
           <label><span>IMAP 加密</span><select value={form.imapSecurity} disabled={testing || saving} onChange={event => {
             const security = event.target.value === 'starttls' ? 'starttls' : 'tls';
