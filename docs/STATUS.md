@@ -1,8 +1,17 @@
 # 当前状态
 
-更新时间：2026-11-14。A3.8 IMAP 收信 / 同步整批收尾已完成；真实 Gmail OAuth 授权与真实发送均已验收；本轮完成 SMTP 发送队列（outbox）实现。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md) 与 [SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-14。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写重构：右栏工作区撰写 + 富文本工具栏（Outlook 式）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：SMTP 发送队列（outbox）与真实授权验收（2026-11-14）
+## 最新增量：撰写重构——右栏工作区撰写与富文本（2026-11-14）
+
+- 撰写从弹窗改为右栏工作区（Outlook 式）：`draft` 打开时阅读窗格切换为 `ComposePane`（发件人 / 收件人 / 主题 + 工具栏 + 编辑器占满下方），返回列表按钮在左上；窄屏沿用 mobile-reading 机制；发送 / 保存 / 关闭保护 / Escape 确认 / 能力门控全部从对话框迁移。
+- 富文本编辑器为内置轻量实现（contentEditable + execCommand，零新依赖，WebView2/Chromium 固定目标）：加粗 / 斜体 / 下划线 / 删除线、正文 / 标题 1-3、有序 / 无序列表、引用块、文字色板、插入链接（scheme 白名单）、清除格式、撤销 / 重做，按钮激活态随选区同步。
+- v11 迁移为 drafts 补 `body_html`（上限 200k UTF-16）；**草稿写入时服务端消毒**（compose 专用 ammonia 配置：剥脚本 / 事件处理器 / 相对地址 / img / data: URI，保留格式标签与 style 属性）；发送组装升级为 `multipart/alternative`（纯文本 + HTML 两个 base64 部分），无 HTML 时保持纯文本。
+- 回复 / 回复全部 / 转发自动引用原文：新增 `mail_message_html_fragment`（消毒正文片段，无缓存回退纯文本引用），引用进编辑器可编辑；转发纯文本种子改为引用块。
+- 已知边界：撰写本轮不支持图片插入 / 粘贴图片与签名；引用片段经严格消毒会剥除原文图片。
+- 验证：`npm run check` 44 个 TS 测试、`npm run check:native` 187 个 Rust 测试 + Clippy、`npm run test:ui` 36 个 Chromium 回归（撰写相关用例全部重写为 pane 选择器）全部通过。真实收件方排版验收待执行。
+
+## 历史增量：SMTP 发送队列（outbox）与真实授权验收（2026-11-14）
 
 - **真实 Gmail OAuth 授权验收通过**：系统浏览器 PKCE 同意 → XOAUTH2 登录 + LIST 成功 → 账号落盘（IMAP · 已连接）；期间发现并修复「Desktop 类型客户端令牌交换必须携带 client secret」（内置 secret 仅在 Client ID 等于内置值时附加）。
 - 发送实现按 [SENDING](SENDING.md) 设计落地：v10 迁移为 outbox 补列（message_id / attempts / last_error / queued_at / resolved_by）；`smtp_send.rs` 实现信封 + DATA 点填充 + 465 TLS / 587 STARTTLS（fail-closed 能力确认）+ XOAUTH2 错误挑战；**DATA 终点号写出后未读到 2xx 一律 unknown，不自动重试、不自动判失败**。`outbox.rs` 完成 RFC5322 组装（RFC2047 CJK 显示名 / 主题、base64 正文折行、头部注入中和、收件人语法校验）、Message-ID 一次生成全程复用、调度 runner 先发送后同步、启动恢复 sending → unknown、同步提交后按 Sent 目录命中把 unknown 自动转已发送。

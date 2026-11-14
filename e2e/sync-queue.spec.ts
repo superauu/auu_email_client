@@ -89,6 +89,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           return outboxEntry()!;
         }
         case 'mail_outbox_list': return outboxEntry() ? [outboxEntry()!] : [];
+        case 'mail_message_html_fragment': return '<p>引用的原文 HTML</p>';
         case 'mail_outbox_cancel': outboxState = null; return outboxEntry()!;
         case 'mail_outbox_resolve': outboxActions.push({ id: input.id as string, action: input.action as string }); outboxState = input.action === 'retry' ? 'queued' : 'failed'; return outboxEntry()!;
         case 'mail_retry_outbox': outboxState = 'queued'; return outboxEntry()!;
@@ -303,7 +304,7 @@ test('multi-account progress persists outside settings and drafts remain editabl
   await page.getByLabel('发件人', { exact: true }).selectOption('real-2');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('同步期间仍然可以编辑和保存草稿');
   await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
-  await page.getByRole('button', { name: '关闭对话框', exact: true }).click();
+  await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消排队 测试邮箱 3', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('sync-queue.png') });
@@ -393,7 +394,7 @@ test('server folders follow the chosen account and server drafts create a separa
   await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();await page.getByRole('navigation',{name:'邮件文件夹',exact:true}).getByRole('button',{name:/草稿/}).click();
   await page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true}).click();await page.getByRole('button',{name:'复制为本地草稿',exact:true}).click();
   await page.getByRole('textbox',{name:'邮件正文'}).fill('新的本地副本');await expect(page.getByRole('status').filter({hasText:'草稿已保存'})).toBeVisible();
-  await page.getByRole('dialog').getByRole('button',{name:'关闭对话框',exact:true}).click();
+  await page.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
   await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(2);
 });
 
@@ -436,13 +437,14 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await expect(requests.every(request => request.id === 'real-message')).toBe(true);
   // 操作区在正文上方：回复 / 回复全部 / 转发创建本地草稿（发送尚未接入）。
   await page.getByRole('button',{name:'转发',exact:true}).click();
-  const composeDialog=page.getByRole('dialog',{name:'转发邮件'});
-  await expect(composeDialog.getByLabel('主题')).toHaveValue(/^转发：/);
-  await expect(composeDialog.getByRole('textbox',{name:'邮件正文'})).toHaveValue(/---------- 转发的邮件 ----------/);
-  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  const composePane=page.locator('.compose-pane');
+  await expect(composePane.getByLabel('主题')).toHaveValue(/^转发：/);
+  await expect(composePane.getByRole('textbox',{name:'邮件正文'})).toContainText('引用的原文 HTML');
+  await page.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
+  await page.getByRole('button',{name:'放弃修改',exact:true}).click();
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复全部',exact:true}).click();
-  const replyAll=page.getByRole('dialog',{name:'回复邮件'});
+  const replyAll=page.locator('.compose-pane');
   await expect(replyAll.getByLabel('主题')).toHaveValue('Re: 离线状态测试');
   await expect(replyAll.getByLabel('收件人')).toHaveValue(/zhixia@example\.test/);
   await expect(replyAll.getByLabel('收件人')).toHaveValue(/alex@example\.test/);
@@ -454,13 +456,14 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   // 演示账号草稿：发送按钮禁用并说明原因。
   await page.getByRole('button',{name:'阅读邮件：让下一版界面，多一点呼吸感',exact:true}).click();
   await page.getByRole('button',{name:'回复邮件',exact:true}).click();
-  const demoCompose=page.getByRole('dialog',{name:'回复邮件'});
+  const demoCompose=page.locator('.compose-pane');
   await expect(demoCompose.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
-  await demoCompose.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  await demoCompose.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
+  await page.getByRole('button',{name:'放弃修改',exact:true}).click();
   // 真实账号：回复 → 发送 → 队列徽标。
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复邮件',exact:true}).click();
-  const compose=page.getByRole('dialog',{name:'回复邮件'});
+  const compose=page.locator('.compose-pane');
   await compose.getByRole('textbox',{name:'邮件正文'}).fill('发送测试');
   await compose.getByRole('button',{name:'发送',exact:true}).click();
   // 登记成功后撰写框自动关闭，结果以 toast 反馈。

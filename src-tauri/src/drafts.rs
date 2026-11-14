@@ -17,6 +17,9 @@ pub struct Draft {
     pub to: String,
     pub subject: String,
     pub body_text: String,
+    /// 撰写编辑器产出的 HTML 正文（写入时服务端消毒）；None = 纯文本草稿。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_id: Option<String>,
     pub updated_at: String,
@@ -36,6 +39,10 @@ fn validate(draft: &Draft) -> Result<(), AppError> {
         || draft.to.encode_utf16().count() > 1000
         || draft.subject.encode_utf16().count() > 1000
         || draft.body_text.encode_utf16().count() > 50_000
+        || draft
+            .body_html
+            .as_ref()
+            .is_some_and(|html| html.encode_utf16().count() > 200_000)
         || draft.revision > 1_000_000_000
         || draft
             .reply_to_id
@@ -103,18 +110,24 @@ fn write(conn: &Connection, draft: &Draft, previous_account_id: &str) -> Result<
     let mut saved = draft.clone();
     saved.revision += 1;
     saved.updated_at = crate::now_utc();
+    // 撰写 HTML 是发给别人的内容：写入前服务端消毒（compose 专用配置，剥脚本与相对地址）。
+    saved.body_html = saved
+        .body_html
+        .as_ref()
+        .map(|html| crate::mail_html::sanitize_compose(html))
+        .filter(|html| !html.trim().is_empty());
     let recipients = serde_json::to_string(&if saved.to.is_empty() {
         Vec::new()
     } else {
         vec![&saved.to]
     })
     .map_err(|_| AppError::invalid("收件人格式无效"))?;
-    conn.execute("INSERT INTO drafts (id, account_id, recipients_json, subject, body_text, reply_to_id, updated_at, revision)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    conn.execute("INSERT INTO drafts (id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
       ON CONFLICT(id) DO UPDATE SET account_id = excluded.account_id, recipients_json = excluded.recipients_json,
-      subject = excluded.subject, body_text = excluded.body_text, reply_to_id = excluded.reply_to_id,
+      subject = excluded.subject, body_text = excluded.body_text, body_html = excluded.body_html, reply_to_id = excluded.reply_to_id,
       updated_at = excluded.updated_at, revision = excluded.revision",
-      params![saved.id, saved.account_id, recipients, saved.subject, saved.body_text, saved.reply_to_id, saved.updated_at, saved.revision])
+      params![saved.id, saved.account_id, recipients, saved.subject, saved.body_text, saved.body_html.clone().unwrap_or_default(), saved.reply_to_id, saved.updated_at, saved.revision])
       .map_err(|_| AppError::storage("草稿未能写入本机，请保留当前内容后重试。"))?;
     Ok(saved)
 }
@@ -189,7 +202,7 @@ pub fn save(
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<MessageRow>, AppError> {
-    let mut statement = conn.prepare("SELECT id, account_id, recipients_json, subject, body_text, reply_to_id, updated_at, revision FROM drafts ORDER BY updated_at DESC, id DESC")
+    let mut statement = conn.prepare("SELECT id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision FROM drafts ORDER BY updated_at DESC, id DESC")
         .map_err(|_| AppError::storage("无法读取本机草稿"))?;
     let drafts = statement
         .query_map([], |row| {
@@ -207,9 +220,10 @@ pub fn list(conn: &Connection) -> Result<Vec<MessageRow>, AppError> {
                 to: to.join(", "),
                 subject: row.get(3)?,
                 body_text: row.get(4)?,
-                reply_to_id: row.get(5)?,
-                updated_at: row.get(6)?,
-                revision: row.get(7)?,
+                body_html: row.get(5)?,
+                reply_to_id: row.get(6)?,
+                updated_at: row.get(7)?,
+                revision: row.get(8)?,
             })
         })
         .map_err(|_| AppError::storage("无法读取本机草稿"))?
@@ -305,6 +319,7 @@ mod tests {
             to: "friend@example.test".into(),
             subject: String::new(),
             body_text: "Local only".into(),
+            body_html: None,
             reply_to_id: None,
             updated_at: "2026-11-11T00:00:00Z".into(),
             revision: 0,

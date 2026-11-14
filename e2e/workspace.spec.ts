@@ -34,14 +34,14 @@ test('a saved draft survives reload and stays in the selected sending account', 
   await page.getByRole('textbox', { name: '邮件正文' }).fill('保存到演示草稿。');
   await page.getByRole('button', { name: '保存草稿' }).click();
   await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
-  await page.getByRole('button', { name: '关闭对话框' }).click();
+  await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('button', { name: '工作邮箱', exact: false }).click();
   await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
   await expect(page.getByRole('heading', { name: '架构测试草稿', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '编辑草稿' }).click();
   await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('work');
-  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveValue('保存到演示草稿。');
+  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveText('保存到演示草稿。');
 });
 
 test('unsaved changes require a deliberate discard', async ({ page }) => {
@@ -52,7 +52,7 @@ test('unsaved changes require a deliberate discard', async ({ page }) => {
   await expect(page.getByText('还有未保存的修改。')).toBeVisible();
   await expect(page.getByLabel('主题', { exact: true })).toHaveValue('尚未保存');
   await page.getByRole('button', { name: '放弃修改' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.compose-pane')).toHaveCount(0);
 });
 
 test('autosave survives reload, and changing the sender moves a single draft', async ({ page }) => {
@@ -63,13 +63,13 @@ test('autosave survives reload, and changing the sender moves a single draft', a
   await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
   await page.getByLabel('发件人', { exact: true }).selectOption('work');
   await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
-  await page.getByRole('button', { name: '关闭对话框' }).click();
+  await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
   await expect(page.getByRole('button', { name: '阅读邮件：自动保存的草稿', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '编辑草稿' }).click();
   await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('work');
-  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveValue('不点击保存也能恢复。');
+  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveText('不点击保存也能恢复。');
 });
 
 test('a failed autosave preserves editable text and closing does not discard it silently', async ({ page }) => {
@@ -84,10 +84,10 @@ test('a failed autosave preserves editable text and closing does not discard it 
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   await page.getByRole('textbox', { name: '邮件正文' }).fill('保存失败时也不能丢失的内容');
   await expect(page.getByRole('alert')).toContainText('草稿未能保存');
-  await page.getByRole('button', { name: '关闭对话框' }).click();
+  await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.getByRole('button', { name: '保存并关闭' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveValue('保存失败时也不能丢失的内容');
+  await expect(page.locator('.compose-pane')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveText('保存失败时也不能丢失的内容');
   await page.getByRole('button', { name: '继续编辑' }).click();
   await page.getByRole('textbox', { name: '邮件正文' }).fill('继续修改，仍保留在编辑器中');
 });
@@ -99,7 +99,7 @@ test('reply drafts preserve reply metadata and empty subjects when reopened', as
   await page.getByLabel('主题', { exact: true }).fill('');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('回复草稿正文');
   await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
-  await page.getByRole('button', { name: '关闭对话框' }).click();
+  await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
   await page.getByRole('button', { name: '编辑草稿' }).click();

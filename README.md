@@ -2,7 +2,7 @@
 
 一款以漂亮界面、独立皮肤和多邮箱统一管理为中心的本地桌面邮件客户端。技术栈：Tauri 2 / Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、Radix UI、Zustand、SQLite。
 
-**当前包含演示工作区与桌面 IMAP 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权已验收；真实发送、POP3、AI 和日历仍待接入 / 验收。**
+**当前包含演示工作区与桌面 IMAP 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）、富文本撰写（右栏工作区 + Word 式工具栏）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权与真实发送均已验收；POP3、AI 和日历仍待接入。**
 
 ## 运行
 
@@ -41,7 +41,7 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 - 授权：添加账号按提供商卡片选择（Gmail、QQ、163、其他 IMAP；Office 即将支持），Gmail 公共应用 Client ID 已内置、系统浏览器 PKCE / loopback / XOAUTH2、keyring 刷新与重新授权，密码账号可原地重配，详见 OAuth 配置文档。
 - 工程：类型契约、检查命令、浏览器回归测试、Windows 原生 CI。
 
-**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿与邮件状态存 localStorage。事件完成状态仍仅本次会话有效。撰写界面为纯文本，已接入 SMTP 发送队列（outbox：结果不明不自动重发，可经 Sent 目录核对或手动确认）；尚未实现富文本与撰写附件。收到的附件可从完整原文另存为。收到的邮件支持 HTML 沙箱渲染：正文从已验证的完整原文缓存按需提取并消毒，在唯一源沙箱 iframe 中显示；远程图片默认拦截、每封可手动允许，缓存被淘汰时回退纯文本（链接可点击，统一经系统应用打开）。
+**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿与邮件状态存 localStorage。事件完成状态仍仅本次会话有效。撰写在右栏工作区完成（Outlook 式），内置富文本工具栏（加粗 / 标题 / 列表 / 引用 / 颜色 / 链接等，零依赖实现），HTML 经服务端消毒后随 multipart/alternative 发送；已接入 SMTP 发送队列（outbox：结果不明不自动重发，可经 Sent 目录核对或手动确认）；尚未实现撰写附件与图片。收到的附件可从完整原文另存为。收到的邮件支持 HTML 沙箱渲染：正文从已验证的完整原文缓存按需提取并消毒，在唯一源沙箱 iframe 中显示；远程图片默认拦截、每封可手动允许，缓存被淘汰时回退纯文本（链接可点击，统一经系统应用打开）。
 
 ## 开发入口
 

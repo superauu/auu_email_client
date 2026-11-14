@@ -92,6 +92,8 @@ export interface MailDraft {
   to: string;
   subject: string;
   bodyText: string;
+  /** 富文本正文（编辑器产出，服务端消毒后持久化）；缺省 = 纯文本草稿。 */
+  bodyHtml?: string;
   replyToId?: string;
   updatedAt: Timestamp;
   /** Persisted revision; omitted only for legacy drafts, which are treated as revision zero. */
@@ -139,6 +141,9 @@ export interface MailGateway {
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
   /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
   messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string>;
+  /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
+  /** Sanitized HTML fragment for reply/forward quoting; rejects when no verified raw cache exists. */
+  messageHtmlFragment?(accountId: string, messageId: string): Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
   sendDraft?(draftId: string, revision: number): Promise<import('./outbox').OutboxEntry>;
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */

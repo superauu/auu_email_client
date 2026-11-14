@@ -4,7 +4,7 @@
 use crate::{error::AppError, mail_cache};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use mail_parser::{MessageParser, MimeHeaders};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
@@ -61,6 +61,31 @@ fn inline_data_uris(parsed: &mail_parser::Message<'_>) -> Result<Vec<(String, St
         total += contents.len();
     }
     Ok(map)
+}
+
+/// 撰写草稿的 HTML 消毒（compose 专用，比收件消毒更严格）：
+/// 保留格式标签与 style 属性；剥 <style> 块 / img / data: URI / 相对地址 / 脚本与事件处理器。
+/// 撰写内容会发送给别人，消毒发生在草稿写入时而非发送时。
+pub(crate) fn sanitize_compose(html: &str) -> String {
+    let mut builder = ammonia::Builder::default();
+    builder.tags(HashSet::from([
+        "p", "div", "span", "br", "hr", "b", "strong", "i", "em", "u", "s", "strike", "a", "h1",
+        "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table",
+        "thead", "tbody", "tr", "td", "th", "font", "center", "small", "sub", "sup",
+    ]));
+    builder.generic_attributes(HashSet::from(["style"]));
+    builder.tag_attributes(std::collections::HashMap::from([
+        ("a", HashSet::from(["href", "title"])),
+        ("table", HashSet::from(["width", "border", "cellpadding", "cellspacing", "align", "bgcolor"])),
+        ("td", HashSet::from(["colspan", "rowspan", "align", "valign", "width", "height", "bgcolor"])),
+        ("th", HashSet::from(["colspan", "rowspan", "align", "valign", "width", "height", "bgcolor"])),
+        ("font", HashSet::from(["color", "face", "size"])),
+        ("hr", HashSet::from(["size", "width", "align"])),
+    ]));
+    builder.url_schemes(HashSet::from(["http", "https", "mailto"]));
+    builder.url_relative(ammonia::UrlRelative::Deny);
+    builder.link_rel(Some("noopener noreferrer"));
+    builder.clean(html).to_string()
 }
 
 fn sanitize(html: &str) -> String {
@@ -218,6 +243,26 @@ fn srcdoc(body: &str, allow_remote_images: bool) -> String {
     doc.push_str(BRIDGE_SCRIPT);
     doc.push_str("</script></body></html>");
     doc
+}
+
+/// 回复 / 转发引用：消毒后的正文 HTML 片段（无 srcdoc 包装，进编辑器 contentEditable）。
+/// 用 compose 严格消毒（剥 <style> 块 / img / data: URI），避免片段影响编辑器全局样式。
+pub(crate) fn render_fragment(conn: &Connection, account: &str, id: &str) -> Result<String, AppError> {
+    let (root, key) = load_cache_key(conn, account, id)?;
+    let raw = mail_cache::read(&root, &key)?;
+    let parsed = MessageParser::default()
+        .parse(&raw)
+        .ok_or_else(|| AppError::invalid("邮件 MIME 无效，无法引用原文"))?;
+    let html = parsed
+        .body_html(0)
+        .filter(|html| html.len() <= MAX_HTML)
+        .ok_or_else(|| AppError::invalid("这封邮件没有可引用的正文"))?;
+    let inline = inline_data_uris(&parsed)?;
+    let mut prepared = html.into_owned();
+    for (cid, uri) in inline {
+        prepared = prepared.replace(&format!("cid:{cid}"), &uri);
+    }
+    Ok(sanitize_compose(&prepared))
 }
 
 #[cfg(test)]

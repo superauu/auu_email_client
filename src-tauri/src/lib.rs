@@ -234,6 +234,21 @@ fn mail_message_html(
         .map(|html| MailHtmlPayload { html })
 }
 
+/// 回复 / 转发引用：消毒后的正文 HTML 片段，直接插入撰写编辑器。
+#[tauri::command]
+fn mail_message_html_fragment(
+    db: State<'_, Db>,
+    account_id: String,
+    message_id: String,
+) -> Result<String, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    mail_html::render_fragment(&conn, &account_id, &message_id)
+}
+
 /// 邮件内链接只在系统默认应用打开；scheme 白名单外的地址一律拒绝。
 #[tauri::command]
 fn open_external(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
@@ -623,6 +638,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mail_export_attachment,
             mail_message_html,
+            mail_message_html_fragment,
             mail_request_body,
             mail_send_draft,
             mail_outbox_list,

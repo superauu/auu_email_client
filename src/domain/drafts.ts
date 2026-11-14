@@ -9,11 +9,14 @@ export function validateDraft(raw: unknown): MailDraft {
   }
   if (!/^draft-[a-zA-Z0-9_-]+$/.test(value.id as string) || !value.accountId || !Number.isFinite(Date.parse(value.updatedAt as string))) throw new Error('草稿标识或时间无效');
   if (value.replyToId !== undefined && (typeof value.replyToId !== 'string' || value.replyToId.length === 0 || value.replyToId.length > 200)) throw new Error('回复关联无效');
+  // HTML 正文可选；上限与 Rust 侧对称（200_000 UTF-16 单元）。
+  if (value.bodyHtml !== undefined && (typeof value.bodyHtml !== 'string' || value.bodyHtml.length > 200_000)) throw new Error('富文本正文无效或超出长度限制');
   const revision = value.revision ?? 0;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision > 1_000_000_000) throw new Error('草稿版本无效');
   return {
     id: value.id as string, accountId: value.accountId as string, to: value.to as string,
     subject: value.subject as string, bodyText: value.bodyText as string, updatedAt: value.updatedAt as string, revision,
+    ...(value.bodyHtml ? { bodyHtml: value.bodyHtml as string } : {}),
     ...(value.replyToId ? { replyToId: value.replyToId as string } : {}),
   };
 }

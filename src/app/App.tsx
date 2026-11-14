@@ -7,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
 import { MailList } from '../features/mail/MailList';
 import { MailReader } from '../features/mail/MailReader';
-import { ComposeDialog } from '../features/compose/ComposeDialog';
+import { ComposePane } from '../features/compose/ComposePane';
 import { SettingsDialog } from '../features/settings/SettingsDialog';
 import { AiPanel } from '../features/ai/AiPanel';
 import { EventsView } from '../features/events/EventsView';
@@ -46,6 +46,7 @@ export function App() {
   function compose(message?: MailMessage, editing = false, mode: 'reply' | 'reply-all' | 'forward' = 'reply') {
     const accountId = message?.accountId ?? query.accountId ?? accounts[0]?.id;
     if (!accountId) return;
+    setMobileReading(true); // 窄屏下撰写面替代阅读面时保持可见
     if (editing && message?.draft) { setDraft({ ...message.draft }); return; }
     if (message && mode === 'forward') {
       // 转发草稿：引用原文头与正文（超长截断，上限低于草稿 50k 校验）；仍关联原邮件便于回溯。
@@ -117,10 +118,9 @@ export function App() {
     <div className="app-workspace"><nav className="activity-rail" aria-label="主导航"><button className={view === 'mail' ? 'is-active' : ''} aria-label="邮件工作区" aria-current={view === 'mail' ? 'page' : undefined} onClick={() => setView('mail')}><Mail size={21} /></button><button className={view === 'events' ? 'is-active' : ''} aria-label="事件与待办" aria-current={view === 'events' ? 'page' : undefined} onClick={() => setView('events')}><CalendarDays size={21} /></button><div className="rail-spacer" /><button aria-label="关于 AuuMail" onClick={() => setSettingsTab('about')}><CircleHelp size={20} /></button><span className="profile-avatar">A</span></nav>
       <Sidebar onCompose={() => compose()} onAccounts={() => setSettingsTab('accounts')} />
       <ResizeHandle variant="sidebar" label="调整导航栏宽度" value={sidebarWidth} min={MIN_SIDEBAR_WIDTH} max={MAX_SIDEBAR_WIDTH} onResize={setSidebarWidth} onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} />
-      {status === 'error' ? <EmptyState title="工作区未能加载" description={error ?? '请重试。'} action={<Button onClick={() => void load()}>重新加载</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">正在准备工作区…</div> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label="调整邮件列表宽度" value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} /><MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />{aiOpen && <AiPanel onClose={() => setAiOpen(false)} />}</main>}
+      {status === 'error' ? <EmptyState title="工作区未能加载" description={error ?? '请重试。'} action={<Button onClick={() => void load()}>重新加载</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">正在准备工作区…</div> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}>{draft ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} /> : <><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label="调整邮件列表宽度" value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} /><MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />{aiOpen && <AiPanel onClose={() => setAiOpen(false)} />}</>}</main>}
     </div><footer className="app-statusbar"><span><span className="status-dot" />{accounts.some(account => account.status !== 'demo') ? '本地工作区' : '本机演示'} · {accounts.length} 个邮箱账号</span><span><PanelRight size={12} />{isDesktop() ? '桌面工作区' : '浏览器预览'}<span className="status-version">AuuMail 0.1.0</span></span></footer>
     {settingsTab && <SettingsDialog key={settingsTab} open initialTab={settingsTab} onClose={() => setSettingsTab(null)} />}
-    {draft && <ComposeDialog key={draft.id} initial={draft} onClose={() => setDraft(null)} onNotice={setNotice} />}
     {error && status === 'ready' ? <div className="toast" role="alert">{error}<Button variant="ghost" onClick={() => useWorkspaceStore.getState().clearError()}>关闭提示</Button></div> : notice && <div className="toast" role="status">{notice}</div>}
   </div>;
 }

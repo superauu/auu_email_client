@@ -37,7 +37,7 @@ export class DraftSession {
     this.state = { ...this.state, ...changes };
     for (const listener of this.listeners) listener();
   }
-  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'subject' | 'bodyText'>>) {
+  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'subject' | 'bodyText' | 'bodyHtml'>>) {
     this.editVersion += 1;
     this.publish({ draft: { ...this.state.draft, ...changes }, dirty: true, saved: false, error: null });
     this.schedule();

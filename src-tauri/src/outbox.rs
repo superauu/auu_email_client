@@ -113,12 +113,23 @@ pub(crate) fn encode_rfc2047(text: &str) -> String {
 }
 
 /// RFC5322 组装。头部注入防护：显示名 / 主题中的 CR / LF 替换为空格。
+fn fold_base64(data: &str) -> String {
+    data.as_bytes()
+        .chunks(76)
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "")
+        .unwrap_or_default()
+        .join("\r\n")
+}
+
 fn assemble(
     from_name: &str,
     from_email: &str,
     recipients: &[String],
     subject: &str,
     body_text: &str,
+    body_html: Option<&str>,
     message_id: &str,
 ) -> String {
     let clean = |text: &str| text.chars().map(|c| if c == '\r' || c == '\n' { ' ' } else { c }).collect::<String>();
@@ -134,17 +145,29 @@ fn assemble(
     } else {
         format!("Subject: {}\r\n", encode_rfc2047(&safe_subject))
     };
-    let body = BASE64.encode(body_text.as_bytes());
-    let folded_body = body
-        .as_bytes()
-        .chunks(76)
-        .map(std::str::from_utf8)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "")
-        .unwrap_or_default()
-        .join("\r\n");
+    let text_part = format!(
+        "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
+        fold_base64(&BASE64.encode(body_text.as_bytes()))
+    );
+    let (content_headers, body) = match body_html.filter(|html| !html.trim().is_empty()) {
+        Some(html) => {
+            let boundary = format!("=_auumail_{}", Uuid::new_v4().simple());
+            let html_part = format!(
+                "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
+                fold_base64(&BASE64.encode(html.as_bytes()))
+            );
+            (
+                format!("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n"),
+                format!("--{boundary}\r\n{text_part}\r\n--{boundary}\r\n{html_part}\r\n--{boundary}--\r\n"),
+            )
+        }
+        None => (
+            "Content-Type: text/plain; charset=utf-8\r\n".into(),
+            format!("{text_part}\r\n"),
+        ),
+    };
     format!(
-        "{from}\r\nTo: {}\r\n{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{folded_body}\r\n",
+        "{from}\r\nTo: {}\r\n{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\n{content_headers}\r\n{body}",
         recipients.join(", "),
         Utc::now().to_rfc2822(),
     )
@@ -249,6 +272,7 @@ struct SendJob {
     oauth: Option<mail_oauth::Config>,
     subject: String,
     body_text: String,
+    body_html: String,
     recipients: Vec<String>,
 }
 
@@ -280,15 +304,15 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器，也不能发送邮件"));
     }
-    let draft: Option<(u32, String, String, String)> = conn
+    let draft: Option<(u32, String, String, String, String)> = conn
         .query_row(
-            "SELECT revision, recipients_json, subject, body_text FROM drafts WHERE id = ?1",
+            "SELECT revision, recipients_json, subject, body_text, body_html FROM drafts WHERE id = ?1",
             [&row.draft_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, recipients_json, subject, body_text)) = draft else {
+    let Some((_, recipients_json, subject, body_text, body_html)) = draft else {
         return Err(AppError::invalid("草稿已不存在，无法发送"));
     };
     let recipients: Vec<String> = serde_json::from_str(&recipients_json)
@@ -317,6 +341,7 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
         }),
         subject,
         body_text,
+        body_html,
         recipients,
     }))
 }
@@ -368,6 +393,7 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
         &job.recipients,
         &job.subject,
         &job.body_text,
+        Some(job.body_html.as_str()).filter(|html| !html.trim().is_empty()),
         &job.message_id,
     );
     let stream = smtp_send::open(&smtp_host, job.smtp_port, security)?;
@@ -719,6 +745,7 @@ mod tests {
             &["friend@example.test".into()],
             "你好 · 收据",
             "第一行\n第二行",
+            None,
             "<abc@auumail.local>",
         );
         assert!(raw.starts_with("From: =?utf-8?B?"));
@@ -726,12 +753,44 @@ mod tests {
         assert!(raw.contains("Subject: =?utf-8?B?"));
         assert!(raw.contains("Date: "));
         assert!(raw.contains("Message-ID: <abc@auumail.local>"));
-        assert!(raw.contains("Content-Transfer-Encoding: base64\r\n\r\n"));
-        // base64 正文按 76 字符折行。
-        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        assert!(raw.contains("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"));
+        assert!(!raw.contains("multipart"));
+        // base64 正文按 76 字符折行（取最后一段双 CRLF 之后的内容）。
+        let body = raw.split("\r\n\r\n").last().unwrap();
         assert!(body.lines().all(|line| line.len() <= 76));
         let decoded = BASE64.decode(body.replace("\r\n", "")).unwrap();
         assert_eq!(String::from_utf8(decoded).unwrap(), "第一行\n第二行");
+    }
+
+    #[test]
+    fn html_body_becomes_multipart_alternative() {
+        let raw = assemble(
+            "me",
+            "me@example.test",
+            &["friend@example.test".into()],
+            "rich",
+            "plain text",
+            Some("<p>rich <b>text</b></p>"),
+            "<abc@auumail.local>",
+        );
+        assert!(raw.contains("Content-Type: multipart/alternative; boundary=\"=_auumail_"));
+        assert!(raw.contains("Content-Type: text/plain; charset=utf-8"));
+        assert!(raw.contains("Content-Type: text/html; charset=utf-8"));
+        let boundary = raw.split("boundary=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert_eq!(raw.matches(&format!("--{boundary}")).count(), 3, "开边界两次 + 闭边界一次");
+        assert!(raw.trim_end().ends_with("--"));
+        // 两个部分都能独立解码。
+        let encoded = raw
+            .split("text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap();
+        let decoded = String::from_utf8(BASE64.decode(encoded).unwrap()).unwrap();
+        assert_eq!(decoded, "<p>rich <b>text</b></p>");
+        // 纯文本部分保留。
+        assert!(raw.contains("cGxhaW4gdGV4dA==") || raw.contains(&BASE64.encode(b"plain text")));
     }
 
     #[test]
@@ -742,6 +801,7 @@ mod tests {
             &["a@example.test".into()],
             "subject\r\nBcc: y@example.test",
             "body",
+            None,
             "<abc@auumail.local>",
         );
         assert!(!raw.contains("Bcc:"), "CR/LF 必须被中和，头部不得注入");
