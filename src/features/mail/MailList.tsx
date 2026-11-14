@@ -1,18 +1,35 @@
-import { ArrowDown, Star } from 'lucide-react';
+import { ArrowDown, RefreshCw, Star } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
+import { useSyncStore } from '../../stores/syncStore';
 import { mailboxNames, selectMessages } from './selectors';
+import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { cn } from '../../lib/cn';
+import { isDesktop } from '../../platform/desktop';
+import { isSyncActive, syncableAccounts } from '../../domain/sync';
 
 export function MailList({ onSelect }: { onSelect: () => void }) {
   const { messages, accounts, labels, query, selectedId, savingIds, selectMessage, toggleStar, setQuery } = useWorkspaceStore(useShallow(s => ({
     messages: s.messages, accounts: s.accounts, labels: s.labels, query: s.query, selectedId: s.selectedId,
     savingIds: s.savingIds, selectMessage: s.selectMessage, toggleStar: s.toggleStar, setQuery: s.setQuery,
   })));
+  const { jobs, submitting, enqueue } = useSyncStore(useShallow(s => ({ jobs: s.jobs, submitting: s.submitting, enqueue: s.enqueue })));
+  const jobsByAccount = new Map(jobs.map(job => [job.accountId, job]));
   const visible = selectMessages(messages, query);
   const queriedAccount = query.accountId ? accounts.find(a => a.id === query.accountId) : null;
   const realAccount = queriedAccount && queriedAccount.status !== 'demo' ? queriedAccount : null;
+  // 指定账号视图同步该账号；全部账号视图同步所有可同步账号（IMAP + Gmail OAuth）。
+  const syncTarget = realAccount;
+  const syncable = syncableAccounts(accounts);
+  const syncingAll = syncable.some(({ id }) => submitting.includes(id) || jobs.some(job => job.accountId === id && isSyncActive(job)));
+  const accountSyncing = syncTarget ? submitting.includes(syncTarget.id) || (jobsByAccount.get(syncTarget.id) ? isSyncActive(jobsByAccount.get(syncTarget.id)!) : false) : false;
+  function syncCurrent() {
+    if (!isDesktop()) return;
+    const ids = syncTarget ? [syncTarget.id] : syncable.map(({ id }) => id);
+    if (!ids.length || (syncTarget ? accountSyncing : syncingAll)) return;
+    void enqueue(ids);
+  }
   const title = query.labelId ? labels.find(l => l.id === query.labelId)?.name : mailboxNames[query.mailbox];
   const folderTitle = useWorkspaceStore(state => state.folders)?.find(folder => folder.id === query.folderId)?.name;
   return <section className="mail-list" aria-label="邮件列表">
@@ -22,10 +39,10 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         <button aria-pressed={!query.unreadOnly} onClick={() => setQuery({ unreadOnly: false })}>全部</button>
         <button aria-pressed={Boolean(query.unreadOnly)} onClick={() => setQuery({ unreadOnly: true })}>未读</button>
       </div>
-      <span className="list-order" title="按邮件日期排序，最新邮件在前">按日期<ArrowDown size={12} /></span>
+      <div className="list-actions"><span className="list-order" title="按邮件日期排序，最新邮件在前">按日期<ArrowDown size={12} /></span><Button variant="ghost" className="account-sync" aria-label={syncTarget ? `同步 ${syncTarget.name}` : '同步全部账号'} title={syncTarget ? `同步 ${syncTarget.name}` : '同步全部账号'} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? accountSyncing : syncingAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? '正在排队…' : jobsByAccount.get(syncTarget.id)?.status === 'queued' ? '排队中' : jobsByAccount.get(syncTarget.id)?.status === 'running' ? '同步中…' : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? '重试' : '同步' : syncingAll ? '同步中…' : '同步'}</Button></div>
     </header>
     <div className="mail-list-scroll">
-      {visible.length === 0 ? (query.unreadOnly ? <EmptyState title="没有未读邮件" description="当前筛选范围内的邮件都已读，可切回全部查看。" /> : query.search ? <EmptyState title="没有找到相关邮件" description="换个关键词，或选择其他账号试试。" /> : realAccount ? <EmptyState title={`${realAccount.name} 暂无缓存邮件`} description="请在邮箱账号设置中同步；已保存的草稿可以离线编辑。" /> : <EmptyState title="这里暂时没有邮件" description="收到的邮件和保存的草稿会在这里出现。" />) : visible.map(message => {
+      {visible.length === 0 ? (query.unreadOnly ? <EmptyState title="没有未读邮件" description="当前筛选范围内的邮件都已读，可切回全部查看。" /> : query.search ? <EmptyState title="没有找到相关邮件" description="换个关键词，或选择其他账号试试。" /> : realAccount ? <EmptyState title={`${realAccount.name} 暂无缓存邮件`} description="点工具栏的同步按钮拉取邮件；已保存的草稿可以离线编辑。" /> : <EmptyState title="这里暂时没有邮件" description="收到的邮件和保存的草稿会在这里出现。" />) : visible.map(message => {
         const account = accounts.find(a => a.id === message.accountId);
         return <article key={message.id} className={cn('mail-row', selectedId === message.id && 'is-selected', message.unread && 'is-unread')}>
           <button className="mail-row-main" title={[message.from.email, account?.name, ...message.labelIds.map(id => labels.find(label => label.id === id)?.name)].filter(Boolean).join(' · ')} aria-label={`阅读邮件：${message.subject}`} onClick={() => { selectMessage(message.id); onSelect(); }} aria-current={selectedId === message.id ? 'true' : undefined}>

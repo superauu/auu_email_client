@@ -25,6 +25,10 @@ export interface SyncJob {
 }
 export interface SyncQueueSnapshot { revision: number; jobs: SyncJob[] }
 export const isSyncActive = (job: SyncJob) => job.status === 'queued' || job.status === 'running';
+/** 可同步账号：演示与 POP3 之外均可（IMAP 与 Gmail OAuth 都走同一队列）。 */
+export function syncableAccounts(accounts: { id: string; status: string; provider: string }[]): { id: string; provider: string }[] {
+  return accounts.filter(account => account.status !== 'demo' && account.provider !== 'pop3').map(account => ({ id: account.id, provider: account.provider }));
+}
 export function syncJobSummary(job: SyncJob): string {
   if (job.status === 'queued') return '排队中';
   if (job.status === 'running') return job.cancelRequested ? '正在停止同步…' : '同步中…';

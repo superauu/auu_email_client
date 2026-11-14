@@ -8,7 +8,8 @@
 - 发送实现按 [SENDING](SENDING.md) 设计落地：v10 迁移为 outbox 补列（message_id / attempts / last_error / queued_at / resolved_by）；`smtp_send.rs` 实现信封 + DATA 点填充 + 465 TLS / 587 STARTTLS（fail-closed 能力确认）+ XOAUTH2 错误挑战；**DATA 终点号写出后未读到 2xx 一律 unknown，不自动重试、不自动判失败**。`outbox.rs` 完成 RFC5322 组装（RFC2047 CJK 显示名 / 主题、base64 正文折行、头部注入中和、收件人语法校验）、Message-ID 一次生成全程复用、调度 runner 先发送后同步、启动恢复 sending → unknown、同步提交后按 Sent 目录命中把 unknown 自动转已发送。
 - 能力门控：capabilities.send（仅收信账号 / Microsoft 未授权 SMTP.Send / 演示账号 = false）；撰写页发送按钮禁用并说明原因。UI：发送进入队列的提示、设置页账号行发送状态徽标、unknown 提供「仅保留本机 / 确认未送达并重试」两个出口。
 - 验证：`npm run check` 44 个 TS 测试、`npm run check:native` 186 个 Rust 测试 + Clippy、`npm run test:ui` 35 个 Chromium 回归（新增发送门控 / 队列徽标 / unknown 出口回归）全部通过。
-- **真实发送验收通过（2026-11-14）**：真实 Gmail 账号回复邮件经 outbox → smtp.gmail.com XOAUTH2 投递成功。验收中发现两处修复：OAuth 账号的历史「仅收信」标记不再阻塞 Google 发送（send 能力每次加载动态计算）；OAuth 账号未存 SMTP 主机时默认 smtp.gmail.com:465。已知 UX 待改进：发送登记成功后撰写框不自动关闭；同步入口只在设置页（下一步重设计）。
+- **真实发送验收通过（2026-11-14）**：真实 Gmail 账号回复邮件经 outbox → smtp.gmail.com XOAUTH2 投递成功。验收中发现两处修复：OAuth 账号的历史「仅收信」标记不再阻塞 Google 发送（send 能力每次加载动态计算）；OAuth 账号未存 SMTP 主机时默认 smtp.gmail.com:465。
+- 同步入口进主工作区（UX 重设计）：顶栏「同步全部」按钮（任意任务运行中转圈禁用，F5 快捷键），邮件列表工具栏按当前视图显示每账号 / 全部同步按钮（跟随排队中 / 同步中 / 重试状态），任务转终态与进度错误以 toast 反馈（设置关闭也可见）；设置页保留排队取消 / 停止 / 重试与 outbox 出口。顺带修复：设置页同步按钮此前把 Gmail OAuth 账号排除在可同步之外（provider!=='imap' 门控）。发送登记成功后撰写框自动关闭并以 toast 反馈。
 
 ## 历史增量：提供商卡片添加账号与内置 Gmail Client ID（2026-11-14）
 

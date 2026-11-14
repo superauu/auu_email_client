@@ -315,7 +315,7 @@ test('one account failing leaves the others running and supports queued retry ca
   await page.getByRole('button', { name: '同步全部', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消排队 测试邮箱 3', exact: true })).toBeVisible();
   await page.evaluate(() => (window as unknown as { __syncTest: { finish: (id: string, failure: boolean) => void } }).__syncTest.finish('real-1', true));
-  await expect(page.getByText(/同步失败：测试连接失败/)).toBeVisible();
+  await expect(page.locator('.sync-note', { hasText: '同步失败：测试连接失败' })).toBeVisible();
   await expect(page.getByRole('button', { name: '同步 测试邮箱 1', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: '同步 测试邮箱 2', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '同步 测试邮箱 1', exact: true }).click();
@@ -463,9 +463,10 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   const compose=page.getByRole('dialog',{name:'回复邮件'});
   await compose.getByRole('textbox',{name:'邮件正文'}).fill('发送测试');
   await compose.getByRole('button',{name:'发送',exact:true}).click();
-  await expect(compose.getByText('已进入发送队列')).toBeVisible();
+  // 登记成功后撰写框自动关闭，结果以 toast 反馈。
+  await expect(compose).toHaveCount(0);
+  await expect(page.locator('.toast')).toContainText('已进入发送队列');
   await page.screenshot({path:info.outputPath('send-queued.png')});
-  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
   await page.getByRole('banner').getByRole('button',{name:'设置',exact:true}).click();
   await expect(page.getByText('发送排队中')).toBeVisible();
   // 结果不明：两个明确出口，不自动重发。
@@ -475,4 +476,21 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   await expect(page.getByText(/发送失败：已按仅保留本机处理/)).toBeVisible({timeout:7000});
   const actions=await page.evaluate(() => (window as unknown as { __syncTest: { outboxActions: () => Array<{ id: string; action: string }> } }).__syncTest.outboxActions());
   await expect(actions).toEqual([{id:'ob-1',action:'keep-local'}]);
+});
+
+test('sync lives in the workspace chrome with header sync-all, toolbar per-account sync and completion toast', async ({page}) => {
+  await mockDesktop(page,true,undefined,true);await page.goto('/');
+  // 顶栏同步全部：排队 toast + 按钮转圈禁用。
+  await page.getByRole('banner').getByRole('button',{name:'同步全部账号',exact:true}).click();
+  await expect(page.locator('.toast')).toContainText('已排队同步全部账号');
+  await expect(page.getByRole('banner').getByRole('button',{name:'同步全部账号',exact:true})).toBeDisabled();
+  // 邮件列表工具栏：全部账号视图 → 同步中…禁用（aria-label 为同步全部账号，断言内部文字）。
+  await expect(page.locator('.list-actions .account-sync')).toBeDisabled();
+  await expect(page.locator('.list-actions .account-sync')).toContainText('同步中…');
+  // 指定账号视图：同步按钮跟随任务状态。
+  await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();
+  await expect(page.locator('.list-actions .account-sync')).toContainText('同步中…');
+  // 完成后 toast 反馈（设置关闭也可见）。
+  await page.evaluate(() => (window as unknown as { __syncTest: { finish: (id: string, failure: boolean) => void } }).__syncTest.finish('real-1', false));
+  await expect(page.locator('.toast')).toContainText('同步完成');
 });

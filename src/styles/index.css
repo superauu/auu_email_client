@@ -110,6 +110,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .list-filters button { color: var(--text-muted); border-bottom: 2px solid transparent; font-size: 12px; padding: 0 1px; }
 .list-filters button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .list-order { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-subtle); white-space: nowrap; }
+.list-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.list-actions .account-sync { font-size: 11px; height: 26px; padding: 0 10px; white-space: nowrap; }
 .mail-list-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .mail-row { position: relative; border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent); }
 .mail-row:hover { background: var(--surface-hover); }

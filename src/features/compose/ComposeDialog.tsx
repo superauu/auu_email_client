@@ -8,7 +8,7 @@ import { errorMessage } from '../../domain/errors';
 import { desktop, isDesktop } from '../../platform/desktop';
 import { DraftSession } from './DraftSession';
 
-export function ComposeDialog({ initial, onClose }: { initial: MailDraft; onClose: () => void }) {
+export function ComposeDialog({ initial, onClose, onNotice }: { initial: MailDraft; onClose: () => void; onNotice?: (text: string) => void }) {
   const accounts = useWorkspaceStore(s => s.accounts);
   const saveDraft = useWorkspaceStore(s => s.saveDraft);
   const sendDraft = useWorkspaceStore(s => s.sendDraft);
@@ -71,9 +71,13 @@ export function ComposeDialog({ initial, onClose }: { initial: MailDraft; onClos
       // 先保证草稿落盘并拿到当前 revision，再登记发送队列（docs/SENDING.md）。
       if (!(await session.flush())) throw new Error('草稿尚未保存成功，请稍后重试。');
       const entry = await sendDraft(draft.id, session.currentRevision);
-      setSendNotice(entry.state === 'queued' ? '已进入发送队列；发送结果可在设置 → 邮箱账号查看，结果不明时不会自动重发。' : `发送任务状态：${entry.state}`);
+      const notice = entry.state === 'queued' ? '已进入发送队列；发送结果可在设置 → 邮箱账号查看，结果不明时不会自动重发。' : `发送任务状态：${entry.state}`;
+      setSendNotice(notice);
       setCloseTarget(null);
       session.resume();
+      // 登记成功即关闭撰写框；结果以 toast 与账号状态徽标反馈。
+      onNotice?.(notice);
+      onClose();
     } catch (error) { setPlatformError(errorMessage(error)); }
     finally { setSending(false); }
   }
