@@ -238,13 +238,16 @@ fn mail_message_html(
     account_id: String,
     message_id: String,
     allow_remote_images: bool,
+    // 当前主题模式（light/dark），决定沙箱正文的默认底色与文字颜色。
+    mode: Option<String>,
 ) -> Result<MailHtmlPayload, AppError> {
     let conn = db
         .inner()
         .0
         .lock()
         .map_err(|_| AppError::storage("数据库忙"))?;
-    mail_html::render(&conn, &account_id, &message_id, allow_remote_images)
+    let dark = mode.as_deref() == Some("dark");
+    mail_html::render(&conn, &account_id, &message_id, allow_remote_images, dark)
         .map(|html| MailHtmlPayload { html })
 }
 
@@ -389,6 +392,18 @@ async fn mail_save_draft(
     })
     .await
     .map_err(|_| AppError::storage("草稿保存任务未完成"))?
+}
+
+/// 放弃草稿：用户显式点击后从本机删除草稿行（已进入发送流程的草稿拒绝删除）。
+#[tauri::command]
+async fn mail_delete_draft(db: State<'_, Db>, draft_id: String) -> Result<(), AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        drafts::delete(&mut conn, &draft_id)
+    })
+    .await
+    .map_err(|_| AppError::storage("草稿删除任务未完成"))?
 }
 
 #[tauri::command]
@@ -679,6 +694,7 @@ pub fn run() {
             mail_page_messages,
             mail_list_drafts,
             mail_save_draft,
+            mail_delete_draft,
             mail_import_legacy_drafts,
             mail_verify_account,
             mail_save_account,

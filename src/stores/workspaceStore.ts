@@ -27,10 +27,12 @@ interface WorkspaceState extends WorkspaceSnapshot {
   archiveMessage: (id: string) => void;
   exportAttachment: (id: string, index: number) => Promise<boolean>;
   /** Sanitized sandbox srcdoc for rich rendering; rejects when the environment has no verified raw cache. */
-  messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean) => Promise<string>;
+  messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark') => Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md). */
   messageHtmlFragment: (accountId: string, messageId: string) => Promise<string>;
   sendDraft: (draftId: string, revision: number) => Promise<import('../domain/outbox').OutboxEntry>;
+  /** Explicitly discard a local draft (deletes the persisted row). */
+  deleteDraft: (draftId: string) => Promise<void>;
   toggleEvent: (id: string) => void;
   setView: (view: 'mail' | 'events') => void;
   saveDraft: (draft: MailDraft, options?: DraftSaveOptions) => Promise<MailDraft>;
@@ -80,9 +82,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try { return await gateway.exportAttachment(message.accountId, id, index); }
     catch (error) { set({ error: errorMessage(error) }); return false; }
   },
-  async messageHtml(accountId, messageId, allowRemoteImages) {
+  async messageHtml(accountId, messageId, allowRemoteImages, mode) {
     if (!gateway.messageHtml) throw new Error('当前环境不支持富文本正文。');
-    return gateway.messageHtml(accountId, messageId, allowRemoteImages);
+    return gateway.messageHtml(accountId, messageId, allowRemoteImages, mode);
   },
   async messageHtmlFragment(accountId, messageId) {
     if (!gateway.messageHtmlFragment) throw new Error('当前环境无法引用原文。');
@@ -92,6 +94,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!gateway.sendDraft) throw new Error('当前环境不能发送邮件。');
     set({ error: null });
     return gateway.sendDraft(draftId, revision);
+  },
+  async deleteDraft(draftId) {
+    if (!gateway.deleteDraft) throw new Error('当前环境不能删除草稿。');
+    await gateway.deleteDraft(draftId);
+    draftMutations += 1;
+    // 放弃后立即从工作区移除该草稿；选中的草稿被删除时回落到列表第一封。
+    set(state => {
+      const messages = state.messages.filter(m => m.id !== draftId);
+      return { messages, selectedId: state.selectedId === draftId ? selectMessages(messages, state.query)[0]?.id ?? null : state.selectedId };
+    });
   },
   async load() {
     if (get().status === 'loading' || get().status === 'ready') return;

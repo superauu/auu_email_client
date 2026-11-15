@@ -1,6 +1,6 @@
 import type { MailGateway } from '../../domain/mail';
 import { demoWorkspace } from './fixtures';
-import { draftAsMessage, loadDraftMessages, persistDraft } from './drafts';
+import { draftAsMessage, loadDraftMessages, persistDraft, deletePersistedDraft } from './drafts';
 import { loadDemoMessageChanges, persistDemoMessage } from './messageChanges';
 import { loadDemoEvents, persistDemoEvent } from './events';
 
@@ -20,6 +20,7 @@ export const demoMailGateway: MailGateway = {
   async saveDraft(draft, options) {
     return draftAsMessage(persistDraft(draft, options), demoWorkspace.accounts);
   },
+  async deleteDraft(draftId) { deletePersistedDraft(draftId); },
   async updateMessage(accountId, id, patch) { return persistDemoMessage(accountId, id, patch); },
   async updateEvent(id, completed) { persistDemoEvent(id, completed); },
   async keepMessageLocal(accountId, id) { return persistDemoMessage(accountId, id, {}); },

@@ -36,3 +36,9 @@ export function persistDraft(draft: MailDraft, options?: DraftSaveOptions): Mail
   if (!writePreference(KEY, next)) throw new Error('草稿未能保存，请保留窗口中的内容后重试。');
   return saved;
 }
+
+/** Browser demo only: explicit discard removes the draft from the local overlay. */
+export function deletePersistedDraft(id: string): void {
+  const existing = readPreference(KEY, validateDemoDrafts) ?? [];
+  writePreference(KEY, existing.filter(item => item.id !== id));
+}

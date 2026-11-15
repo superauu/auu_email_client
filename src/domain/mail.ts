@@ -140,14 +140,15 @@ export interface MailGateway {
   requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
   /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
-  messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean): Promise<string>;
-  /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
+  messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark'): Promise<string>;
   /** Persist event completion state (desktop: SQLite; demo: localStorage overlay). */
   updateEvent?(id: string, completed: boolean): Promise<void>;
   /** Sanitized HTML fragment for reply/forward quoting; rejects when no verified raw cache exists. */
   messageHtmlFragment?(accountId: string, messageId: string): Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
   sendDraft?(draftId: string, revision: number): Promise<import('./outbox').OutboxEntry>;
+  /** Delete a local draft after the user explicitly discards it; idempotent, rejects while queued in outbox. */
+  deleteDraft?(draftId: string): Promise<void>;
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;

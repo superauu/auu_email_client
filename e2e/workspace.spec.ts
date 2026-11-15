@@ -33,7 +33,7 @@ test('a saved draft survives reload and stays in the selected sending account', 
   await page.getByLabel('主题', { exact: true }).fill('架构测试草稿');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('保存到演示草稿。');
   await page.getByRole('button', { name: '保存草稿' }).click();
-  await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('button', { name: '工作邮箱', exact: false }).click();
@@ -44,15 +44,22 @@ test('a saved draft survives reload and stays in the selected sending account', 
   await expect(page.getByRole('textbox', { name: '邮件正文' })).toHaveText('保存到演示草稿。');
 });
 
-test('unsaved changes require a deliberate discard', async ({ page }) => {
+test('closing auto-saves the draft, and an explicit button discards it', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
-  await page.getByLabel('主题', { exact: true }).fill('尚未保存');
+  await page.getByLabel('主题', { exact: true }).fill('关闭即保存');
+  // 关闭（Escape）不再要求确认：草稿自动保存后撰写面收起。
   await page.keyboard.press('Escape');
-  await expect(page.getByText('还有未保存的修改。')).toBeVisible();
-  await expect(page.getByLabel('主题', { exact: true })).toHaveValue('尚未保存');
-  await page.getByRole('button', { name: '放弃修改' }).click();
   await expect(page.locator('.compose-pane')).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
+  await expect(page.getByRole('heading', { name: '关闭即保存', exact: true })).toBeVisible();
+  // 只有显式「放弃草稿」按钮才删除草稿。
+  await page.getByRole('button', { name: '编辑草稿' }).click();
+  await expect(page.getByRole('button', { name: '放弃草稿', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '放弃草稿', exact: true }).click();
+  await expect(page.locator('.compose-pane')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '关闭即保存', exact: true })).toHaveCount(0);
 });
 
 test('autosave survives reload, and changing the sender moves a single draft', async ({ page }) => {
@@ -60,9 +67,9 @@ test('autosave survives reload, and changing the sender moves a single draft', a
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   await page.getByLabel('主题', { exact: true }).fill('自动保存的草稿');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('不点击保存也能恢复。');
-  await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByLabel('发件人', { exact: true }).selectOption('work');
-  await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
@@ -98,7 +105,7 @@ test('reply drafts preserve reply metadata and empty subjects when reopened', as
   await expect(page.getByLabel('发件人', { exact: true })).toBeDisabled();
   await page.getByLabel('主题', { exact: true }).fill('');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('回复草稿正文');
-  await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
   await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();

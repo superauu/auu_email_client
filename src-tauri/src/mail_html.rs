@@ -204,7 +204,17 @@ fn csp(allow_remote_images: bool) -> String {
     )
 }
 
-const WRAPPER_CSS: &str = "html,body{margin:0;padding:12px;background:#ffffff;color:#1c2430;font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;font-size:13px;line-height:1.65;overflow-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}a{color:#0a7ea4}";
+const WRAPPER_CSS_FONT: &str = "html,body{margin:0;padding:12px;font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;font-size:13px;line-height:1.65;overflow-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}";
+const WRAPPER_CSS_LIGHT: &str =
+    "html{color-scheme:light}body{background:#ffffff;color:#1c2430}a{color:#0a7ea4}";
+const WRAPPER_CSS_DARK: &str =
+    "html{color-scheme:dark}body{background:#1b2129;color:#d9e1ea}a{color:#7ab8e8}blockquote{border-left:2px solid #465060;padding-left:12px;margin-left:8px}";
+
+/// 包装 CSS 按当前主题模式生成：深色主题下阅读区不再固定白底。
+/// 发件人自带显式颜色的邮件仍按原样渲染（与 Gmail / Outlook 行为一致）。
+fn wrapper_css(dark: bool) -> &'static str {
+    if dark { WRAPPER_CSS_DARK } else { WRAPPER_CSS_LIGHT }
+}
 
 const BRIDGE_SCRIPT: &str = "(function () { 'use strict'; function postHeight() { try { parent.postMessage({ type: 'auumail-frame-height', height: document.documentElement.scrollHeight + 24 }, '*'); } catch (error) {} } document.addEventListener('click', function (event) { var node = event.target; while (node && node.nodeType === 1 && node.tagName !== 'A') node = node.parentNode; if (!node || node.nodeType !== 1) return; event.preventDefault(); parent.postMessage({ type: 'auumail-mail-link', href: node.getAttribute('href') || '' }, '*'); }, true); window.addEventListener('load', postHeight); if (window.ResizeObserver) { new ResizeObserver(postHeight).observe(document.documentElement); } postHeight(); })();";
 
@@ -213,6 +223,7 @@ pub(crate) fn render(
     account: &str,
     id: &str,
     allow_remote_images: bool,
+    dark: bool,
 ) -> Result<String, AppError> {
     let (root, key) = load_cache_key(conn, account, id)?;
     let raw = mail_cache::read(&root, &key)?;
@@ -228,15 +239,16 @@ pub(crate) fn render(
     for (id, uri) in inline {
         prepared = prepared.replace(&format!("cid:{id}"), &uri);
     }
-    Ok(srcdoc(&sanitize(&prepared), allow_remote_images))
+    Ok(srcdoc(&sanitize(&prepared), allow_remote_images, dark))
 }
 
-fn srcdoc(body: &str, allow_remote_images: bool) -> String {
+fn srcdoc(body: &str, allow_remote_images: bool, dark: bool) -> String {
     let mut doc = String::with_capacity(body.len() + 2048);
     doc.push_str("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"");
     doc.push_str(&csp(allow_remote_images));
     doc.push_str("\"><style>");
-    doc.push_str(WRAPPER_CSS);
+    doc.push_str(WRAPPER_CSS_FONT);
+    doc.push_str(wrapper_css(dark));
     doc.push_str("</style></head><body>");
     doc.push_str(body);
     doc.push_str("<script>");
@@ -299,12 +311,21 @@ mod tests {
             sanitized.contains("src=\"data:image/png;base64,"),
             "cid 必须转成 data URI"
         );
-        let doc = srcdoc(&sanitized, false);
+        let doc = srcdoc(&sanitized, false, false);
         assert!(doc.contains("img-src 'none'"));
         assert!(doc.contains(&format!("script-src 'sha256-{}'", bridge_hash())));
         assert!(doc.starts_with("<!DOCTYPE html>"));
-        let allow = srcdoc(&sanitized, true);
+        let allow = srcdoc(&sanitized, true, false);
         assert!(allow.contains("img-src https: data:"));
+    }
+
+    #[test]
+    fn wrapper_css_follows_theme_mode() {
+        let light = srcdoc("<p>x</p>", false, false);
+        assert!(light.contains("color-scheme:light") && light.contains("#ffffff"));
+        let dark = srcdoc("<p>x</p>", false, true);
+        assert!(dark.contains("color-scheme:dark") && dark.contains("#1b2129"));
+        assert!(!dark.contains("#ffffff"));
     }
 
     #[test]

@@ -303,7 +303,7 @@ test('multi-account progress persists outside settings and drafts remain editabl
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   await page.getByLabel('发件人', { exact: true }).selectOption('real-2');
   await page.getByRole('textbox', { name: '邮件正文' }).fill('同步期间仍然可以编辑和保存草稿');
-  await expect(page.getByRole('status').filter({ hasText: '草稿已保存' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消排队 测试邮箱 3', exact: true })).toBeVisible();
@@ -399,7 +399,7 @@ test('server folders follow the chosen account and server drafts create a separa
   await page.getByRole('button',{name:'测试邮箱 2',exact:true}).click();await expect(page.getByRole('navigation',{name:'服务器文件夹',exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();await page.getByRole('navigation',{name:'邮件文件夹',exact:true}).getByRole('button',{name:/草稿/}).click();
   await page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true}).click();await page.getByRole('button',{name:'复制为本地草稿',exact:true}).click();
-  await page.getByRole('textbox',{name:'邮件正文'}).fill('新的本地副本');await expect(page.getByRole('status').filter({hasText:'草稿已保存'})).toBeVisible();
+  await page.getByRole('textbox',{name:'邮件正文'}).fill('新的本地副本');await expect(page.getByRole('status').filter({hasText:'草稿已自动保存'})).toBeVisible();
   await page.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
   await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(2);
 });
@@ -447,7 +447,8 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await expect(composePane.getByLabel('主题')).toHaveValue(/^转发：/);
   await expect(composePane.getByRole('textbox',{name:'邮件正文'})).toContainText('引用的原文 HTML');
   await page.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
-  await page.getByRole('button',{name:'放弃修改',exact:true}).click();
+  // 关闭即自动保存草稿，撰写面直接收起（不再出现确认条）。
+  await expect(page.locator('.compose-pane')).toHaveCount(0);
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复全部',exact:true}).click();
   const replyAll=page.locator('.compose-pane');
@@ -465,7 +466,7 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   const demoCompose=page.locator('.compose-pane');
   await expect(demoCompose.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
   await demoCompose.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
-  await page.getByRole('button',{name:'放弃修改',exact:true}).click();
+  await expect(demoCompose).toHaveCount(0);
   // 真实账号：回复 → 发送 → 队列徽标。
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复邮件',exact:true}).click();

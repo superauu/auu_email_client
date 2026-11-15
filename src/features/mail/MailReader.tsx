@@ -11,6 +11,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { selectMessages } from './selectors';
 import { useSyncStore } from '../../stores/syncStore';
 import { desktop, isDesktop } from '../../platform/desktop';
+import { useThemeStore } from '../../stores/themeStore';
 
 type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean };
 
@@ -60,6 +61,8 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
   const messageId = message?.id ?? null;
   const htmlEligible = !!message && !message.draft && (accounts.find(a => a.id === message.accountId)?.status ?? 'demo') !== 'demo';
   const messageHtmlAction = useWorkspaceStore.getState().messageHtml;
+  // 沙箱正文的底色跟随当前主题；切换深浅模式后重新渲染。
+  const themeMode = useThemeStore(s => s.resolvedMode);
   useEffect(() => {
     if (!messageId || !htmlEligible) { setHtml({ state: 'plain', doc: '', allowImages: false }); setFrameHeight(null); return; }
     let active = true;
@@ -69,14 +72,14 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
       const target = useWorkspaceStore.getState().messages.find(m => m.id === messageId);
       if (!target || target.draft) return;
       try {
-        const doc = await messageHtmlAction(target.accountId, target.id, false);
+        const doc = await messageHtmlAction(target.accountId, target.id, false, themeMode);
         if (!active) return;
         setHtml({ state: 'ready', doc, allowImages: false });
       } catch { if (active) setHtml({ state: 'plain', doc: '', allowImages: false }); }
     }
     void load();
     return () => { active = false; };
-  }, [messageId, htmlEligible, messageHtmlAction]);
+  }, [messageId, htmlEligible, messageHtmlAction, themeMode]);
   if (!message) return <section className="mail-reader"><EmptyState title="留一点空间，给重要的消息" description="从左侧选择一封邮件，开始阅读。" /></section>;
   const account = accounts.find(a => a.id === message.accountId);
   const localDraft = Boolean(message.draft);
@@ -99,7 +102,7 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
     const current = message;
     void (async () => {
       try {
-        const doc = await messageHtml(current.accountId, current.id, true);
+        const doc = await messageHtml(current.accountId, current.id, true, useThemeStore.getState().resolvedMode);
         setHtml({ state: 'ready', doc, allowImages: true });
         setOpenError('');
       } catch (error) { setHtml({ state: 'plain', doc: '', allowImages: false }); setOpenError(errorMessage(error)); }

@@ -13,6 +13,8 @@ const saved = readPreference(KEY, (raw) => {
 interface ThemeState {
   skinId: string;
   mode: ThemeMode;
+  /** 实际生效的模式（system 跟随系统后解析为 light/dark）；阅读/撰写渲染按它取色。 */
+  resolvedMode: 'light' | 'dark';
   skins: SkinPack[];
   warnings: string[];
   loading: boolean;
@@ -20,7 +22,7 @@ interface ThemeState {
   rescan: () => Promise<void>;
 }
 export const useThemeStore = create<ThemeState>((set, get) => ({
-  skinId: saved?.skinId ?? 'paper', mode: saved?.mode ?? 'system',
+  skinId: saved?.skinId ?? 'paper', mode: saved?.mode ?? 'system', resolvedMode: 'light',
   skins: builtinSkins, warnings: [], loading: false,
   setAppearance(skinId, mode) {
     const persisted = writePreference(KEY, { skinId, mode });
@@ -43,6 +45,7 @@ export function applyAppearance(systemDark: boolean) {
   root.style.colorScheme = resolved.mode;
   root.dataset.mode = resolved.mode;
   root.dataset.skin = resolved.skin.manifest.id;
+  if (useThemeStore.getState().resolvedMode !== resolved.mode) useThemeStore.setState({ resolvedMode: resolved.mode });
 }
 
 /** Subscribe once outside React so persisted appearance is applied before the first paint. */

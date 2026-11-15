@@ -300,6 +300,39 @@ pub fn import_legacy(conn: &mut Connection, drafts: &[Draft]) -> Result<(), AppE
     tx.commit().map_err(|_| AppError::storage("草稿导入未完成"))
 }
 
+/// 放弃草稿：用户显式点击「放弃草稿」后删除本机草稿行（幂等；已进入发送流程的草稿拒绝删除）。
+pub fn delete(conn: &mut Connection, id: &str) -> Result<(), AppError> {
+    if !id.starts_with("draft-")
+        || id.len() <= 6
+        || id.len() > 100
+        || !id[6..]
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    {
+        return Err(AppError::invalid("草稿标识无效"));
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|_| AppError::storage("无法开始草稿删除"))?;
+    let in_outbox: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE draft_id = ?1)",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| AppError::storage("无法检查发送状态"))?;
+    if in_outbox {
+        return Err(AppError::conflict(
+            "这封草稿已进入发送流程，不能再放弃。",
+        ));
+    }
+    // 不存在的草稿视为已放弃（未保存过的新草稿没有本机行）。
+    tx.execute("DELETE FROM drafts WHERE id = ?1", [id])
+        .map_err(|_| AppError::storage("草稿未能从本机删除，请重试。"))?;
+    tx.commit()
+        .map_err(|_| AppError::storage("草稿删除未完成，请重试。"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +395,17 @@ mod tests {
         assert_eq!(list(&db).unwrap().len(), 1);
         assert_eq!(list(&db).unwrap()[0].account_id, "personal");
         assert_eq!(save(&mut db, &first, "real").unwrap_err().code, "conflict");
+    }
+
+    #[test]
+    fn delete_removes_draft_and_rejects_invalid_ids() {
+        let mut db = db();
+        save(&mut db, &draft(), "real").unwrap();
+        delete(&mut db, "draft-native").unwrap();
+        assert!(list(&db).unwrap().is_empty());
+        // 幂等：再次删除（草稿已不存在）仍成功。
+        delete(&mut db, "draft-native").unwrap();
+        assert_eq!(delete(&mut db, "not-a-draft").unwrap_err().code, "invalid");
     }
 
     #[test]
