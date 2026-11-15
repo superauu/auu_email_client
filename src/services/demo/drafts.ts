@@ -40,5 +40,5 @@ export function persistDraft(draft: MailDraft, options?: DraftSaveOptions): Mail
 /** Browser demo only: explicit discard removes the draft from the local overlay. */
 export function deletePersistedDraft(id: string): void {
   const existing = readPreference(KEY, validateDemoDrafts) ?? [];
-  writePreference(KEY, existing.filter(item => item.id !== id));
+  if (!writePreference(KEY, existing.filter(item => item.id !== id))) throw new Error('草稿未能删除，请保留当前内容后重试。');
 }

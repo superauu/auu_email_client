@@ -15,6 +15,10 @@ pub struct Draft {
     pub id: String,
     pub account_id: String,
     pub to: String,
+    #[serde(default)]
+    pub cc: String,
+    #[serde(default)]
+    pub bcc: String,
     pub subject: String,
     pub body_text: String,
     /// 撰写编辑器产出的 HTML 正文（写入时服务端消毒）；None = 纯文本草稿。
@@ -37,6 +41,8 @@ fn validate(draft: &Draft) -> Result<(), AppError> {
         || draft.account_id.is_empty()
         || draft.account_id.len() > 200
         || draft.to.encode_utf16().count() > 1000
+        || draft.cc.encode_utf16().count() > 1000
+        || draft.bcc.encode_utf16().count() > 1000
         || draft.subject.encode_utf16().count() > 1000
         || draft.body_text.encode_utf16().count() > 50_000
         || draft
@@ -122,12 +128,12 @@ fn write(conn: &Connection, draft: &Draft, previous_account_id: &str) -> Result<
         vec![&saved.to]
     })
     .map_err(|_| AppError::invalid("收件人格式无效"))?;
-    conn.execute("INSERT INTO drafts (id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+    conn.execute("INSERT INTO drafts (id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision, cc, bcc)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
       ON CONFLICT(id) DO UPDATE SET account_id = excluded.account_id, recipients_json = excluded.recipients_json,
       subject = excluded.subject, body_text = excluded.body_text, body_html = excluded.body_html, reply_to_id = excluded.reply_to_id,
-      updated_at = excluded.updated_at, revision = excluded.revision",
-      params![saved.id, saved.account_id, recipients, saved.subject, saved.body_text, saved.body_html.clone().unwrap_or_default(), saved.reply_to_id, saved.updated_at, saved.revision])
+      updated_at = excluded.updated_at, revision = excluded.revision, cc = excluded.cc, bcc = excluded.bcc",
+      params![saved.id, saved.account_id, recipients, saved.subject, saved.body_text, saved.body_html.clone().unwrap_or_default(), saved.reply_to_id, saved.updated_at, saved.revision, saved.cc, saved.bcc])
       .map_err(|_| AppError::storage("草稿未能写入本机，请保留当前内容后重试。"))?;
     Ok(saved)
 }
@@ -202,7 +208,7 @@ pub fn save(
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<MessageRow>, AppError> {
-    let mut statement = conn.prepare("SELECT id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision FROM drafts ORDER BY updated_at DESC, id DESC")
+    let mut statement = conn.prepare("SELECT id, account_id, recipients_json, subject, body_text, body_html, reply_to_id, updated_at, revision, cc, bcc FROM drafts ORDER BY updated_at DESC, id DESC")
         .map_err(|_| AppError::storage("无法读取本机草稿"))?;
     let drafts = statement
         .query_map([], |row| {
@@ -218,6 +224,8 @@ pub fn list(conn: &Connection) -> Result<Vec<MessageRow>, AppError> {
                 id: row.get(0)?,
                 account_id: row.get(1)?,
                 to: to.join(", "),
+                cc: row.get(9)?,
+                bcc: row.get(10)?,
                 subject: row.get(3)?,
                 body_text: row.get(4)?,
                 body_html: row.get(5)?,
@@ -322,9 +330,7 @@ pub fn delete(conn: &mut Connection, id: &str) -> Result<(), AppError> {
         )
         .map_err(|_| AppError::storage("无法检查发送状态"))?;
     if in_outbox {
-        return Err(AppError::conflict(
-            "这封草稿已进入发送流程，不能再放弃。",
-        ));
+        return Err(AppError::conflict("这封草稿已进入发送流程，不能再放弃。"));
     }
     // 不存在的草稿视为已放弃（未保存过的新草稿没有本机行）。
     tx.execute("DELETE FROM drafts WHERE id = ?1", [id])
@@ -350,6 +356,8 @@ mod tests {
             id: "draft-native".into(),
             account_id: "real".into(),
             to: "friend@example.test".into(),
+            cc: String::new(),
+            bcc: String::new(),
             subject: String::new(),
             body_text: "Local only".into(),
             body_html: None,
@@ -365,7 +373,10 @@ mod tests {
         let path = directory.path().join("mail.db");
         let mut db = crate::storage::initialize(&path).unwrap();
         db.execute_batch("INSERT INTO accounts (id,provider,email,display_name,created_at) VALUES ('real','imap','a@studio.example','Real','2026-11-11T00:00:00Z');").unwrap();
-        let message = save(&mut db, &draft(), "real").unwrap();
+        let mut input = draft();
+        input.cc = "copy@example.test".into();
+        input.bcc = "private@example.test".into();
+        let message = save(&mut db, &input, "real").unwrap();
         assert_eq!(message.from.email, "a@studio.example");
         assert_eq!(message.subject, "未命名草稿");
         drop(db);
@@ -374,6 +385,11 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].draft.as_ref().unwrap().subject, "");
         assert_eq!(restored[0].draft.as_ref().unwrap().revision, 1);
+        assert_eq!(restored[0].draft.as_ref().unwrap().cc, "copy@example.test");
+        assert_eq!(
+            restored[0].draft.as_ref().unwrap().bcc,
+            "private@example.test"
+        );
     }
 
     #[test]
@@ -470,5 +486,6 @@ mod tests {
         let restored = list(&db).unwrap().remove(0).draft.unwrap();
         assert_eq!(restored.revision, 1);
         assert_eq!(restored.body_text, "Existing body");
+        assert!(restored.cc.is_empty() && restored.bcc.is_empty());
     }
 }

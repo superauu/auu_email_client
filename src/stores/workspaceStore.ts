@@ -138,7 +138,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           snapshot.messages = [...messages.values()];
         }
         const query = { ...get().query };
-        if (query.accountId && !snapshot.accounts.some(account => account.id === query.accountId)) { query.accountId = null; query.folderId = null; }
+        if (query.accountId && !accountIds.has(query.accountId)) {
+          query.accountId = null; query.folderId = null; query.draftSource = null; query.mailbox = 'inbox'; query.labelId = null;
+        }
+        if (query.labelId && !snapshot.labels.some(label => label.id === query.labelId)) query.labelId = null;
         const visible = selectMessages(snapshot.messages, query);
         const selectedId = visible.some(message => message.id === get().selectedId) ? get().selectedId : visible[0]?.id ?? null;
         set({ ...snapshot, folders: snapshot.folders ?? [], query, selectedId, status: 'ready' });
@@ -151,6 +154,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const state = get();
     const query = { ...state.query, ...changes };
     if (changes.folderId === undefined && ('accountId' in changes || 'mailbox' in changes || 'labelId' in changes)) query.folderId = null;
+    if (changes.draftSource === undefined && ('accountId' in changes || 'mailbox' in changes || 'folderId' in changes || 'labelId' in changes)) query.draftSource = null;
     const visible = selectMessages(state.messages, query);
     set({ query, view: 'mail', selectedId: visible.some(m => m.id === state.selectedId) ? state.selectedId : visible[0]?.id ?? null });
   },
@@ -185,7 +189,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const message = await gateway.saveDraft(draft, options);
     if (!message.draft) throw new Error('草稿保存结果不完整，请保留内容后重试。');
     draftMutations += 1;
-    set(state => ({ messages: [message, ...state.messages.filter(m => m.id !== message.id)] }));
+    set(state => state.accounts.some(account => account.id === message.accountId)
+      ? { messages: [message, ...state.messages.filter(m => m.id !== message.id)] } : {});
     return message.draft;
   },
 }));

@@ -1404,6 +1404,8 @@ mod tests {
                     &mut conn,
                     &crate::drafts::Draft {
                         id: "draft-while-syncing".into(),
+                        cc: String::new(),
+                        bcc: String::new(),
                         account_id: "acc".into(),
                         to: String::new(),
                         subject: "Keep".into(),
@@ -1620,6 +1622,8 @@ mod tests {
                 &mut conn,
                 &crate::drafts::Draft {
                     id: "draft-multi-sync".into(),
+                    cc: String::new(),
+                    bcc: String::new(),
                     account_id: "acc2".into(),
                     to: String::new(),
                     subject: String::new(),

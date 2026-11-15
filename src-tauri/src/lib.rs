@@ -19,13 +19,13 @@ mod mail_store;
 mod mail_sync;
 mod mail_verify;
 mod message_changes;
-mod skins;
+mod outbox;
 mod pop3;
+mod skins;
 mod smtp_send;
 mod storage;
 mod sync_control;
 mod sync_scheduler;
-mod outbox;
 
 use error::AppError;
 use rusqlite::params;
@@ -82,7 +82,11 @@ fn mail_send_draft(
     revision: u32,
 ) -> Result<outbox::Entry, AppError> {
     let entry = {
-        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        let conn = db
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| AppError::storage("数据库忙"))?;
         outbox::enqueue(&conn, &draft_id, revision)?
     };
     scheduler.enqueue(std::slice::from_ref(&entry.account_id))?;
@@ -91,16 +95,21 @@ fn mail_send_draft(
 
 #[tauri::command]
 fn mail_outbox_list(db: State<'_, Db>) -> Result<Vec<outbox::Entry>, AppError> {
-    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
     outbox::list(&conn)
 }
 
 #[tauri::command]
-fn mail_outbox_cancel(
-    db: State<'_, Db>,
-    id: String,
-) -> Result<outbox::Entry, AppError> {
-    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+fn mail_outbox_cancel(db: State<'_, Db>, id: String) -> Result<outbox::Entry, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
     outbox::cancel(&conn, &id)
 }
 
@@ -113,7 +122,11 @@ fn mail_outbox_resolve(
     action: String,
 ) -> Result<outbox::Entry, AppError> {
     let entry = {
-        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        let conn = db
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| AppError::storage("数据库忙"))?;
         outbox::resolve(&conn, &id, &action)?
     };
     if entry.state == "queued" {
@@ -129,7 +142,11 @@ fn mail_retry_outbox(
     id: String,
 ) -> Result<outbox::Entry, AppError> {
     let entry = {
-        let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        let conn = db
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| AppError::storage("数据库忙"))?;
         outbox::retry(&conn, &id)?
     };
     scheduler.enqueue(std::slice::from_ref(&entry.account_id))?;
@@ -222,7 +239,11 @@ struct MailHtmlPayload {
 /// 事件完成状态持久化（mail_events.completed；重开数据库后保留）。
 #[tauri::command]
 fn mail_update_event(db: State<'_, Db>, id: String, completed: bool) -> Result<(), AppError> {
-    let conn = db.inner().0.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
     conn.execute(
         "UPDATE mail_events SET completed=?2 WHERE id=?1",
         params![id, i64::from(completed)],
@@ -253,17 +274,22 @@ fn mail_message_html(
 
 /// 回复 / 转发引用：消毒后的正文 HTML 片段，直接插入撰写编辑器。
 #[tauri::command]
-fn mail_message_html_fragment(
+async fn mail_message_html_fragment(
     db: State<'_, Db>,
     account_id: String,
     message_id: String,
 ) -> Result<String, AppError> {
-    let conn = db
-        .inner()
-        .0
-        .lock()
-        .map_err(|_| AppError::storage("数据库忙"))?;
-    mail_html::render_fragment(&conn, &account_id, &message_id)
+    let (root, key) = {
+        let conn = db
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| AppError::storage("数据库忙"))?;
+        mail_html::fragment_source(&conn, &account_id, &message_id)?
+    };
+    tauri::async_runtime::spawn_blocking(move || mail_html::render_fragment(&root, &key))
+        .await
+        .map_err(|_| AppError::invalid("无法准备原邮件引用"))?
 }
 
 /// 邮件内链接只在系统默认应用打开；scheme 白名单外的地址一律拒绝。
@@ -644,20 +670,19 @@ pub fn run() {
             let sync_db = conn.clone();
             // 调度 runner：同账号先处理 queued 发送（docs/SENDING.md），再执行同步；
             // 同步完成后核对 Sent 目录，命中则把 unknown 发送自动转为已发送。
-            let scheduler =
-                sync_scheduler::SyncScheduler::new(move |id| {
-                    let sends = outbox::run(&sync_db, id)?;
-                    let mut outcome = imap_jobs::run(&sync_db, id)?;
-                    {
-                        let conn = sync_db.lock().map_err(|_| AppError::storage("数据库忙"))?;
-                        outbox::resolve_unknown_after_sync(&conn)?;
-                    }
-                    if sends {
-                        outcome.refresh_needed = true;
-                    }
-                    Ok(outcome)
-                })
-                    .map_err(|error| std::io::Error::other(error.message))?;
+            let scheduler = sync_scheduler::SyncScheduler::new(move |id| {
+                let sends = outbox::run(&sync_db, id)?;
+                let mut outcome = imap_jobs::run(&sync_db, id)?;
+                {
+                    let conn = sync_db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+                    outbox::resolve_unknown_after_sync(&conn)?;
+                }
+                if sends {
+                    outcome.refresh_needed = true;
+                }
+                Ok(outcome)
+            })
+            .map_err(|error| std::io::Error::other(error.message))?;
             imap_jobs::spawn(conn.clone(), scheduler.clone())
                 .map_err(|error| std::io::Error::other(error.message))?;
             app.manage(scheduler);

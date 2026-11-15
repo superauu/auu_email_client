@@ -52,7 +52,7 @@ flowchart LR
 
 1. `main.tsx` 在 React 渲染前应用已保存的内置外观，并订阅系统明暗变化。
 2. 桌面 Rust 启动时创建应用数据 / 皮肤目录，执行数据库迁移（逐版本、单事务）。失败会中止启动；此阶段尚无专用启动恢复窗口。
-3. React 装配工作区，按运行环境选择 gateway：浏览器用演示 gateway；桌面用 `DesktopMailGateway`——先把演示数据幂等种子进 SQLite，再从 `mail_load_workspace` 与 `mail_page_messages` 分页读回。
+3. React 装配工作区，按运行环境选择 gateway：浏览器用演示 gateway；桌面用 `DesktopMailGateway`——从 `mail_load_workspace` 筛选非 demo 账号，再按真实 accountId 调用 `mail_page_messages` 分页读回；过滤旧演示草稿、目录、标签、事件与同步时间后才写入共享 store。没有真实账号时保持空工作区。正常加载不调用演示 seed / import IPC。
 4. `workspaceStore` 管理当前视图并串行提交每封邮件的已读 / 星标 / 归档；本机保存成功后更新投影，reload 保护期间的新修改。真实数据和离线回写意图在 Rust / SQLite；事件完成仍只在会话中。
 5. 皮肤独立经桌面命令扫描、前端严格校验，再作为语义 CSS 变量应用。
 
@@ -93,7 +93,7 @@ Rust 业务失败使用 `{ code, message, retryable }`；前端统一处理 unkn
 
 ```text
 应用数据目录/
-  mail.db                  SQLite v9，账号、邮件、草稿、意图、恢复检查点 / 指纹、持久请求 / 历史 / MODSEQ
+  mail.db                  SQLite v12，账号、邮件、草稿、意图、恢复检查点 / 指纹、持久请求 / 历史 / MODSEQ
   mail-cache/              完整原文哈希缓存 / 临时分块，512 MiB 配额
   mail.db-wal / -shm       SQLite 工作文件
   skins/<skin-id>/         用户安装皮肤
@@ -123,7 +123,7 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 
 ## 演示与真实环境
 
-演示账号只使用保留示例域名，不连接服务器。浏览器演示草稿和 UI 偏好用版本化 localStorage key；桌面草稿统一写 SQLite，已加入自动保存、revision 冲突核对、退出保护及最后保存版本恢复。旧 WebView 演示草稿一次性事务导入，保留原数据为备份，详见 DRAFTS。
+演示账号只使用保留示例域名，不连接服务器。浏览器演示草稿和 UI 偏好用版本化 localStorage key；桌面草稿统一写 SQLite，已加入自动保存、revision 冲突核对、退出保护及最后保存版本恢复。桌面不再自动导入旧 WebView 演示草稿，历史 SQLite 演示行与 localStorage 备份原样保留但不展示；浏览器与桌面真实工作区隔离，详见 DRAFTS 与 NAVIGATION。
 
 密码、refresh token、AI Key 不进入这些存储；已建立的凭据服务统一走系统 keyring。邮件正文与诊断日志分离，日志默认不输出正文、主题、收件人或令牌。
 
@@ -136,6 +136,7 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 - v9 追加 original_remote_id / raw_cache_key / attachments_json / remote_missing、auto_continue、imap_settings / folder_state / history / sync_requests / body_requests / modseq；不重写旧迁移。原连接邮件重配后标缺失，遇相同远端 ID 退休旧存储键并保留旧定位 / 本机 ID，不能直接 UPSERT 套用旧修改。
 - POP3 收信（provider 'pop3'）：`pop3.rs` 协议 + 同步；UIDL 集合游标存 `sync_states`（scope `pop3:inbox`，无新迁移）；调度 runner 按 `accounts.provider` 分支；消息经 `parse_raw` 复用解析与原文缓存，`mail_sync::commit_pop3` 提交（单收件箱，UIDL 已见集合判重，完整原文验哈希置 verified 位）。POP3 无标记回写（readStateSync=false），SMTP 发送与密码账号一致。
 - v11 为 drafts 补 body_html（撰写编辑器产出，写入时经 compose 专用 ammonia 配置消毒——比收件消毒更严：剥 <style> 块 / img / data: URI；上限 200k UTF-16）。发送组装在有 HTML 时输出 multipart/alternative（纯文本 + HTML 两个 base64 部分）。
+- v12 为 drafts 追加 cc / bcc（默认空字符串）；MailDraft 同步增加可选字段。发送快照合并三类信封地址，MIME 头不包含密送。交互与边界见 COMPOSING。
 - v10 为 outbox 表补列（message_id / attempts / last_error / queued_at / resolved_by；状态机自 v1 已存在）。发送经账号队列（runner 先处理 queued 发送再同步），Message-ID 一次生成全程复用，DATA 终点号后的不明确结果一律 unknown 且不自动重试；启动恢复 sending → unknown；同步提交后按 Sent 目录 Message-ID 命中把 unknown 转为已发送。capabilities 含 send（仅收信账号与 Microsoft 为 false）。
 
 新增 IPC：mail_imap_settings(accountId)、mail_save_imap_settings(accountId, settings)、mail_request_body(accountId, messageId, revision)、mail_export_attachment(accountId, messageId, index)、mail_account_config(id)、mail_oauth_start(account, config)、mail_oauth_status(flowId)、mail_oauth_cancel(flowId)、mail_message_html(accountId, messageId, allowRemoteImages)（返回消毒后的沙箱 srcdoc；缓存缺失 / 账号不匹配报错，前端回退纯文本）、mail_message_html_fragment(accountId, messageId)（compose 严格消毒的正文片段，供回复 / 转发引用进编辑器）、open_external(url)（scheme 白名单 http/https/mailto，经系统默认应用打开）、mail_send_draft(draftId, revision)、mail_outbox_list / mail_outbox_cancel / mail_outbox_resolve(id, action) / mail_retry_outbox(id)（outbox 条目见 domain/outbox.ts）。返回类型见 domain/imap.ts、domain/oauth.ts 和 platform/desktop.ts；附件返回 bool 区分用户取消，OAuth 阶段不能当作已保存。请求恢复增加 auto-continue，完整确认契约不变。

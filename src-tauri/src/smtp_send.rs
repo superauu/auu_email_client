@@ -18,12 +18,18 @@ pub(crate) enum SendAuth<'a> {
 }
 
 fn unknown(message: String) -> AppError {
-    AppError { code: "unknown", message, retryable: false }
+    AppError {
+        code: "unknown",
+        message,
+        retryable: false,
+    }
 }
 
 fn io_connect(host: &str, port: u16) -> Result<TcpStream, AppError> {
     let tcp = TcpStream::connect((host, port)).map_err(|error| {
-        AppError::network(format!("无法连接到 {host}:{port}，请检查地址与端口（{error}）"))
+        AppError::network(format!(
+            "无法连接到 {host}:{port}，请检查地址与端口（{error}）"
+        ))
     })?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .and_then(|_| tcp.set_write_timeout(Some(IO_TIMEOUT)))
@@ -100,7 +106,10 @@ fn dot_stuff(raw: &[u8]) -> Vec<u8> {
 fn auth_line(auth: &SendAuth<'_>) -> String {
     match auth {
         SendAuth::Plain { user, secret } => {
-            format!("AUTH PLAIN {}", BASE64.encode(format!("\x00{user}\x00{secret}")))
+            format!(
+                "AUTH PLAIN {}",
+                BASE64.encode(format!("\x00{user}\x00{secret}"))
+            )
         }
         SendAuth::Xoauth2 { user, token } => format!(
             "AUTH XOAUTH2 {}",
@@ -222,7 +231,10 @@ mod tests {
     }
     impl MockStream {
         fn new(script: &str) -> Self {
-            Self { reads: Cursor::new(script.as_bytes().to_vec()), writes: Vec::new() }
+            Self {
+                reads: Cursor::new(script.as_bytes().to_vec()),
+                writes: Vec::new(),
+            }
         }
     }
     impl Read for MockStream {
@@ -240,7 +252,8 @@ mod tests {
         }
     }
 
-    const GREET: &str = "220 mail.example.test ESMTP\r\n250-AUTH PLAIN XOAUTH2\r\n250 SIZE 35882577\r\n";
+    const GREET: &str =
+        "220 mail.example.test ESMTP\r\n250-AUTH PLAIN XOAUTH2\r\n250 SIZE 35882577\r\n";
 
     fn plain<'a>(user: &'a str, secret: &'a str) -> SendAuth<'a> {
         SendAuth::Plain { user, secret }
@@ -283,13 +296,16 @@ mod tests {
         assert_ne!(error.code, "unknown");
         assert!(error.message.contains("gone@example.test"));
         // 失败发生在 DATA 之前：命令日志里没有终点号。
-        assert!(!String::from_utf8(stream.writes).unwrap().ends_with("\r\n.\r\n"));
+        assert!(!String::from_utf8(stream.writes)
+            .unwrap()
+            .ends_with("\r\n.\r\n"));
     }
 
     #[test]
     fn connection_drop_after_final_dot_is_unknown_not_retryable() {
         // 服务器读完正文后直接断开：点号已写出，投递结果无法确认。
-        let mut stream = MockStream::new(&format!("{GREET}235 ok\r\n250 ok\r\n250 ok\r\n354 go\r\n"));
+        let mut stream =
+            MockStream::new(&format!("{GREET}235 ok\r\n250 ok\r\n250 ok\r\n354 go\r\n"));
         let error = send_session(
             &mut stream,
             &plain("u@example.test", "s"),
@@ -300,12 +316,16 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, "unknown");
         assert!(!error.retryable);
-        assert!(String::from_utf8(stream.writes).unwrap().ends_with("\r\n.\r\n"));
+        assert!(String::from_utf8(stream.writes)
+            .unwrap()
+            .ends_with("\r\n.\r\n"));
     }
 
     #[test]
     fn data_command_rejection_is_clear_failure() {
-        let mut stream = MockStream::new(&format!("{GREET}235 ok\r\n250 ok\r\n250 ok\r\n554 policy\r\n"));
+        let mut stream = MockStream::new(&format!(
+            "{GREET}235 ok\r\n250 ok\r\n250 ok\r\n554 policy\r\n"
+        ));
         let error = send_session(
             &mut stream,
             &plain("u@example.test", "s"),
@@ -319,14 +339,15 @@ mod tests {
 
     #[test]
     fn xoauth2_error_challenge_ends_in_auth_error_without_echoing_token() {
-        let script = format!(
-            "{GREET}334 eyJzdGF0dXMiOiI0MDEifQ==\r\n535 bad token\r\n"
-        );
+        let script = format!("{GREET}334 eyJzdGF0dXMiOiI0MDEifQ==\r\n535 bad token\r\n");
         let mut stream = MockStream::new(&script);
         let token = "super-secret-access-token";
         let error = send_session(
             &mut stream,
-            &SendAuth::Xoauth2 { user: "u@example.test", token },
+            &SendAuth::Xoauth2 {
+                user: "u@example.test",
+                token,
+            },
             "u@example.test",
             &["r@example.test".into()],
             b"body",
@@ -347,7 +368,10 @@ mod tests {
         ));
         send_session(
             &mut stream,
-            &SendAuth::Xoauth2 { user: "u@example.test", token: "tok" },
+            &SendAuth::Xoauth2 {
+                user: "u@example.test",
+                token: "tok",
+            },
             "u@example.test",
             &["r@example.test".into()],
             b"body",
@@ -371,7 +395,8 @@ mod tests {
     fn starttls_requires_capability_before_upgrade() {
         // 独立验证 open() 的 STARTTLS 分支无法用 MockStream（需要真实 TLS 握手）；
         // 能力缺失的 fail-closed 行为在这里覆盖脚本部分。
-        let mut stream = MockStream::new("220 mail.example.test ESMTP\r\n250-AUTH PLAIN\r\n250 SIZE\r\n");
+        let mut stream =
+            MockStream::new("220 mail.example.test ESMTP\r\n250-AUTH PLAIN\r\n250 SIZE\r\n");
         let (code, _) = crate::mail_verify::read_response(&mut stream).unwrap();
         assert_eq!(code, 220);
         crate::mail_verify::write_command(&mut stream, &format!("EHLO {EHLO_NAME}")).unwrap();

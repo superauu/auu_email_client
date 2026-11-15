@@ -37,7 +37,8 @@ export class DraftSession {
     this.state = { ...this.state, ...changes };
     for (const listener of this.listeners) listener();
   }
-  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'subject' | 'bodyText' | 'bodyHtml'>>) {
+  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'cc' | 'bcc' | 'subject' | 'bodyText' | 'bodyHtml'>>) {
+    if (Object.entries(changes).every(([key, value]) => this.state.draft[key as keyof MailDraft] === value)) return;
     this.editVersion += 1;
     this.publish({ draft: { ...this.state.draft, ...changes }, dirty: true, saved: false, error: null });
     this.schedule();
@@ -46,6 +47,7 @@ export class DraftSession {
   pause() { this.paused = true; this.cancelScheduledSave(); }
   resume() { this.paused = false; this.schedule(); }
   needsProtection = () => this.state.dirty || this.state.saving;
+  async waitForSave() { await this.inFlight; }
   private schedule() {
     this.cancelScheduledSave();
     if (!this.paused && this.state.dirty && !this.inFlight) {

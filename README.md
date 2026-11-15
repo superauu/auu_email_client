@@ -2,7 +2,7 @@
 
 一款以漂亮界面、独立皮肤和多邮箱统一管理为中心的本地桌面邮件客户端。技术栈：Tauri 2 / Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、Radix UI、Zustand、SQLite。
 
-**当前包含演示工作区与桌面 IMAP / POP3 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）、富文本撰写（右栏工作区 + Word 式工具栏）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史（POP3 为单一收件箱 + UIDL 增量）、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权与真实发送均已验收；POP3、AI 和日历仍待接入。**
+**当前包含演示工作区与桌面 IMAP / POP3 收信 / 同步、SMTP 发送队列（outbox，结果不明不自动重发）、Outlook 式撰写（地址标签 / 抄送密送 / 顶部格式栏）：TLS / STARTTLS、系统凭据、按提供商卡片添加账号（Gmail 内置 OAuth 应用标识，Office 即将支持）、多目录 / 历史（POP3 为单一收件箱 + UIDL 增量）、持久调度 / 停止、IDLE / CONDSTORE、离线标记 / 归档恢复、完整原文缓存与附件另存为。代码与脚本检查通过，真实 Gmail 授权与真实发送均已验收；POP3、AI 和日历仍待接入。**
 
 ## 运行
 
@@ -13,6 +13,8 @@ npm ci
 npm run dev             # http://127.0.0.1:7317，浏览器预览
 npm run desktop:dev     # Tauri 桌面窗口
 ```
+
+桌面版默认只显示你添加的邮箱，没有账号时显示添加入口；旧演示数据保留但不混入邮件、搜索、标签、待办和统计。浏览器预览独立使用演示数据。
 
 `npm run dev` 和 `npm run desktop:dev` 二选一启动；桌面命令会自行启动 Vite。浏览器不提供本机目录扫描、打开目录或 SQLite；不会静默模拟这些能力。
 
@@ -26,11 +28,11 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 
 ## 已有基础
 
-- 邮件工作区：统一收件箱、三账号切换、搜索、标签筛选、阅读、星标、归档、撰写和本机演示草稿。
+- 邮件工作区：常用快捷入口、可折叠账号目录树、目录固定 / 重启恢复、统一收件箱、搜索、标签筛选、阅读、星标、归档与撰写；本机 / 服务器草稿独立；桌面只显示你添加的邮箱，统一入口只汇总真实账号。
 - 事件视图：演示待办完成状态、跳转关联邮件。
 - 皮肤：Paper / Graphite / Linen；明暗 / 跟随系统；桌面扫描独立皮肤包、坏包隔离、缺失皮肤回退。
 - UI：自定义窗口栏、导航栏与邮件列表宽度可调（拖拽、方向键、双击复位）、窄窗口阅读切换、可访问弹窗、空状态、错误边界。
-- Rust：SQLite v1–v9 迁移、FTS5、Windows 凭据服务、IMAP 分批增量同步、持久草稿、离线状态意图与受限皮肤扫描。
+- Rust：SQLite v1–v12 迁移、FTS5、Windows 凭据服务、IMAP 分批增量同步、持久草稿、离线状态意图与受限皮肤扫描。
 - 同步调度：后端 FIFO，最多两账号并行，同账号请求合并；同步全部、逐账号进度、排队取消 / 运行中停止、持久请求 / 退避与重启恢复。网络等待与正文解析不占用数据库锁。
 - 草稿：停止输入 800ms 后自动保存，关闭撰写面或窗口时先自动保存（失败才拦截并保留内容），显式「放弃草稿」按钮删除草稿；支持手动保存、版本冲突检测。
 - 邮件状态：本机保存成功后更新界面；下一次手动同步或已开启的自动同步回写已读与星标，归档使用 UID MOVE。冲突保留本机，归档结果不明时禁止盲目重试，阅读区提供状态与处理入口。
@@ -41,7 +43,7 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 - 授权：添加账号按提供商卡片选择（Gmail、QQ、163、其他 IMAP；Office 即将支持），Gmail 公共应用 Client ID 已内置、系统浏览器 PKCE / loopback / XOAUTH2、keyring 刷新与重新授权，密码账号可原地重配，详见 OAuth 配置文档。
 - 工程：类型契约、检查命令、浏览器回归测试、Windows 原生 CI。
 
-**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿、邮件状态与事件完成状态存 localStorage（桌面版事件完成状态存 SQLite）。撰写在右栏工作区完成（Outlook 式），内置富文本工具栏（加粗 / 标题 / 列表 / 引用 / 颜色 / 链接等，零依赖实现），HTML 经服务端消毒后随 multipart/alternative 发送；已接入 SMTP 发送队列（outbox：结果不明不自动重发，可经 Sent 目录核对或手动确认）；尚未实现撰写附件与图片。收到的附件可从完整原文另存为。收到的邮件支持 HTML 沙箱渲染：正文从已验证的完整原文缓存按需提取并消毒，在唯一源沙箱 iframe 中显示；远程图片默认拦截、每封可手动允许，缓存被淘汰时回退纯文本（链接可点击，统一经系统应用打开）。
+**保存边界：**外观与分栏宽度保存在 localStorage；桌面账号、邮件、草稿及已读 / 星标 / 归档的本地修改存 SQLite，密码和 OAuth 刷新令牌存 Windows 凭据管理器，access token 仅内存；完整原文缓存有 512 MiB 配额。浏览器仅提供演示数据，演示草稿、邮件状态与事件完成状态存 localStorage（桌面版事件完成状态存 SQLite）。撰写在右栏工作区完成（Outlook 式），支持收件人标签、账号内联系人建议、抄送 / 密送和展开编辑；正文上方富文本工具栏提供加粗 / 标题 / 列表 / 引用 / 颜色 / 链接等（前端无新增编辑器依赖），HTML 经服务端消毒后随 multipart/alternative 发送；已接入 SMTP 发送队列（outbox：结果不明不自动重发，可经 Sent 目录核对或手动确认）；尚未实现撰写附件与图片。收到的附件可从完整原文另存为。收到的邮件支持 HTML 沙箱渲染：正文从已验证的完整原文缓存按需提取并消毒，在唯一源沙箱 iframe 中显示；远程图片默认拦截、每封可手动允许，缓存被淘汰时回退纯文本（链接可点击，统一经系统应用打开）。
 
 ## 开发入口
 
@@ -54,6 +56,8 @@ npm run desktop:build   # 当前默认生成 Windows NSIS 安装包，未配置�
 | [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md) | 界面、组件、排版、交互和可访问性约定 |
 | [docs/SKIN_SPEC.md](docs/SKIN_SPEC.md) | 可实际使用的 v1 皮肤规范与安装步骤 |
 | [docs/PROVIDER_CONTRACTS.md](docs/PROVIDER_CONTRACTS.md) | 多账号、协议、OAuth、标签和 AI 接入约定 |
+| [docs/NAVIGATION.md](docs/NAVIGATION.md) | 常用入口、账号目录树、目录映射、草稿区分与导航偏好 |
+| [docs/COMPOSING.md](docs/COMPOSING.md) | Outlook 式撰写、收件人编辑、抄送密送与验证边界 |
 | [docs/DRAFTS.md](docs/DRAFTS.md) | 草稿持久化、自动保存、冲突、迁移和退出保护 |
 | [docs/SYNCHRONIZATION.md](docs/SYNCHRONIZATION.md) | 同步锁边界、多账号队列、批次提交、取消和回归测试 |
 | [docs/MESSAGE_CHANGES.md](docs/MESSAGE_CHANGES.md) | 邮件状态持久化、离线意图、IMAP 回写与冲突处理 |

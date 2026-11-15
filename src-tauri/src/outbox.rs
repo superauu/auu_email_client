@@ -60,7 +60,11 @@ pub(crate) fn list(conn: &Connection) -> Result<Vec<Entry>, AppError> {
 /// 收件人语法：逗号分隔的纯地址（local@domain），拒绝空白、控制字符与多余 @。
 pub(crate) fn parse_recipients(raw: &str) -> Result<Vec<String>, AppError> {
     let mut recipients = Vec::new();
-    for address in raw.split(',').map(str::trim).filter(|item| !item.is_empty()) {
+    for address in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
         let well_formed = address.len() <= 320
             && !address.chars().any(|c| c.is_whitespace() || c.is_control())
             && address.matches('@').count() == 1;
@@ -68,10 +72,22 @@ pub(crate) fn parse_recipients(raw: &str) -> Result<Vec<String>, AppError> {
             return Err(AppError::invalid(format!("收件人地址无效：{address}")));
         };
         if local.is_empty()
+            || !local
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".!#$%&'*+/=?^_`{|}~-".contains(&c))
             || domain.is_empty()
+            || !domain
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
             || !domain.contains('.')
             || domain.starts_with('.')
             || domain.ends_with('.')
+            || domain.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+            })
         {
             return Err(AppError::invalid(format!("收件人地址无效：{address}")));
         }
@@ -81,6 +97,55 @@ pub(crate) fn parse_recipients(raw: &str) -> Result<Vec<String>, AppError> {
         return Err(AppError::invalid("请填写至少一个收件人"));
     }
     Ok(recipients)
+}
+
+#[derive(Default)]
+struct Recipients {
+    to: Vec<String>,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+}
+
+impl Recipients {
+    fn envelope(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        self.to
+            .iter()
+            .chain(&self.cc)
+            .chain(&self.bcc)
+            .filter(|address| seen.insert(address.to_ascii_lowercase()))
+            .cloned()
+            .collect()
+    }
+}
+
+fn draft_recipients(conn: &Connection, draft_id: &str) -> Result<Recipients, AppError> {
+    let (to, cc, bcc): (String, String, String) = conn
+        .query_row(
+            "SELECT recipients_json, cc, bcc FROM drafts WHERE id = ?1",
+            [draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| AppError::storage("无法读取草稿收件人"))?;
+    let to = serde_json::from_str::<Vec<String>>(&to)
+        .map_err(|_| AppError::storage("草稿收件人数据损坏"))?
+        .join(", ");
+    let optional = |raw: &str| {
+        if raw.trim().is_empty() {
+            Ok(Vec::new())
+        } else {
+            parse_recipients(raw)
+        }
+    };
+    let result = Recipients {
+        to: optional(&to)?,
+        cc: optional(&cc)?,
+        bcc: optional(&bcc)?,
+    };
+    if result.envelope().is_empty() {
+        return Err(AppError::invalid("请填写至少一个收件人"));
+    }
+    Ok(result)
 }
 
 /// RFC2047-B：非 ASCII 文本按字符累积切块，单个 encoded-word 连同标记不超过 75 字符，
@@ -126,13 +191,17 @@ fn fold_base64(data: &str) -> String {
 fn assemble(
     from_name: &str,
     from_email: &str,
-    recipients: &[String],
+    recipients: &Recipients,
     subject: &str,
     body_text: &str,
     body_html: Option<&str>,
     message_id: &str,
 ) -> String {
-    let clean = |text: &str| text.chars().map(|c| if c == '\r' || c == '\n' { ' ' } else { c }).collect::<String>();
+    let clean = |text: &str| {
+        text.chars()
+            .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+            .collect::<String>()
+    };
     let safe_name = clean(from_name).trim().to_string();
     let from = if safe_name.is_empty() {
         format!("From: <{from_email}>")
@@ -162,13 +231,23 @@ fn assemble(
             )
         }
         None => (
-            "Content-Type: text/plain; charset=utf-8\r\n".into(),
-            format!("{text_part}\r\n"),
+            "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n"
+                .into(),
+            format!("{}\r\n", fold_base64(&BASE64.encode(body_text.as_bytes()))),
         ),
     };
+    let to = if recipients.to.is_empty() {
+        "undisclosed-recipients:;".into()
+    } else {
+        recipients.to.join(",\r\n ")
+    };
+    let cc = if recipients.cc.is_empty() {
+        String::new()
+    } else {
+        format!("Cc: {}\r\n", recipients.cc.join(",\r\n "))
+    };
     format!(
-        "{from}\r\nTo: {}\r\n{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\n{content_headers}\r\n{body}",
-        recipients.join(", "),
+        "{from}\r\nTo: {to}\r\n{cc}{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\n{content_headers}\r\n{body}",
         Utc::now().to_rfc2822(),
     )
 }
@@ -191,17 +270,13 @@ pub(crate) fn enqueue(conn: &Connection, draft_id: &str, revision: u32) -> Resul
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, stored_revision, recipients_json, _, _)) = draft else {
+    let Some((_, stored_revision, _, _, _)) = draft else {
         return Err(AppError::invalid("草稿不存在"));
     };
     if stored_revision != revision {
         return Err(AppError::conflict("草稿已被修改，请保存后重新发送"));
     }
-    parse_recipients(
-        &serde_json::from_str::<Vec<String>>(&recipients_json)
-            .map(|items| items.join(", "))
-            .map_err(|_| AppError::storage("草稿收件人数据损坏"))?,
-    )?;
+    draft_recipients(conn, draft_id)?;
     let blocked: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM outbox WHERE draft_id = ?1)",
@@ -226,10 +301,16 @@ pub(crate) fn enqueue(conn: &Connection, draft_id: &str, revision: u32) -> Resul
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器，也不能发送邮件"));
     }
-    let google_oauth = profile.get("oauth").and_then(|oauth| oauth.get("provider")).and_then(|provider| provider.as_str()) == Some("google");
+    let google_oauth = profile
+        .get("oauth")
+        .and_then(|oauth| oauth.get("provider"))
+        .and_then(|provider| provider.as_str())
+        == Some("google");
     // Google OAuth 发送走 smtp.gmail.com，不受历史「仅收信」标记限制（OAuth 曾默认只收信）。
     if !google_oauth && profile["receiveOnly"].as_bool().unwrap_or(false) {
-        return Err(AppError::invalid("仅收信账号不支持发送，请使用完整 SMTP 账号"));
+        return Err(AppError::invalid(
+            "仅收信账号不支持发送，请使用完整 SMTP 账号",
+        ));
     }
     if profile["smtpHost"].as_str().unwrap_or("").trim().is_empty() && !google_oauth {
         return Err(AppError::invalid("账号未配置 SMTP 服务器，无法发送"));
@@ -273,7 +354,7 @@ struct SendJob {
     subject: String,
     body_text: String,
     body_html: String,
-    recipients: Vec<String>,
+    recipients: Recipients,
 }
 
 /// 短锁快照：取下一个 queued 任务 + 账号 / 草稿信息，并标记 sending。
@@ -312,13 +393,10 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, recipients_json, subject, body_text, body_html)) = draft else {
+    let Some((_, _, subject, body_text, body_html)) = draft else {
         return Err(AppError::invalid("草稿已不存在，无法发送"));
     };
-    let recipients: Vec<String> = serde_json::from_str(&recipients_json)
-        .map(|raw: Vec<String>| raw.join(", "))
-        .map_err(|_| AppError::storage("草稿收件人数据损坏"))?
-        .pipe(|raw| parse_recipients(&raw))?;
+    let recipients = draft_recipients(conn, &row.draft_id)?;
     conn.execute(
         "UPDATE outbox SET state = 'sending', attempts = attempts + 1, updated_at = ?2 WHERE id = ?1 AND state = 'queued'",
         params![row.id, now()],
@@ -331,7 +409,11 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
         generation,
         from_name: display_name,
         from_email,
-        smtp_host: profile["smtpHost"].as_str().unwrap_or("").trim().to_string(),
+        smtp_host: profile["smtpHost"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
         smtp_port: profile["smtpPort"].as_u64().unwrap_or(465) as u16,
         auth_user: profile["authUser"].as_str().unwrap_or("").to_string(),
         oauth: profile.get("oauth").and_then(|value| {
@@ -348,7 +430,9 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
 
 /// Google OAuth 空 SMTP 端口时默认 465 TLS。
 fn smtp_port(job: &SendJob, smtp_host: &str) -> u16 {
-    if job.smtp_port == 0 || (job.smtp_host.is_empty() && smtp_host == "smtp.gmail.com" && job.smtp_port != 587) {
+    if job.smtp_port == 0
+        || (job.smtp_host.is_empty() && smtp_host == "smtp.gmail.com" && job.smtp_port != 587)
+    {
         465
     } else {
         job.smtp_port
@@ -360,7 +444,11 @@ fn now() -> String {
 }
 
 /// 短事务写终态；行已被并发改写（重启恢复等）时保持现状。
-fn finish(conn: &Connection, entry_id: &str, result: &Result<(), AppError>) -> Result<(), AppError> {
+fn finish(
+    conn: &Connection,
+    entry_id: &str,
+    result: &Result<(), AppError>,
+) -> Result<(), AppError> {
     let (state, error) = match result {
         Ok(()) => ("sent", None),
         Err(error) if error.code == "unknown" => ("unknown", Some(error.message.clone())),
@@ -376,12 +464,17 @@ fn finish(conn: &Connection, entry_id: &str, result: &Result<(), AppError>) -> R
 
 /// 锁外投递：凭据读取与 SMTP 会话都不持有 DB 锁。
 fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppError> {
-    let google_oauth = matches!(&job.oauth, Some(config) if config.provider == mail_oauth::Provider::Google);
+    let google_oauth =
+        matches!(&job.oauth, Some(config) if config.provider == mail_oauth::Provider::Google);
     if job.smtp_host.is_empty() && !google_oauth {
         return Err(AppError::invalid("账号未配置 SMTP 服务器，无法发送"));
     }
     // Google OAuth 账号固定走 smtp.gmail.com（scope https://mail.google.com/ 覆盖 SMTP）。
-    let smtp_host = if job.smtp_host.is_empty() { "smtp.gmail.com".to_string() } else { job.smtp_host.clone() };
+    let smtp_host = if job.smtp_host.is_empty() {
+        "smtp.gmail.com".to_string()
+    } else {
+        job.smtp_host.clone()
+    };
     let security = if smtp_port(job, &smtp_host) == 587 {
         imap_transport::Security::Starttls
     } else {
@@ -412,7 +505,9 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
                 && !job.smtp_host.is_empty()
                 && !job.smtp_host.eq_ignore_ascii_case("smtp.gmail.com")
             {
-                return Err(AppError::invalid("Google OAuth 账号只能使用 smtp.gmail.com 发送"));
+                return Err(AppError::invalid(
+                    "Google OAuth 账号只能使用 smtp.gmail.com 发送",
+                ));
             }
             PreparedAuth::Xoauth2(mail_oauth::access(
                 db,
@@ -427,10 +522,22 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
         })?),
     };
     let auth = match &prepared {
-        PreparedAuth::Plain(secret) => smtp_send::SendAuth::Plain { user: &job.auth_user, secret },
-        PreparedAuth::Xoauth2(token) => smtp_send::SendAuth::Xoauth2 { user: &job.auth_user, token },
+        PreparedAuth::Plain(secret) => smtp_send::SendAuth::Plain {
+            user: &job.auth_user,
+            secret,
+        },
+        PreparedAuth::Xoauth2(token) => smtp_send::SendAuth::Xoauth2 {
+            user: &job.auth_user,
+            token,
+        },
     };
-    smtp_send::send_session(stream, &auth, &job.from_email, &job.recipients, raw.as_bytes())
+    smtp_send::send_session(
+        stream,
+        &auth,
+        &job.from_email,
+        &job.recipients.envelope(),
+        raw.as_bytes(),
+    )
 }
 
 pub(crate) fn run(db: &crate::mail_sync::SharedDb, account_id: &str) -> Result<bool, AppError> {
@@ -538,7 +645,10 @@ pub(crate) fn cancel(conn: &Connection, entry_id: &str) -> Result<Entry, AppErro
     // 仅排队中可取消：取回条目后删除，草稿解除占用恢复可编辑。
     let entry = current(conn, entry_id, "queued")?;
     let deleted = conn
-        .execute("DELETE FROM outbox WHERE id = ?1 AND state = 'queued'", params![entry_id])
+        .execute(
+            "DELETE FROM outbox WHERE id = ?1 AND state = 'queued'",
+            params![entry_id],
+        )
         .map_err(|_| AppError::storage("无法取消发送任务"))?;
     if deleted == 0 {
         return Err(AppError::conflict("该任务已开始发送或已完成，不能取消"));
@@ -561,13 +671,6 @@ fn current(conn: &Connection, entry_id: &str, expected: &str) -> Result<Entry, A
     }
     Ok(entry)
 }
-
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
 
 #[cfg(test)]
 mod tests {
@@ -625,8 +728,15 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(enqueue(&conn, "draft-1", 3).unwrap_err().message, "Microsoft 账号尚未授权 SMTP.Send，发送暂不可用");
-        conn.execute("UPDATE drafts SET recipients_json = '[\"not-an-address\"]'", []).unwrap();
+        assert_eq!(
+            enqueue(&conn, "draft-1", 3).unwrap_err().message,
+            "Microsoft 账号尚未授权 SMTP.Send，发送暂不可用"
+        );
+        conn.execute(
+            "UPDATE drafts SET recipients_json = '[\"not-an-address\"]'",
+            [],
+        )
+        .unwrap();
         assert_eq!(enqueue(&conn, "draft-1", 3).unwrap_err().code, "invalid");
     }
 
@@ -664,7 +774,11 @@ mod tests {
         assert_eq!(entries[0].attempts, 1);
         // 草稿仍被 outbox 占用（drafts::write 的守卫覆盖），不会被意外改写。
         let locked: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE draft_id = 'draft-1')", [], |r| r.get(0))
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox WHERE draft_id = 'draft-1')",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(locked);
     }
@@ -673,21 +787,33 @@ mod tests {
     fn finish_maps_result_codes_to_states() {
         let conn = db();
         enqueue(&conn, "draft-1", 3).unwrap();
-        conn.execute("UPDATE outbox SET state = 'sending', attempts = 1", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'sending', attempts = 1", [])
+            .unwrap();
         finish(&conn, &list(&conn).unwrap()[0].id, &Ok(())).unwrap();
         assert_eq!(list(&conn).unwrap()[0].state, "sent");
-        conn.execute("UPDATE outbox SET state = 'sending'", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'sending'", [])
+            .unwrap();
         finish(
             &conn,
             &list(&conn).unwrap()[0].id,
-            &Err(AppError { code: "unknown", message: "未确认".into(), retryable: false }),
+            &Err(AppError {
+                code: "unknown",
+                message: "未确认".into(),
+                retryable: false,
+            }),
         )
         .unwrap();
         let entry = &list(&conn).unwrap()[0];
         assert_eq!(entry.state, "unknown");
         assert_eq!(entry.last_error.as_deref(), Some("未确认"));
-        conn.execute("UPDATE outbox SET state = 'sending'", []).unwrap();
-        finish(&conn, &list(&conn).unwrap()[0].id, &Err(AppError::invalid("拒绝"))).unwrap();
+        conn.execute("UPDATE outbox SET state = 'sending'", [])
+            .unwrap();
+        finish(
+            &conn,
+            &list(&conn).unwrap()[0].id,
+            &Err(AppError::invalid("拒绝")),
+        )
+        .unwrap();
         assert_eq!(list(&conn).unwrap()[0].state, "failed");
     }
 
@@ -695,7 +821,8 @@ mod tests {
     fn recover_turns_interrupted_sending_into_unknown() {
         let conn = db();
         enqueue(&conn, "draft-1", 3).unwrap();
-        conn.execute("UPDATE outbox SET state = 'sending'", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'sending'", [])
+            .unwrap();
         recover(&conn).unwrap();
         let entry = &list(&conn).unwrap()[0];
         assert_eq!(entry.state, "unknown");
@@ -709,7 +836,8 @@ mod tests {
         let conn = db();
         enqueue(&conn, "draft-1", 3).unwrap();
         let message_id = list(&conn).unwrap()[0].message_id.clone().unwrap();
-        conn.execute("UPDATE outbox SET state = 'unknown'", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'unknown'", [])
+            .unwrap();
         // 没有命中时保持 unknown。
         resolve_unknown_after_sync(&conn).unwrap();
         assert_eq!(list(&conn).unwrap()[0].state, "unknown");
@@ -742,7 +870,10 @@ mod tests {
         let raw = assemble(
             "测试发件人",
             "me@example.test",
-            &["friend@example.test".into()],
+            &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
             "你好 · 收据",
             "第一行\n第二行",
             None,
@@ -753,7 +884,9 @@ mod tests {
         assert!(raw.contains("Subject: =?utf-8?B?"));
         assert!(raw.contains("Date: "));
         assert!(raw.contains("Message-ID: <abc@auumail.local>"));
-        assert!(raw.contains("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"));
+        assert!(raw.contains(
+            "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+        ));
         assert!(!raw.contains("multipart"));
         // base64 正文按 76 字符折行（取最后一段双 CRLF 之后的内容）。
         let body = raw.split("\r\n\r\n").last().unwrap();
@@ -767,7 +900,10 @@ mod tests {
         let raw = assemble(
             "me",
             "me@example.test",
-            &["friend@example.test".into()],
+            &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
             "rich",
             "plain text",
             Some("<p>rich <b>text</b></p>"),
@@ -776,8 +912,19 @@ mod tests {
         assert!(raw.contains("Content-Type: multipart/alternative; boundary=\"=_auumail_"));
         assert!(raw.contains("Content-Type: text/plain; charset=utf-8"));
         assert!(raw.contains("Content-Type: text/html; charset=utf-8"));
-        let boundary = raw.split("boundary=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
-        assert_eq!(raw.matches(&format!("--{boundary}")).count(), 3, "开边界两次 + 闭边界一次");
+        let boundary = raw
+            .split("boundary=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            raw.matches(&format!("--{boundary}")).count(),
+            3,
+            "开边界两次 + 闭边界一次"
+        );
         assert!(raw.trim_end().ends_with("--"));
         // 两个部分都能独立解码。
         let encoded = raw
@@ -798,7 +945,10 @@ mod tests {
         let raw = assemble(
             "evil\r\nBcc: x@example.test",
             "me@example.test",
-            &["a@example.test".into()],
+            &Recipients {
+                to: vec!["a@example.test".into()],
+                ..Default::default()
+            },
             "subject\r\nBcc: y@example.test",
             "body",
             None,
@@ -819,6 +969,73 @@ mod tests {
         assert!(parse_recipients("a @example.test").is_err());
         assert!(parse_recipients("a@localhost").is_err());
         assert!(parse_recipients("").is_err());
+        assert!(parse_recipients("a<b>@example.test").is_err());
+        assert!(parse_recipients("a@example.test;evil").is_err());
+    }
+
+    #[test]
+    fn cc_and_bcc_use_the_full_envelope_without_leaking_bcc_headers() {
+        let conn = db();
+        conn.execute("UPDATE drafts SET cc = 'copy@example.test', bcc = 'private@example.test, COPY@example.test' WHERE id = 'draft-1'", []).unwrap();
+        enqueue(&conn, "draft-1", 3).unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        let envelope = job.recipients.envelope();
+        assert!(envelope.contains(&"copy@example.test".into()));
+        assert!(envelope.contains(&"private@example.test".into()));
+        assert_eq!(
+            envelope
+                .iter()
+                .filter(|address| address.eq_ignore_ascii_case("copy@example.test"))
+                .count(),
+            1
+        );
+        let raw = assemble(
+            &job.from_name,
+            &job.from_email,
+            &job.recipients,
+            "Recipients",
+            "Body",
+            None,
+            &job.message_id,
+        );
+        assert!(raw.contains("\r\nCc: copy@example.test\r\n"));
+        assert!(!raw.contains("private@example.test"));
+        assert!(!raw.contains("Bcc:"));
+        let parsed = mail_parser::MessageParser::default()
+            .parse(raw.as_bytes())
+            .unwrap();
+        assert_eq!(parsed.body_text(0).unwrap(), "Body");
+    }
+
+    #[test]
+    fn bcc_only_is_supported_and_bad_cc_or_bcc_blocks_enqueue() {
+        let conn = db();
+        for field in ["cc", "bcc"] {
+            conn.execute(&format!("UPDATE drafts SET {field} = 'bad-address'"), [])
+                .unwrap();
+            assert_eq!(enqueue(&conn, "draft-1", 3).unwrap_err().code, "invalid");
+            conn.execute(&format!("UPDATE drafts SET {field} = ''"), [])
+                .unwrap();
+        }
+        conn.execute(
+            "UPDATE drafts SET recipients_json = '[]', bcc = 'hidden@example.test'",
+            [],
+        )
+        .unwrap();
+        let recipients = draft_recipients(&conn, "draft-1").unwrap();
+        assert_eq!(recipients.envelope(), vec!["hidden@example.test"]);
+        let raw = assemble(
+            "Sender",
+            "me@example.test",
+            &recipients,
+            "",
+            "正文",
+            None,
+            "<id@example.test>",
+        );
+        assert!(raw.contains("To: undisclosed-recipients:;\r\n"));
+        assert!(!raw.contains("hidden@example.test"));
+        enqueue(&conn, "draft-1", 3).unwrap();
     }
 
     #[test]
@@ -826,7 +1043,8 @@ mod tests {
         let conn = db();
         enqueue(&conn, "draft-1", 3).unwrap();
         // 模拟一次真实投递尝试后的 unknown（attempts 已 +1）。
-        conn.execute("UPDATE outbox SET state = 'unknown', attempts = 1", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'unknown', attempts = 1", [])
+            .unwrap();
         let entry = resolve(&conn, &list(&conn).unwrap()[0].id, "keep-local").unwrap();
         assert_eq!(entry.state, "failed");
         assert_eq!(entry.resolved_by.as_deref(), Some("keep-local"));
@@ -842,12 +1060,16 @@ mod tests {
         let conn = db();
         enqueue(&conn, "draft-1", 3).unwrap();
         let entry = list(&conn).unwrap().remove(0);
-        conn.execute("UPDATE outbox SET state = 'sending'", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'sending'", [])
+            .unwrap();
         assert_eq!(cancel(&conn, &entry.id).unwrap_err().code, "conflict");
-        conn.execute("UPDATE outbox SET state = 'queued'", []).unwrap();
+        conn.execute("UPDATE outbox SET state = 'queued'", [])
+            .unwrap();
         let cancelled = cancel(&conn, &entry.id).unwrap();
         assert_eq!(cancelled.state, "queued");
-        let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0)).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(remaining, 0);
     }
 }

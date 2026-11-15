@@ -1,14 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { demoWorkspace } from '../src/services/demo/fixtures';
-import type { MailAccount, MailDraft, MailMessage, MessagePatch } from '../src/domain/mail';
+import type { MailAccount, MailDraft, MailFolder, MailMessage, MessagePatch } from '../src/domain/mail';
 import type { SyncJob } from '../src/domain/sync';
 
 /** Test-only IPC harness. Validates UI behavior, not a real server or the Rust queue. */
-async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false) {
-  const accounts: MailAccount[] = [1, 2, 3].map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
-  await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion }) => {
+async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true) {
+  const accounts: MailAccount[] = (realAccounts ? [1, 2, 3] : []).map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
+  await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion, navigation }) => {
     const workspace = { ...fixture, accounts: [...fixture.accounts, ...accounts] };
-    if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }] });
+    if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', labelIds: [], unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }] });
     if (recoveryMode) { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery = { state: recoveryMode === 'queued' ? 'queued' : 'available', detail: '旧缓存或未知归档需要远端核对。', location: null, evidence: null }; if (recoveryMode === 'unknown') { message.mailbox = 'archive'; message.changes = [{ field: 'archive', state: 'unknown', error: '归档结果待核对，不会自动重试。' }]; } }
     if (recoveryMode === 'fingerprint' || recoveryMode === 'unanchored') { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery!.fingerprint = { eligible: recoveryMode === 'fingerprint', reason: recoveryMode === 'fingerprint' ? '可信原定位仍在，可安全核对原文。' : '缺少可信原定位，不能升级为历史原文指纹。' }; }
     if (completion) {
@@ -16,7 +16,18 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       message.attachments = [{index:0,name:'report.txt',size:1024,mediaType:'text/plain'}];
       message.folderIds=['project-1'];
       workspace.messages.push({...message,id:'server-draft',mailbox:'drafts',subject:'服务器草稿测试',changes:[],attachments:[]});
-      workspace.messages.push({...fixture.messages[1], id:'plain-link', accountId: fixture.accounts[0].id, subject:'纯文本链接测试', bodyText:'请联系 help@anoma.ly 或访问 https://example.com/help。', unread:false, changes:[], attachments:[]});
+      workspace.messages.push({...fixture.messages[1], id:'plain-link', accountId: 'real-1', labelIds: [], subject:'纯文本链接测试', bodyText:'请联系 help@anoma.ly 或访问 https://example.com/help。', unread:false, changes:[], attachments:[]});
+    }
+    const folderList: MailFolder[] = completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [];
+    if (navigation) {
+      folderList.push(...[
+        { id: 'inbox-1', name: 'INBOX', kind: 'inbox' },
+        { id: 'drafts-1', name: 'Drafts', kind: 'drafts' },
+        { id: 'trash-1', name: 'Deleted Messages', kind: 'trash' },
+        { id: 'long-1', name: 'Projects/2026/这是一个很长很长的项目归档目录名称，用于检查窄窗口', kind: 'other' },
+      ].map(folder => ({ ...folder, accountId: 'real-1', available: true })));
+      workspace.messages.find(message => message.id === 'real-message')!.folderIds = ['inbox-1', 'project-1'];
+      workspace.messages.find(message => message.id === 'server-draft')!.folderIds = ['drafts-1'];
     }
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting';
@@ -28,8 +39,11 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     let nextRecovery: 'located' | 'source-present' | 'unresolved' | 'scanning' = 'located';
     let segmentPhase: 'collecting' | 'validating' | 'located' | 'unresolved' = 'collecting';
     let revision = 0; let sequence = 0;
+    let saveGate: Promise<void> | null = null;
+    let releaseSave = () => {};
     const jobs: SyncJob[] = []; const drafts = new Map<string, MailDraft>();
     const windowCalls: string[] = [];
+    const workspaceCalls: Array<{ command: string; accountId?: string | null }> = [];
     const snapshot = () => structuredClone({ revision, jobs });
     function project(draft: MailDraft): MailMessage {
       const account = workspace.accounts.find(account => account.id === draft.accountId)!;
@@ -40,9 +54,10 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'plugin:window|start_dragging': case 'plugin:window|toggle_maximize': case 'plugin:window|minimize': windowCalls.push(command);return;
         case 'get_app_info': return { version: '0.1.0', dataDirectory: 'test-only', skinDirectory: 'test-only/skins', databaseReady: true };
         case 'list_user_skins': return { skins: [], warnings: [] };
-        case 'mail_seed_workspace': case 'mail_import_legacy_drafts': case 'plugin:event|unlisten': return;
-        case 'mail_load_workspace': return { accounts: workspace.accounts, labels: workspace.labels, events: workspace.events, folders: completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [], syncStates: [] };
-        case 'mail_page_messages': return { items: workspace.messages, nextCursor: null };
+        case 'mail_seed_workspace': case 'mail_import_legacy_drafts': throw new Error('真实工作区禁止初始化或导入演示数据');
+        case 'plugin:event|unlisten': return;
+        case 'mail_load_workspace': return { accounts: workspace.accounts, labels: workspace.labels, events: workspace.events, folders: folderList, syncStates: [] };
+        case 'mail_page_messages': { const query = input.query as { accountId?: string | null }; workspaceCalls.push({ command, accountId: query.accountId }); return { items: workspace.messages, nextCursor: null }; }
         case 'mail_list_drafts': return [...drafts.values()].map(project);
         case 'mail_request_recovery': {
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId)!;
@@ -70,6 +85,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         }
         case 'mail_save_draft': {
           const draft = input.draft as MailDraft;
+          if (saveGate) await saveGate;
           const saved = { ...draft, revision: (draft.revision ?? 0) + 1, updatedAt: new Date().toISOString() };
           drafts.set(saved.id, saved); return project(saved);
         }
@@ -94,6 +110,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_outbox_resolve': outboxActions.push({ id: input.id as string, action: input.action as string }); outboxState = input.action === 'retry' ? 'queued' : 'failed'; return outboxEntry()!;
         case 'mail_retry_outbox': outboxState = 'queued'; return outboxEntry()!;
         case 'mail_message_html': {
+          if (input.messageId === 'plain-link') throw new Error('原文缓存不可用，回退纯文本');
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
           if (!message) throw new Error('邮件不存在或不属于此账号');
           htmlRequests.push({ id: message.id, allow: Boolean(input.allowRemoteImages) });
@@ -125,6 +142,10 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: { invoke, metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } }, transformCallback: () => 1, unregisterCallback: () => {} } });
     Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', { value: { unregisterListener: () => {} } });
     Object.defineProperty(window, '__syncTest', { value: {
+      workspaceCalls: () => structuredClone(workspaceCalls),
+      holdDraftSave() { saveGate = new Promise<void>(resolve => { releaseSave = resolve; }); },
+      releaseDraftSave() { saveGate = null; releaseSave(); },
+      drafts: () => [...drafts.values()],
       windowCalls: () => [...windowCalls],
       openCalls: () => [...openCalls],
       htmlRequests: () => [...htmlRequests],
@@ -164,7 +185,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         revision += 1;
       },
     } });
-  }, { fixture: demoWorkspace, accounts, messageChanges, recoveryMode, completion });
+  }, { fixture: demoWorkspace, accounts, messageChanges, recoveryMode, completion, navigation });
 }
 
 async function finishRecovery(page: Page, failure = false) {
@@ -253,7 +274,7 @@ test('legacy cache recovery requires a remote check and a second explicit confir
 
 test('unknown archive stays unresolved for duplicates and only explicit retry queues another move', async ({ page }) => {
   await mockDesktop(page, true, 'unknown'); await page.goto('/');
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '归档' }).click();
+  await page.getByRole('button', { name: '测试邮箱 1', exact: true }).click(); await page.getByRole('navigation', { name: '测试邮箱 1的文件夹', exact: true }).getByRole('button', { name: '归档', exact: true }).click();
   await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
   await page.evaluate(() => (window as unknown as { __syncTest: { recoveryResult: (value: string) => void } }).__syncTest.recoveryResult('unresolved'));
   await page.getByRole('button', { name: '核对远端定位', exact: true }).click(); await finishRecovery(page);
@@ -294,7 +315,7 @@ test('local conflicts are explicit and pending flags can be retried without leav
 
 test('multi-account progress persists outside settings and drafts remain editable', async ({ page }, info) => {
   await mockDesktop(page); await page.goto('/');
-  await expect(page.getByRole('heading', { name: /^收件箱\s*6$/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^全部收件箱\s*0$/ })).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '同步全部', exact: true }).click();
   await expect(page.getByText('2 个账号同步中 · 1 个排队中。关闭设置后任务继续运行。')).toBeVisible();
@@ -393,15 +414,94 @@ test('attachment cancellation and missing raw cache never report success; later 
   await save.click();await expect(page.getByText('已保存附件：report.txt',{exact:true})).toBeVisible();
 });
 
+test('desktop workspace isolates legacy demo accounts, mail, labels, events and pinned shortcuts', async ({ page }, info) => {
+  await mockDesktop(page, true);
+  await page.addInitScript(() => localStorage.setItem('auumail.ui.navigation.v1', JSON.stringify({ pinned: [{ accountId: 'work', mailbox: 'inbox' }], expanded: null })));
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /^全部收件箱\s*1$/ })).toBeVisible();
+  await expect(page.locator('.account-select')).toHaveCount(3);
+  await expect(page.locator('.app-statusbar')).toContainText('3 个邮箱账号');
+  await expect(page.getByRole('button', { name: '个人邮箱', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '邮件标签', exact: true })).toHaveCount(0);
+  await expect(page.getByText('已失效的常用入口', { exact: true })).toHaveCount(0);
+  const search = page.getByRole('searchbox', { name: '搜索邮件' });
+  await search.fill('让下一版界面');
+  await expect(page.getByRole('button', { name: /^阅读邮件：/ })).toHaveCount(0);
+  await search.fill('');
+  await page.getByRole('button', { name: '事件与待办', exact: true }).click();
+  await expect(page.locator('.event-card')).toHaveCount(0);
+  await page.getByRole('button', { name: '邮件工作区', exact: true }).click();
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  await expect(page.getByLabel('发件人', { exact: true }).locator('option')).toHaveCount(3);
+  await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('real-1');
+  await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('.settings-accounts > div')).toHaveCount(3);
+  const reads = await page.evaluate(() => (window as unknown as { __syncTest: { workspaceCalls: () => Array<{ accountId?: string | null }> } }).__syncTest.workspaceCalls());
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every(read => read.accountId?.startsWith('real-'))).toBe(true);
+  await page.screenshot({ path: info.outputPath('real-accounts-only.png') });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: /^全部收件箱\s*1$/ })).toBeVisible();
+  await expect(page.locator('.account-select')).toHaveCount(3);
+});
+
+test('desktop with only legacy demo rows offers account setup without a demo fallback', async ({ page }, info) => {
+  await mockDesktop(page, false, undefined, false, false, false);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '添加你的第一个邮箱', exact: true })).toBeVisible();
+  await expect(page.locator('.account-select')).toHaveCount(0);
+  await expect(page.locator('.mail-row')).toHaveCount(0);
+  await expect(page.locator('.app-statusbar')).toContainText('0 个邮箱账号');
+  await expect(page.getByRole('button', { name: '写邮件', exact: false })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '同步全部账号', exact: true })).toBeDisabled();
+  await expect(page.locator('.demo-badge')).toHaveText('本地工作区');
+  await page.screenshot({ path: info.outputPath('empty-real-workspace.png') });
+  await page.getByRole('button', { name: '添加邮箱', exact: true }).click();
+  await expect(page.getByRole('button', { name: '添加账号', exact: true })).toBeEnabled();
+  await expect(page.locator('.settings-accounts > div')).toHaveCount(0);
+});
+
+test('account tree maps physical folders once, keeps server drafts separate and marks cached folder pins', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true); await page.goto('/');
+  await expect(page.locator('.demo-accounts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '个人邮箱', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '测试邮箱 1', exact: true }).click();
+  const folders = page.getByRole('navigation', { name: '测试邮箱 1的文件夹', exact: true });
+  await expect(page.getByRole('navigation', { name: '服务器文件夹', exact: true })).toHaveCount(0);
+  await expect(folders.getByRole('button', { name: '收件箱', exact: true })).toHaveCount(1);
+  await expect(folders.getByRole('button', { name: '废纸篓', exact: true })).toHaveCount(1);
+  await expect(folders.getByRole('button', { name: 'Deleted Messages', exact: true })).toHaveCount(0);
+  await expect(folders.getByRole('button', { name: '服务器草稿', exact: true })).toHaveCount(1);
+  await expect(folders.getByRole('button', { name: '本机草稿', exact: true })).toHaveCount(1);
+  await folders.getByRole('button', { name: '服务器草稿', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /^服务器草稿\s*1$/ })).toBeVisible();
+  await folders.getByRole('button', { name: '项目邮件', exact: true }).click();
+  await expect(page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true })).toBeVisible();
+  await folders.getByRole('button', { name: '固定 测试邮箱 1 / 项目邮件', exact: true }).click();
+  const common = page.getByRole('navigation', { name: '常用入口', exact: true });
+  await expect(common.getByRole('button', { name: '项目邮件 · 测试邮箱 1', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '测试邮箱 2', exact: true }).click();
+  await expect(page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true })).toHaveCount(0);
+  await common.getByRole('button', { name: '项目邮件 · 测试邮箱 1', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /^项目邮件\s*1$/ })).toBeVisible();
+  await page.setViewportSize({ width: 900, height: 700 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(await page.locator('.sidebar-scroll').evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
+  await page.screenshot({ path: info.outputPath('account-tree-real-folders.png') });
+});
+
 test('server folders follow the chosen account and server drafts create a separate local copy',async ({page})=>{
   await mockDesktop(page,true,undefined,true);await page.goto('/');await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();
-  await page.getByRole('navigation',{name:'服务器文件夹',exact:true}).getByRole('button',{name:'项目邮件',exact:true}).click();await expect(page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'测试邮箱 2',exact:true}).click();await expect(page.getByRole('navigation',{name:'服务器文件夹',exact:true})).toHaveCount(0);
-  await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();await page.getByRole('navigation',{name:'邮件文件夹',exact:true}).getByRole('button',{name:/草稿/}).click();
+  await page.getByRole('navigation',{name:'测试邮箱 1的文件夹',exact:true}).getByRole('button',{name:'项目邮件',exact:true}).click();await expect(page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'测试邮箱 2',exact:true}).click();await expect(page.getByRole('navigation',{name:'测试邮箱 2的文件夹',exact:true}).getByRole('button',{name:'项目邮件',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'测试邮箱 1',exact:true}).click();await page.getByRole('navigation',{name:'测试邮箱 1的文件夹',exact:true}).getByRole('button',{name:'服务器草稿',exact:true}).click();
   await page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true}).click();await page.getByRole('button',{name:'复制为本地草稿',exact:true}).click();
   await page.getByRole('textbox',{name:'邮件正文'}).fill('新的本地副本');await expect(page.getByRole('status').filter({hasText:'草稿已自动保存'})).toBeVisible();
   await page.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
-  await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(2);
+  await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(1);
+  await page.getByRole('navigation',{name:'测试邮箱 1的文件夹',exact:true}).getByRole('button',{name:'本机草稿',exact:true}).click();
+  await expect(page.getByRole('button',{name:'阅读邮件：服务器草稿测试',exact:true})).toHaveCount(1);
 });
 
 
@@ -437,7 +537,7 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   const requests=await page.evaluate(() => (window as unknown as { __syncTest: { htmlRequests: () => Array<{ id: string; allow: boolean }> } }).__syncTest.htmlRequests());
   await expect(calls).toEqual(['https://example.test/receipt','https://example.com/help']);
   // 开发模式 StrictMode 会对首次选择双触发 effect；语义断言：默认拦截请求在前、允许请求存在、
-  // 且从未为演示账号的纯文本邮件请求富文本。
+  // 纯文本测试邮件在原文缓存不可用时回退，不返回富文本结果。
   await expect(requests[0]).toEqual({id:'real-message',allow:false});
   await expect(requests.some(request => request.allow)).toBe(true);
   await expect(requests.every(request => request.id === 'real-message')).toBe(true);
@@ -453,20 +553,38 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await page.getByRole('button',{name:'回复全部',exact:true}).click();
   const replyAll=page.locator('.compose-pane');
   await expect(replyAll.getByLabel('主题')).toHaveValue('Re: 离线状态测试');
-  await expect(replyAll.getByLabel('收件人')).toHaveValue(/zhixia@example\.test/);
-  await expect(replyAll.getByLabel('收件人')).toHaveValue(/alex@example\.test/);
-  await expect(replyAll.getByLabel('收件人')).not.toHaveValue(/test1@mail\.example/);
+  await expect(replyAll.getByRole('button', { name: '从收件人移除 zhixia@example.test', exact: true })).toBeVisible();
+  await expect(replyAll.getByRole('button', { name: '从收件人移除 alex@example.test', exact: true })).toBeVisible();
+  await expect(replyAll.getByRole('button', { name: '从收件人移除 test1@mail.example', exact: true })).toHaveCount(0);
+});
+
+test('compose stays editable during autosave and sends bcc-only after empty-subject confirmation', async ({ page }) => {
+  await mockDesktop(page); await page.goto('/');
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  await page.getByLabel('发件人', { exact: true }).selectOption('real-1');
+  await page.evaluate(() => (window as unknown as { __syncTest: { holdDraftSave: () => void } }).__syncTest.holdDraftSave());
+  const editor = page.getByRole('textbox', { name: '邮件正文' });
+  await editor.fill('第一版内容');
+  await expect(page.getByRole('status').filter({ hasText: '正在保存草稿' })).toBeVisible();
+  await expect(editor).toBeEditable();
+  await editor.fill('保存过程中继续输入的最新内容');
+  await page.evaluate(() => (window as unknown as { __syncTest: { releaseDraftSave: () => void } }).__syncTest.releaseDraftSave());
+  await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('请至少填写一位');
+  await page.getByRole('button', { name: '密送', exact: true }).click();
+  await page.getByRole('combobox', { name: '密送', exact: true }).fill('private@example.test');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('这封邮件还没有主题，仍然发送吗？')).toBeVisible();
+  await page.getByRole('button', { name: '仍然发送', exact: true }).click();
+  await expect(page.locator('.compose-pane')).toHaveCount(0);
+  const drafts = await page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts());
+  expect(drafts).toHaveLength(1);
+  expect(drafts[0]).toMatchObject({ bodyText: '保存过程中继续输入的最新内容', bcc: 'private@example.test', subject: '', to: '', accountId: 'real-1' });
 });
 
 test('send is capability-gated, the outbox queue surfaces state, and unknown offers explicit exits', async ({page},info) => {
   await mockDesktop(page,true,undefined,true);await page.goto('/');
-  // 演示账号草稿：发送按钮禁用并说明原因。
-  await page.getByRole('button',{name:'阅读邮件：让下一版界面，多一点呼吸感',exact:true}).click();
-  await page.getByRole('button',{name:'回复邮件',exact:true}).click();
-  const demoCompose=page.locator('.compose-pane');
-  await expect(demoCompose.getByRole('button',{name:'发送',exact:true})).toBeDisabled();
-  await demoCompose.getByRole('button',{name:'关闭撰写并返回列表',exact:true}).click();
-  await expect(demoCompose).toHaveCount(0);
   // 真实账号：回复 → 发送 → 队列徽标。
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复邮件',exact:true}).click();

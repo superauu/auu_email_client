@@ -90,6 +90,8 @@ export interface MailDraft {
   id: string;
   accountId: string;
   to: string;
+  cc?: string;
+  bcc?: string;
   subject: string;
   bodyText: string;
   /** 富文本正文（编辑器产出，服务端消毒后持久化）；缺省 = 纯文本草稿。 */
@@ -127,6 +129,8 @@ export interface WorkspaceSnapshot {
 }
 
 export interface MailQuery {
+  /** UI-only distinction; local drafts have editable draft metadata, server copies do not. */
+  draftSource?: 'local' | 'server' | null;
   unreadOnly?: boolean;
   folderId?: string | null;
   accountId: string | null;

@@ -5,6 +5,17 @@ import { demoMailGateway } from '../src/services/demo/DemoMailGateway';
 import { demoWorkspace } from '../src/services/demo/fixtures';
 import type { WorkspaceSnapshot } from '../src/domain/mail';
 
+test('reload clears a removed account and label scope before showing the remaining workspace', async () => {
+  const originalLoad = demoMailGateway.loadWorkspace;
+  try {
+    useWorkspaceStore.setState({ ...structuredClone(demoWorkspace), status: 'ready', query: { accountId: 'removed-demo', mailbox: 'drafts', folderId: 'old-folder', draftSource: 'local', labelId: 'old-label', search: '' } });
+    demoMailGateway.loadWorkspace = async () => structuredClone(demoWorkspace);
+    await useWorkspaceStore.getState().reload();
+    assert.deepEqual(useWorkspaceStore.getState().query, { accountId: null, mailbox: 'inbox', folderId: null, draftSource: null, labelId: null, search: '' });
+    assert.ok(useWorkspaceStore.getState().selectedId);
+  } finally { demoMailGateway.loadWorkspace = originalLoad; }
+});
+
 test('background reload keeps the workspace visible and retains a concurrently saved draft', async () => {
   const originalLoad = demoMailGateway.loadWorkspace; const originalSave = demoMailGateway.saveDraft;
   let resolve!: (value: WorkspaceSnapshot) => void;

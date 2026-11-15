@@ -2,7 +2,10 @@
 //! 语义约定（docs/SENDING 同源的诚实边界）：POP3 无标记同步，新邮件以 UIDL 集合判定；
 //! 服务器上的邮件不删除；单次运行最多拉取 50 封（首窗策略与 IMAP 一致），后续运行续拉。
 use crate::{
-    credentials, error::AppError, mail_cache::{self, Spool}, mail_sync::{self, SharedDb, SyncOutcome},
+    credentials,
+    error::AppError,
+    mail_cache::{self, Spool},
+    mail_sync::{self, SharedDb, SyncOutcome},
 };
 use chrono::{FixedOffset, TimeZone, Utc};
 use mail_parser::MessageParser;
@@ -44,7 +47,9 @@ fn expect_ok(line: &str, context: &str) -> Result<String, AppError> {
     } else if line.starts_with("-ERR") {
         Err(AppError::network(format!("{context}：{}", line.trim())))
     } else {
-        Err(AppError::network(format!("{context}：响应不符合 POP3 协议")))
+        Err(AppError::network(format!(
+            "{context}：响应不符合 POP3 协议"
+        )))
     }
 }
 
@@ -73,7 +78,11 @@ fn read_multiline<R: Read>(reader: &mut R) -> Result<Vec<u8>, AppError> {
     }
 }
 
-fn tls_session<S: Read + Write>(mut stream: S, user: &str, secret: &str) -> Result<usize, AppError> {
+fn tls_session<S: Read + Write>(
+    mut stream: S,
+    user: &str,
+    secret: &str,
+) -> Result<usize, AppError> {
     let greeting = read_line(&mut stream)?;
     expect_ok(&greeting, "POP3 问候")?;
     write_command(&mut stream, &format!("USER {user}"))?;
@@ -103,16 +112,18 @@ fn connect_session(
     secret: &str,
 ) -> Result<(native_tls::TlsStream<std::net::TcpStream>, usize), AppError> {
     let tcp = std::net::TcpStream::connect((host, port)).map_err(|error| {
-        AppError::network(format!("无法连接到 {host}:{port}，请检查地址与端口（{error}）"))
+        AppError::network(format!(
+            "无法连接到 {host}:{port}，请检查地址与端口（{error}）"
+        ))
     })?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .and_then(|_| tcp.set_write_timeout(Some(IO_TIMEOUT)))
         .map_err(|_| AppError::network("无法设置连接超时"))?;
-    let connector = native_tls::TlsConnector::new()
-        .map_err(|_| AppError::network("TLS 初始化失败"))?;
-    let mut tls = connector
-        .connect(host, tcp)
-        .map_err(|_| AppError::network(format!("{host}:{port} 的 TLS 证书不受信任或协议不被支持")))?;
+    let connector =
+        native_tls::TlsConnector::new().map_err(|_| AppError::network("TLS 初始化失败"))?;
+    let mut tls = connector.connect(host, tcp).map_err(|_| {
+        AppError::network(format!("{host}:{port} 的 TLS 证书不受信任或协议不被支持"))
+    })?;
     let count = tls_session(&mut tls, user, secret)?;
     Ok((tls, count))
 }
@@ -125,16 +136,18 @@ pub(crate) fn probe(host: &str, port: u16, user: &str, secret: &str) -> Result<u
         host.trim()
     };
     let tcp = std::net::TcpStream::connect((host, port)).map_err(|error| {
-        AppError::network(format!("无法连接到 {host}:{port}，请检查地址与端口（{error}）"))
+        AppError::network(format!(
+            "无法连接到 {host}:{port}，请检查地址与端口（{error}）"
+        ))
     })?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .and_then(|_| tcp.set_write_timeout(Some(IO_TIMEOUT)))
         .map_err(|_| AppError::network("无法设置连接超时"))?;
-    let connector = native_tls::TlsConnector::new()
-        .map_err(|_| AppError::network("TLS 初始化失败"))?;
-    let mut tls = connector
-        .connect(host, tcp)
-        .map_err(|_| AppError::network(format!("{host}:{port} 的 TLS 证书不受信任或协议不被支持")))?;
+    let connector =
+        native_tls::TlsConnector::new().map_err(|_| AppError::network("TLS 初始化失败"))?;
+    let mut tls = connector.connect(host, tcp).map_err(|_| {
+        AppError::network(format!("{host}:{port} 的 TLS 证书不受信任或协议不被支持"))
+    })?;
     tls_session(&mut tls, user, secret)
 }
 
@@ -151,8 +164,7 @@ fn mail_date_iso(mail: &mail_parser::Message<'_>) -> Option<String> {
         u32::from(date.minute).clamp(0, 59),
         u32::from(date.second).clamp(0, 59),
     )?;
-    let offset_minutes =
-        i32::from(date.tz_hour) * 60 + i32::from(date.tz_minute);
+    let offset_minutes = i32::from(date.tz_hour) * 60 + i32::from(date.tz_minute);
     let offset_seconds = if date.tz_before_gmt {
         -offset_minutes * 60
     } else {
@@ -204,7 +216,11 @@ fn snapshot(db: &SharedDb, id: &str) -> Result<SendSnapshot, AppError> {
         .unwrap_or_default();
     let cache_root = mail_cache::root(&conn)?;
     Ok(SendSnapshot {
-        host: profile["imapHost"].as_str().unwrap_or("").trim().to_string(),
+        host: profile["imapHost"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
         port: profile["imapPort"].as_u64().unwrap_or(995) as u16,
         auth_user: profile["authUser"].as_str().unwrap_or("").to_string(),
         seen,
@@ -222,9 +238,7 @@ pub(crate) fn sync_account(
     if snap.host.is_empty() {
         return Err(AppError::invalid("账号未配置 POP3 服务器，无法同步"));
     }
-    let secret = credentials::with_account("imap", id, || {
-        credentials::secret_for("imap", id)
-    })?;
+    let secret = credentials::with_account("imap", id, || credentials::secret_for("imap", id))?;
     let (tls, _count) = connect_session(&snap.host, snap.port, &snap.auth_user, &secret)?;
     let mut tls = tls;
     write_command(&mut tls, "UIDL")?;
@@ -265,14 +279,9 @@ pub(crate) fn sync_account(
         spool.append(&raw)?;
         let (key, _) = spool.finish()?;
         let received_at = mail_date_iso(&parsed_mail).unwrap_or_else(crate::now_utc);
-        let ordinal_u32 = u32::try_from(*ordinal).map_err(|_| AppError::network("邮件序号超出范围"))?;
-        let mut parsed = mail_sync::parse_raw(
-            ordinal_u32,
-            &raw,
-            received_at,
-            true,
-            false,
-        )?;
+        let ordinal_u32 =
+            u32::try_from(*ordinal).map_err(|_| AppError::network("邮件序号超出范围"))?;
+        let mut parsed = mail_sync::parse_raw(ordinal_u32, &raw, received_at, true, false)?;
         parsed.raw_cache_key = Some(key);
         downloaded.push((uidl.clone(), parsed));
     }
@@ -304,7 +313,10 @@ mod tests {
     }
     impl MockStream {
         fn new(script: &str) -> Self {
-            Self { reads: std::io::Cursor::new(script.as_bytes().to_vec()), writes: Vec::new() }
+            Self {
+                reads: std::io::Cursor::new(script.as_bytes().to_vec()),
+                writes: Vec::new(),
+            }
         }
     }
     impl Read for MockStream {
@@ -324,7 +336,9 @@ mod tests {
 
     #[test]
     fn probe_parses_stat_count_and_rejects_errors() {
-        let mut stream = MockStream::new("+OK POP3 ready\r\n+OK user accepted\r\n+OK logged in\r\n+OK 3 4096\r\n");
+        let mut stream = MockStream::new(
+            "+OK POP3 ready\r\n+OK user accepted\r\n+OK logged in\r\n+OK 3 4096\r\n",
+        );
         let count = tls_session(&mut stream, "alex@example.test", "secret").unwrap();
         assert_eq!(count, 3);
         let log = String::from_utf8(stream.writes).unwrap();
@@ -353,7 +367,12 @@ mod tests {
             .unwrap();
         let iso = mail_date_iso(&mail).unwrap();
         assert!(iso.starts_with("2026-11-14T02:00:00Z"), "{iso}");
-        assert!(mail_date_iso(&MessageParser::default().parse(b"Subject: no date\r\n\r\nx".as_slice()).unwrap()).is_none());
+        assert!(mail_date_iso(
+            &MessageParser::default()
+                .parse(b"Subject: no date\r\n\r\nx".as_slice())
+                .unwrap()
+        )
+        .is_none());
     }
 
     #[test]

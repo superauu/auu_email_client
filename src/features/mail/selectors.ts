@@ -7,9 +7,14 @@ export function selectMessages(messages: MailMessage[], query: MailQuery): MailM
     if (query.accountId && message.accountId !== query.accountId) return false;
     if (query.folderId) {
       if (!message.folderIds?.includes(query.folderId)) return false;
+      // Standard account folders honor local archive intent while MOVE is pending;
+      // custom physical folders still expose the actual cached membership as evidence.
+      if (query.mailbox !== 'other' && query.mailbox !== 'archive' && message.changes?.some(change => change.field === 'archive')) return false;
     } else if (query.labelId) {
       if (message.mailbox === 'trash' || !message.labelIds.includes(query.labelId)) return false;
     } else if (query.mailbox === 'starred' ? !message.starred || message.mailbox === 'trash' : message.mailbox !== query.mailbox) return false;
+    if (query.draftSource === 'local' && !message.draft) return false;
+    if (query.draftSource === 'server' && message.draft) return false;
     return !needle || [message.subject, message.from.name, message.from.email, message.bodyText].some(value => value.toLocaleLowerCase().includes(needle));
   }).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
 }

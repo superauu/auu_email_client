@@ -17,12 +17,14 @@ test('read, star and archive persist through offline reloads', async ({ page, co
   await context.setOffline(true);
   await page.getByRole('button', { name: '归档当前邮件', exact: true }).click();
   await expect(page.getByRole('button', { name: `阅读邮件：${title}`, exact: true })).toHaveCount(0);
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '归档' }).click();
+  await page.getByRole('button', { name: '工作邮箱', exact: true }).click();
+  await page.getByRole('navigation', { name: '工作邮箱的文件夹', exact: true }).getByRole('button', { name: '归档', exact: true }).click();
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: '已保存在本机' })).toBeVisible();
   await page.screenshot({ path: info.outputPath('offline-archive.png') });
   await context.setOffline(false); await page.reload();
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '归档' }).click();
+  await page.getByRole('button', { name: '工作邮箱', exact: true }).click();
+  await page.getByRole('navigation', { name: '工作邮箱的文件夹', exact: true }).getByRole('button', { name: '归档', exact: true }).click();
   await expect(page.getByRole('button', { name: `阅读邮件：${title}`, exact: true })).toBeVisible();
 });
 

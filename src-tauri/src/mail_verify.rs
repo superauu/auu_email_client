@@ -68,7 +68,12 @@ fn default_provider() -> String {
 /// Runs both probes independently so one broken endpoint does not hide the other's result.
 pub fn verify(endpoints: &Endpoints, secret: &str) -> VerifyReport {
     let receive_probe = if endpoints.provider == "pop3" {
-        crate::pop3::probe(&endpoints.imap_host, endpoints.imap_port, &endpoints.auth_user, secret)
+        crate::pop3::probe(
+            &endpoints.imap_host,
+            endpoints.imap_port,
+            &endpoints.auth_user,
+            secret,
+        )
     } else {
         imap_probe(
             &endpoints.imap_host,

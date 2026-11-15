@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test('account, search and empty-state navigation', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /^收件箱\s*6$/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^全部收件箱\s*6$/ })).toBeVisible();
   await page.getByRole('button', { name: '独立邮箱', exact: true }).click();
   await expect(page.getByRole('heading', { name: /^收件箱\s*1$/ })).toBeVisible();
   await expect(page.getByRole('region', { name: '邮件列表' }).getByText('让下一版界面，多一点呼吸感')).toHaveCount(0);
@@ -36,8 +36,8 @@ test('a saved draft survives reload and stays in the selected sending account', 
   await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
-  await page.getByRole('button', { name: '工作邮箱', exact: false }).click();
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
+  await page.getByRole('button', { name: '工作邮箱', exact: true }).click();
+  await page.getByRole('navigation', { name: '常用入口' }).getByRole('button', { name: '本机草稿', exact: true }).click();
   await expect(page.getByRole('heading', { name: '架构测试草稿', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '编辑草稿' }).click();
   await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('work');
@@ -52,7 +52,7 @@ test('closing auto-saves the draft, and an explicit button discards it', async (
   await page.keyboard.press('Escape');
   await expect(page.locator('.compose-pane')).toHaveCount(0);
   await page.reload();
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
+  await page.getByRole('navigation', { name: '常用入口' }).getByRole('button', { name: '本机草稿', exact: true }).click();
   await expect(page.getByRole('heading', { name: '关闭即保存', exact: true })).toBeVisible();
   // 只有显式「放弃草稿」按钮才删除草稿。
   await page.getByRole('button', { name: '编辑草稿' }).click();
@@ -72,7 +72,7 @@ test('autosave survives reload, and changing the sender moves a single draft', a
   await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
+  await page.getByRole('navigation', { name: '常用入口' }).getByRole('button', { name: '本机草稿', exact: true }).click();
   await expect(page.getByRole('button', { name: '阅读邮件：自动保存的草稿', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '编辑草稿' }).click();
   await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('work');
@@ -108,7 +108,7 @@ test('reply drafts preserve reply metadata and empty subjects when reopened', as
   await expect(page.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
   await page.getByRole('button', { name: '关闭撰写并返回列表' }).click();
   await page.reload();
-  await page.getByRole('navigation', { name: '邮件文件夹' }).getByRole('button', { name: '草稿箱' }).click();
+  await page.getByRole('navigation', { name: '常用入口' }).getByRole('button', { name: '本机草稿', exact: true }).click();
   await page.getByRole('button', { name: '编辑草稿' }).click();
   await expect(page.getByRole('heading', { name: '回复邮件', exact: true })).toBeVisible();
   await expect(page.getByLabel('主题', { exact: true })).toHaveValue('');
@@ -175,7 +175,7 @@ test('compact Outlook-style list fits more mail and unread filtering remains sco
   await list.getByRole('button',{name:'未读',exact:true}).click();await expect(list.locator('article')).toHaveCount(3);
   await page.getByRole('button',{name:'独立邮箱',exact:true}).click();await expect(list.getByRole('heading',{name:'没有未读邮件',exact:true})).toBeVisible();
   await list.getByRole('button',{name:'全部',exact:true}).click();await expect(list.locator('article')).toHaveCount(1);
-  await page.getByRole('button',{name:/^全部账号/}).click();await page.screenshot({path:info.outputPath('compact-mail-list.png')});
+  await page.getByRole('button',{name:'全部收件箱',exact:true}).click();await page.screenshot({path:info.outputPath('compact-mail-list.png')});
 });
 
 

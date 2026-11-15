@@ -1,10 +1,10 @@
 # 本地草稿
 
-状态：A4.1 已实现，日期 2026-11-11。此能力只保存本机草稿，不发信，不连接 SMTP，不上传服务器 Drafts。
+状态：2026-11-15。保存草稿只写本机；发送由独立 outbox 路径完成，不上传服务器 Drafts。撰写交互见 [COMPOSING](COMPOSING.md)，发送见 [SENDING](SENDING.md)。
 
 ## 存储与边界
 
-- 桌面 gateway：所有账号的本地草稿经 IPC 写 SQLite drafts 表。已保存的真实 IMAP 账号即使离线也可撰写，不需要读取密码或建立连接。
+- 桌面 gateway：用户添加账号的本地草稿经 IPC 写 SQLite drafts 表；旧演示草稿不进入桌面工作区。已保存的真实 IMAP 账号即使离线也可撰写，不需要读取密码或建立连接。
 - 浏览器 gateway：只有演示账号，使用 `auumail.demo.drafts.v1` localStorage，最多 100 份。不是实际邮箱连接。
 - UI 统一经过 workspaceStore.saveDraft；组件不操作数据库或存储。
 - `MailMessage.draft` 保存可重新编辑的原始 MailDraft。列表可显示“未命名草稿”，但编辑器里的空主题仍为空；replyToId 和 revision 不丢失。
@@ -38,20 +38,21 @@
 
 003_local_drafts.sql 追加 revision、账号 / 时间索引和 local_imports 收据表。已有 v2 drafts 保留内容并赋 revision=1。不得修改 001 / 002。
 
-桌面 gateway 先准备账号，再将旧 WebView localStorage 演示草稿事务性导入。只允许旧演示账号，最多 100 份，保留原内容与时间；相同 ID 的已有 SQLite 草稿不覆盖。成功后写导入收据，后续启动不重复导入，避免旧数据复活。原 localStorage 保留为备份，不再由桌面写入。
+桌面正常启动不再初始化演示账号，也不再自动导入旧 WebView localStorage 演示草稿。原 localStorage 与 SQLite 中已导入的演示草稿保留原样，但不进入真实工作区；浏览器仍使用独立演示存储。旧导入 IPC 仅保留兼容与测试能力：只允许旧演示账号，最多 100 份，事务与导入收据去重，相同 ID 的已有 SQLite 草稿不覆盖。
 
-演示种子刷新只重建演示邮件 / 文件夹，保留账号和持久草稿；不要恢复为删除演示账号行的实现。
+演示种子 IPC 保留兼容与测试用途，不由桌面正常加载调用；不通过删除演示账号行来隔离数据，避免级联删除持久草稿。
 
 ## IPC
 
 | 命令 | 输入 | 返回 |
 | --- | --- | --- |
 | mail_list_drafts | 无 | MailMessage[]，包含 draft 元数据 |
+| mail_delete_draft | draftId | void |
 | mail_save_draft | draft、previousAccountId | 持久化后的 MailMessage，含新 revision |
 | mail_import_legacy_drafts | drafts | void，事务完成或完整回滚 |
 
-服务器时间用于新保存的 updatedAt；日期与 ID 不作为并发控制替代物。收件人和主题上限各 1000 个 UTF-16 单位，正文 50000；这些限制不等于已经实现邮件地址或 SMTP 内容校验。
+服务器时间用于新保存的 updatedAt；日期与 ID 不作为并发控制替代物。收件人 / 抄送 / 密送和主题上限各 1000 个 UTF-16 单位，正文 50000、HTML 200000。v12 追加 cc / bcc，旧草稿缺省为空。地址无效时可继续保存草稿，发送时另做语法校验。
 
 ## 后续
 
-SMTP / outbox、附件、富文本、服务器草稿同步、冲突内容对照及多窗口恢复均未包含在 A4.1。正文页星标 / 已读 / 归档的持久化也仍是独立任务。
+附件 / 图片发送、服务器草稿同步、冲突内容对照及多窗口恢复待后续。SMTP / outbox、富文本、抄送 / 密送已实现，验证边界见 STATUS 与 COMPOSING。

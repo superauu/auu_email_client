@@ -8,6 +8,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { cn } from '../../lib/cn';
 import { isDesktop } from '../../platform/desktop';
 import { isSyncActive, syncableAccounts } from '../../domain/sync';
+import { directoryLabel } from '../../domain/navigation';
 
 export function MailList({ onSelect }: { onSelect: () => void }) {
   const { messages, accounts, labels, query, selectedId, savingIds, selectMessage, toggleStar, setQuery } = useWorkspaceStore(useShallow(s => ({
@@ -30,8 +31,10 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     if (!ids.length || (syncTarget ? accountSyncing : syncingAll)) return;
     void enqueue(ids);
   }
-  const title = query.labelId ? labels.find(l => l.id === query.labelId)?.name : mailboxNames[query.mailbox];
-  const folderTitle = useWorkspaceStore(state => state.folders)?.find(folder => folder.id === query.folderId)?.name;
+  const title = query.labelId ? labels.find(l => l.id === query.labelId)?.name : query.draftSource === 'local' ? '本机草稿' : query.draftSource === 'server' ? '服务器草稿' : !query.accountId && query.mailbox === 'inbox' ? '全部收件箱' : mailboxNames[query.mailbox];
+  const folders = useWorkspaceStore(state => state.folders) ?? [];
+  const folder = folders.find(item => item.id === query.folderId && item.accountId === query.accountId);
+  const folderTitle = folder ? directoryLabel(folder, folders.filter(item => item.accountId === query.accountId)) : undefined;
   return <section className="mail-list" aria-label="邮件列表">
     <h1 className="sr-only">{folderTitle ?? title} {visible.length}</h1>
     <header className="list-toolbar">
@@ -54,6 +57,6 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         </article>;
       })}
     </div>
-    <footer className="list-footer">共 {visible.length} 封邮件<span>{realAccount || visible.some(message => accounts.some(account => account.id === message.accountId && account.status !== 'demo')) ? '本地缓存' : '仅本机演示'}</span></footer>
+    <footer className="list-footer">共 {visible.length} 封邮件<span>{isDesktop() ? '本地缓存' : '仅本机演示'}</span></footer>
   </section>;
 }

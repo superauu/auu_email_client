@@ -69,16 +69,138 @@ fn inline_data_uris(parsed: &mail_parser::Message<'_>) -> Result<Vec<(String, St
 pub(crate) fn sanitize_compose(html: &str) -> String {
     let mut builder = ammonia::Builder::default();
     builder.tags(HashSet::from([
-        "p", "div", "span", "br", "hr", "b", "strong", "i", "em", "u", "s", "strike", "a", "h1",
-        "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table",
-        "thead", "tbody", "tr", "td", "th", "font", "center", "small", "sub", "sup",
+        "p",
+        "div",
+        "span",
+        "br",
+        "hr",
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "s",
+        "strike",
+        "a",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "ul",
+        "ol",
+        "li",
+        "blockquote",
+        "pre",
+        "code",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "caption",
+        "colgroup",
+        "col",
+        "tr",
+        "td",
+        "th",
+        "font",
+        "center",
+        "small",
+        "sub",
+        "sup",
     ]));
-    builder.generic_attributes(HashSet::from(["style"]));
+    builder.generic_attributes(HashSet::from(["style", "data-auumail-quote"]));
+    builder.filter_style_properties(HashSet::from([
+        "color",
+        "background-color",
+        "font-family",
+        "font-size",
+        "font-weight",
+        "font-style",
+        "text-decoration",
+        "text-align",
+        "text-indent",
+        "text-transform",
+        "line-height",
+        "letter-spacing",
+        "word-spacing",
+        "white-space",
+        "vertical-align",
+        "display",
+        "width",
+        "min-width",
+        "max-width",
+        "height",
+        "min-height",
+        "max-height",
+        "padding",
+        "padding-top",
+        "padding-right",
+        "padding-bottom",
+        "padding-left",
+        "margin",
+        "margin-top",
+        "margin-right",
+        "margin-bottom",
+        "margin-left",
+        "border",
+        "border-top",
+        "border-right",
+        "border-bottom",
+        "border-left",
+        "border-width",
+        "border-style",
+        "border-color",
+        "border-radius",
+        "border-collapse",
+        "border-spacing",
+        "table-layout",
+        "list-style-type",
+        "list-style-position",
+        "border-top-width",
+        "border-right-width",
+        "border-bottom-width",
+        "border-left-width",
+        "border-top-style",
+        "border-right-style",
+        "border-bottom-style",
+        "border-left-style",
+        "border-top-color",
+        "border-right-color",
+        "border-bottom-color",
+        "border-left-color",
+    ]));
     builder.tag_attributes(std::collections::HashMap::from([
         ("a", HashSet::from(["href", "title"])),
-        ("table", HashSet::from(["width", "border", "cellpadding", "cellspacing", "align", "bgcolor"])),
-        ("td", HashSet::from(["colspan", "rowspan", "align", "valign", "width", "height", "bgcolor"])),
-        ("th", HashSet::from(["colspan", "rowspan", "align", "valign", "width", "height", "bgcolor"])),
+        ("blockquote", HashSet::from(["data-auumail-quote"])),
+        (
+            "tr",
+            HashSet::from(["align", "valign", "bgcolor", "height"]),
+        ),
+        (
+            "table",
+            HashSet::from([
+                "width",
+                "border",
+                "cellpadding",
+                "cellspacing",
+                "align",
+                "bgcolor",
+            ]),
+        ),
+        (
+            "td",
+            HashSet::from([
+                "colspan", "rowspan", "align", "valign", "width", "height", "bgcolor",
+            ]),
+        ),
+        (
+            "th",
+            HashSet::from([
+                "colspan", "rowspan", "align", "valign", "width", "height", "bgcolor",
+            ]),
+        ),
         ("font", HashSet::from(["color", "face", "size"])),
         ("hr", HashSet::from(["size", "width", "align"])),
     ]));
@@ -213,7 +335,11 @@ const WRAPPER_CSS_DARK: &str =
 /// 包装 CSS 按当前主题模式生成：深色主题下阅读区不再固定白底。
 /// 发件人自带显式颜色的邮件仍按原样渲染（与 Gmail / Outlook 行为一致）。
 fn wrapper_css(dark: bool) -> &'static str {
-    if dark { WRAPPER_CSS_DARK } else { WRAPPER_CSS_LIGHT }
+    if dark {
+        WRAPPER_CSS_DARK
+    } else {
+        WRAPPER_CSS_LIGHT
+    }
 }
 
 const BRIDGE_SCRIPT: &str = "(function () { 'use strict'; function postHeight() { try { parent.postMessage({ type: 'auumail-frame-height', height: document.documentElement.scrollHeight + 24 }, '*'); } catch (error) {} } document.addEventListener('click', function (event) { var node = event.target; while (node && node.nodeType === 1 && node.tagName !== 'A') node = node.parentNode; if (!node || node.nodeType !== 1) return; event.preventDefault(); parent.postMessage({ type: 'auumail-mail-link', href: node.getAttribute('href') || '' }, '*'); }, true); window.addEventListener('load', postHeight); if (window.ResizeObserver) { new ResizeObserver(postHeight).observe(document.documentElement); } postHeight(); })();";
@@ -257,11 +383,89 @@ fn srcdoc(body: &str, allow_remote_images: bool, dark: bool) -> String {
     doc
 }
 
-/// 回复 / 转发引用：消毒后的正文 HTML 片段（无 srcdoc 包装，进编辑器 contentEditable）。
-/// 用 compose 严格消毒（剥 <style> 块 / img / data: URI），避免片段影响编辑器全局样式。
-pub(crate) fn render_fragment(conn: &Connection, account: &str, id: &str) -> Result<String, AppError> {
-    let (root, key) = load_cache_key(conn, account, id)?;
-    let raw = mail_cache::read(&root, &key)?;
+/// Short DB snapshot; cache I/O, MIME parsing and CSS inlining run after releasing the lock.
+pub(crate) fn fragment_source(
+    conn: &Connection,
+    account: &str,
+    id: &str,
+) -> Result<(PathBuf, String), AppError> {
+    load_cache_key(conn, account, id)
+}
+
+/// Preserve newsletter layout locally, then sanitize before it enters the app DOM.
+fn prepare_quote(html: &str) -> Result<String, AppError> {
+    const MAX_QUOTE: usize = 200_000;
+    if html.len() > MAX_HTML {
+        return Err(AppError::invalid("原邮件排版过大，改用纯文本引用"));
+    }
+    let document = scraper::Html::parse_document(html);
+    let elements = scraper::Selector::parse("*").expect("static selector");
+    let styles = scraper::Selector::parse("style").expect("static selector");
+    if document.select(&elements).take(4001).count() > 4000
+        || document
+            .select(&styles)
+            .map(|style| style.inner_html().len())
+            .sum::<usize>()
+            > 64 * 1024
+    {
+        return Err(AppError::invalid("原邮件排版过于复杂，改用纯文本引用"));
+    }
+    struct LimitedOutput(Vec<u8>);
+    impl std::io::Write for LimitedOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.0.len() + bytes.len() > MAX_QUOTE {
+                return Err(std::io::Error::other("quote limit"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // No HTTP/file features; explicitly disable all external stylesheet resolution as well.
+    let inliner = css_inline::CSSInliner::options()
+        .load_remote_stylesheets(false)
+        .build();
+    let mut output = LimitedOutput(Vec::new());
+    inliner
+        .inline_to(html, &mut output)
+        .map_err(|_| AppError::invalid("原邮件样式无法完整转换，改用纯文本引用"))?;
+    let inlined = String::from_utf8(output.0).map_err(|_| AppError::invalid("原邮件编码无效"))?;
+    let document = scraper::Html::parse_document(&inlined);
+    let body_selector = scraper::Selector::parse("body").expect("static selector");
+    let body = document
+        .select(&body_selector)
+        .next()
+        .ok_or_else(|| AppError::invalid("原邮件正文无效"))?;
+    let escape = |value: &str| {
+        value
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+    };
+    // A received HTML document uses a light canvas unless it explicitly styles its body.
+    // Carry body defaults into the fragment instead of inheriting the editor's dark text color.
+    let background = body
+        .value()
+        .attr("bgcolor")
+        .filter(|value| value.chars().all(|c| c.is_ascii_alphanumeric() || c == '#'))
+        .unwrap_or("#ffffff");
+    let foreground = body
+        .value()
+        .attr("text")
+        .filter(|value| value.chars().all(|c| c.is_ascii_alphanumeric() || c == '#'))
+        .unwrap_or("#000000");
+    let wrapper = format!("<div style=\"color:{foreground};background-color:{background};font-family:Arial,sans-serif;font-size:14px;line-height:normal;text-align:start;{}\">{}</div>", escape(body.value().attr("style").unwrap_or("")), body.inner_html());
+    let safe = sanitize_compose(&wrapper);
+    if safe.len() > MAX_QUOTE {
+        return Err(AppError::invalid("原邮件排版过大，改用纯文本引用"));
+    }
+    Ok(safe)
+}
+
+pub(crate) fn render_fragment(root: &std::path::Path, key: &str) -> Result<String, AppError> {
+    let raw = mail_cache::read(root, key)?;
     let parsed = MessageParser::default()
         .parse(&raw)
         .ok_or_else(|| AppError::invalid("邮件 MIME 无效，无法引用原文"))?;
@@ -269,12 +473,7 @@ pub(crate) fn render_fragment(conn: &Connection, account: &str, id: &str) -> Res
         .body_html(0)
         .filter(|html| html.len() <= MAX_HTML)
         .ok_or_else(|| AppError::invalid("这封邮件没有可引用的正文"))?;
-    let inline = inline_data_uris(&parsed)?;
-    let mut prepared = html.into_owned();
-    for (cid, uri) in inline {
-        prepared = prepared.replace(&format!("cid:{cid}"), &uri);
-    }
-    Ok(sanitize_compose(&prepared))
+    prepare_quote(&html)
 }
 
 #[cfg(test)]
@@ -326,6 +525,64 @@ mod tests {
         let dark = srcdoc("<p>x</p>", false, true);
         assert!(dark.contains("color-scheme:dark") && dark.contains("#1b2129"));
         assert!(!dark.contains("#ffffff"));
+    }
+
+    #[test]
+    fn quote_inlines_local_css_and_keeps_body_and_table_layout_without_external_resources() {
+        let html = r##"<!doctype html><html><head>
+          <link rel="stylesheet" href="https://example.test/unavailable.css">
+          <link rel="stylesheet" href="file:///not-readable.css">
+          <style>body { color:#262626; background-color:#fafafa; line-height:20px }
+          .card { width:620px; border-collapse:collapse }
+          .card td { padding:20px; vertical-align:top }
+          .headline { font-size:24px; margin:0; text-align:center }
+          .unsafe { position:fixed; z-index:999; background-image:url(https://example.test/track) }</style>
+          </head><body><table class="card" border="0" cellpadding="0" cellspacing="0" align="center"><tr><td bgcolor="#ffffff">
+          <h1 class="headline">Newsletter</h1><p class="unsafe" onclick="evil()">Content</p>
+          <img src="https://example.test/track"><script>bad()</script></td></tr></table></body></html>"##;
+        let safe = prepare_quote(html).unwrap();
+        for wanted in [
+            "width:620px",
+            "padding:20px",
+            "font-size:24px",
+            "color:#262626",
+            "line-height:20px",
+            "background-color:#fafafa",
+            "border=\"0\"",
+            "cellpadding=\"0\"",
+            "align=\"center\"",
+        ] {
+            assert!(safe.contains(wanted), "missing {wanted}: {safe}");
+        }
+        for unwanted in [
+            "<style",
+            "<link",
+            "<script",
+            "<img",
+            "onclick",
+            "position:",
+            "z-index",
+            "background-image",
+            "example.test/track",
+            "class=",
+        ] {
+            assert!(!safe.contains(unwanted), "unexpected {unwanted}");
+        }
+        assert_eq!(
+            sanitize_compose(&safe),
+            safe,
+            "saving a quote keeps its safe inline layout"
+        );
+    }
+
+    #[test]
+    fn quote_limits_fall_back_instead_of_creating_an_uneditable_oversized_draft() {
+        assert!(prepare_quote(&format!("<p>{}</p>", "x".repeat(200_001))).is_err());
+        assert!(prepare_quote(&"<span>x</span>".repeat(4001)).is_err());
+        let safe = sanitize_compose("<blockquote data-auumail-quote=\"true\"><table><tr><td style=\"border-top-width:0px;padding-left:20px;width:200px;position:fixed\">x</td></tr></table></blockquote>");
+        assert!(safe.contains("data-auumail-quote=\"true\""));
+        assert!(safe.contains("border-top-width:0px"));
+        assert!(!safe.contains("position"));
     }
 
     #[test]

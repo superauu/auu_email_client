@@ -1,6 +1,6 @@
 # 发送与 outbox 设计（SMTP）
 
-状态：2026-11-14 已实现（代码与自动检查通过；真实账号发送验收待执行）。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
+状态：2026-11-15 已实现（既有真实 Gmail 发送已验收；本轮新增抄送 / 密送已自动验证，真实投递待验收）。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
 
 ## 目标
 
@@ -11,7 +11,11 @@
 - 密码账号：SMTP TLS 直连（465）与 STARTTLS（587）。SMTP STARTTLS 路径此前仅做过连接验证，实现时补全与测试。
 - Gmail OAuth：已申请 `https://mail.google.com/`，XOAUTH2 可用于 smtp.gmail.com:465 / 587，无需新增 scope。
 - Microsoft OAuth：当初刻意未申请 `SMTP.Send`（OAUTH_SETUP 约定），Open 后发送按钮禁用并说明原因；注册应用补 scope 前不得伪装可用。
-- 撰写保持纯文本；附件随撰写发送与富文本一样留待后续，不在本设计。
+- 撰写支持纯文本 / HTML 与 To / Cc / Bcc；附件 / 图片发送待后续，详见 COMPOSING。
+
+## 收件人隔离（2026-11-15）
+
+草稿 v12 保存独立 cc / bcc 字段，登记与 worker 快照均检查三栏地址。SMTP RCPT 使用合并去重的完整信封；MIME 只写 To / Cc，密送地址不写入头部，仅密送时 To 为 undisclosed-recipients。空主题在 UI 明确确认，服务端仍允许。字段长度、地址编辑与回归见 COMPOSING。纯文本输出明确 base64 传输编码且只含一次 Content-Type；HTML 使用 multipart/alternative。
 
 ## Outbox 状态机
 
@@ -72,5 +76,5 @@ failed --[手动重试]--> queued                  (明确拒绝错误不自动�
 
 ## 明确不做
 
-- 富文本 / 附件发送、群发调度、定时发送、S/MIME。
+- 附件 / 图片发送、群发调度、定时发送、S/MIME。
 - 自动重试 unknown；本地合成 Sent 邮件；未配置签名发布的对外分发。
