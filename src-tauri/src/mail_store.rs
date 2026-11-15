@@ -180,6 +180,8 @@ pub struct MessageRow {
     pub mailbox: String,
     pub from: FromRow,
     pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub reply_to: Vec<String>,
     pub subject: String,
     pub preview: String,
     pub body_text: String,
@@ -653,7 +655,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     let sql = format!(
         "SELECT m.id, m.account_id, COALESCE(m.original_remote_id,m.remote_id), m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
            CASE WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) END AS mailbox, m.state_revision
-         ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
+         ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing,m.cc_json,m.reply_to_json FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -670,6 +672,8 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
             break;
         }
         let recipients: String = row.get(7).map_err(|e| AppError::storage(e.to_string()))?;
+        let cc_json: String = row.get(20).map_err(|e| AppError::storage(e.to_string()))?;
+        let reply_to_json: String = row.get(21).map_err(|e| AppError::storage(e.to_string()))?;
         let body_text: Option<String> = row.get(8).map_err(|e| AppError::storage(e.to_string()))?;
         let id: String = row.get(0).map_err(|e| AppError::storage(e.to_string()))?;
         let received_at: String = row.get(9).map_err(|e| AppError::storage(e.to_string()))?;
@@ -707,6 +711,9 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
             },
             to: serde_json::from_str(&recipients)
                 .map_err(|_| AppError::storage("收件人数据损坏"))?,
+            cc: serde_json::from_str(&cc_json).map_err(|_| AppError::storage("抄送数据损坏"))?,
+            reply_to: serde_json::from_str(&reply_to_json)
+                .map_err(|_| AppError::storage("Reply-To 数据损坏"))?,
             subject: row.get(4).map_err(|e| AppError::storage(e.to_string()))?,
             preview: preview_of(body_text.as_deref()),
             body_text: body_text.unwrap_or_default(),

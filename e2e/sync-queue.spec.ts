@@ -8,7 +8,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
   const accounts: MailAccount[] = (realAccounts ? [1, 2, 3] : []).map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
   await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion, navigation }) => {
     const workspace = { ...fixture, accounts: [...fixture.accounts, ...accounts] };
-    if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', labelIds: [], unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }] });
+    if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', labelIds: [], unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }], cc: ['copy@mail.example'], replyTo: ['replies@mail.example'] });
     if (recoveryMode) { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery = { state: recoveryMode === 'queued' ? 'queued' : 'available', detail: '旧缓存或未知归档需要远端核对。', location: null, evidence: null }; if (recoveryMode === 'unknown') { message.mailbox = 'archive'; message.changes = [{ field: 'archive', state: 'unknown', error: '归档结果待核对，不会自动重试。' }]; } }
     if (recoveryMode === 'fingerprint' || recoveryMode === 'unanchored') { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery!.fingerprint = { eligible: recoveryMode === 'fingerprint', reason: recoveryMode === 'fingerprint' ? '可信原定位仍在，可安全核对原文。' : '缺少可信原定位，不能升级为历史原文指纹。' }; }
     if (completion) {
@@ -47,7 +47,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     const snapshot = () => structuredClone({ revision, jobs });
     function project(draft: MailDraft): MailMessage {
       const account = workspace.accounts.find(account => account.id === draft.accountId)!;
-      return { id: draft.id, accountId: draft.accountId, threadId: draft.replyToId ?? draft.id, mailbox: 'drafts', from: { name: account.name, email: account.email }, to: draft.to ? [draft.to] : [], subject: draft.subject || '未命名草稿', preview: draft.bodyText.slice(0, 120), bodyText: draft.bodyText, receivedAt: draft.updatedAt, unread: false, starred: false, labelIds: [], draft: { ...draft } };
+      return { id: draft.id, accountId: draft.accountId, threadId: draft.replyToId ?? draft.id, mailbox: 'drafts', from: { name: account.name, email: account.email }, to: draft.to ? [draft.to] : [], subject: draft.subject || '未命名草稿', preview: draft.bodyText.slice(0, 120), bodyText: draft.bodyText, receivedAt: draft.updatedAt, unread: false, starred: false, labelIds: [], draft: { ...draft }, ...(draft.cc ? { cc: draft.cc.split(',').map(address => address.trim()).filter(Boolean) } : {}) };
     }
     const invoke = async (command: string, input: Record<string, unknown> = {}) => {
       switch (command) {
@@ -555,6 +555,8 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await expect(replyAll.getByLabel('主题')).toHaveValue('Re: 离线状态测试');
   await expect(replyAll.getByRole('button', { name: '从收件人移除 zhixia@example.test', exact: true })).toBeVisible();
   await expect(replyAll.getByRole('button', { name: '从收件人移除 alex@example.test', exact: true })).toBeVisible();
+  // 回复全部把 Cc 一并纳入（抄送人收到回复）；本账号地址被剔除。
+  await expect(replyAll.getByRole('button', { name: '从抄送移除 copy@mail.example', exact: true })).toBeVisible();
   await expect(replyAll.getByRole('button', { name: '从收件人移除 test1@mail.example', exact: true })).toHaveCount(0);
 });
 
@@ -589,6 +591,8 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   await page.getByRole('button',{name:'阅读邮件：离线状态测试',exact:true}).click();
   await page.getByRole('button',{name:'回复邮件',exact:true}).click();
   const compose=page.locator('.compose-pane');
+  // 普通回复优先 Reply-To 头，而不是发件人地址。
+  await expect(compose.getByRole('button',{name:'从收件人移除 replies@mail.example',exact:true})).toBeVisible();
   await compose.getByRole('textbox',{name:'邮件正文'}).fill('发送测试');
   await compose.getByRole('button',{name:'发送',exact:true}).click();
   // 登记成功后撰写框自动关闭，结果以 toast 反馈。

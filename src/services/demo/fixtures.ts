@@ -31,6 +31,7 @@ export const demoWorkspace: WorkspaceSnapshot = {
     message('weekly', {
       accountId: 'work', from: { name: '陈亦舟', email: 'yizhou@studio.example' }, subject: '本周项目进展与下一步安排',
       preview: '同步一下本周进展：基础组件已经完成，接下来一起打磨细节。', bodyText: 'Alex，\n\n同步一下本周进展：基础组件已经完成。\n\n接下来我们会集中处理阅读体验和账号切换，周五之前整理好反馈。\n\n谢谢！\n亦舟',
+      cc: ['mei@studio.example', 'hao@studio.example'], replyTo: ['yizhou-replies@studio.example'],
       unread: true, labelIds: ['project'], receivedAt: '2026-11-10T01:42:00Z',
     }),
     message('newsletter', {

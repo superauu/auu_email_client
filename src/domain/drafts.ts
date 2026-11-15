@@ -34,5 +34,6 @@ export function draftAsMessage(draft: MailDraft, accounts: MailAccount[]): MailM
     from: { name: account.name, email: account.email }, to: draft.to ? [draft.to] : [], subject: draft.subject || '未命名草稿',
     preview: draft.bodyText.slice(0, 120), bodyText: draft.bodyText, receivedAt: draft.updatedAt,
     unread: false, starred: false, labelIds: [], draft: { ...draft },
+    ...(draft.cc ? { cc: draft.cc.split(',').map(address => address.trim()).filter(Boolean) } : {}),
   };
 }

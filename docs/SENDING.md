@@ -17,6 +17,14 @@
 
 草稿 v12 保存独立 cc / bcc 字段，登记与 worker 快照均检查三栏地址。SMTP RCPT 使用合并去重的完整信封；MIME 只写 To / Cc，密送地址不写入头部，仅密送时 To 为 undisclosed-recipients。空主题在 UI 明确确认，服务端仍允许。字段长度、地址编辑与回归见 COMPOSING。纯文本输出明确 base64 传输编码且只含一次 Content-Type；HTML 使用 multipart/alternative。
 
+## 回复会话关联（2026-11-15）
+
+- 回复目标规则见 COMPOSING；发送侧同步补全 RFC 5322 会话头：worker 快照读取草稿 `reply_to_id`（本机邮件 ID），在同账号 messages 查原邮件的 `header_message_id` 与 `header_references`（迁移 013，IMAP / POP3 解析时落库）。
+- 组装时 `In-Reply-To` = 原邮件 Message-ID；`References` = 原 References 链逐条规范化（mail-parser 存裸 id，统一补尖括号）后追加原 Message-ID，原链已含该 ID 不重复；超过 900 字节按空格折行（RFC 5322 单行上限 998）。
+- Message-ID 写入前中和 CR / LF（防头部注入）；缺尖括号补齐。
+- 诚实降级：原邮件已删除、查询失败或原邮件没有 Message-ID 时不写两个关联头，不伪造会话关联，也不阻塞发送。
+- 未回复草稿（新建 / 转发）不写 In-Reply-To / References；发件人自身 Reply-To 头暂不提供（账号无别名场景）。真实收件端（Gmail / Outlook）的会话归组验收待执行。
+
 ## Outbox 状态机
 
 本地草稿（drafts）仍是唯一编辑入口；「发送」把草稿登记进 outbox 队列，草稿本体保留为已发送副本关联。

@@ -183,7 +183,7 @@ pub(crate) fn process<S: Read + Write>(
             if !current {
                 return Err(AppError::conflict("下载完成前本机版本已改变，旧结果未应用"));
             }
-            tx.execute("UPDATE messages SET raw_cache_key=?1,attachments_json=?2,content_hash=?3,header_message_id=?4,state_revision=state_revision+1 WHERE account_id=?5 AND id=?6",params![mail.raw_cache_key,serde_json::to_string(&mail.attachments).map_err(|_|storage())?,mail.content_hash,mail.header_message_id,account,id]).map_err(|_|storage())?;
+            tx.execute("UPDATE messages SET raw_cache_key=?1,attachments_json=?2,content_hash=?3,header_message_id=?4,header_references=?5,state_revision=state_revision+1 WHERE account_id=?6 AND id=?7",params![mail.raw_cache_key,serde_json::to_string(&mail.attachments).map_err(|_|storage())?,mail.content_hash,mail.header_message_id,mail.header_references,account,id]).map_err(|_|storage())?;
             tx.execute(
                 "DELETE FROM imap_body_requests WHERE account_id=?1 AND message_id=?2",
                 params![account, id],

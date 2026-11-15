@@ -37,7 +37,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const suggestions = useMemo(() => {
     const contacts = new Map<string, { name: string; email: string }>();
     for (const message of messages.filter(item => item.accountId === draft.accountId && !item.draft)) {
-      for (const contact of [message.from, ...message.to.map(email => ({ name: '', email }))]) {
+      for (const contact of [message.from, ...message.to.map(email => ({ name: '', email })), ...(message.cc ?? message.replyTo ?? []).map(email => ({ name: '', email }))]) {
         if (isRecipientAddress(contact.email) && !contacts.has(contact.email.toLowerCase())) contacts.set(contact.email.toLowerCase(), contact);
       }
     }

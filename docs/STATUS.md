@@ -1,6 +1,15 @@
 # 当前状态
 
-更新时间：2026-11-15。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写重构（右栏工作区 + 富文本工具栏）、SMTP 发送队列（outbox）、同步入口进主工作区、事件完成状态持久化与 POP3 收信。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-15。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成回复正确性修复（回复全部接入 Cc、Reply-To、发送会话关联头）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+
+## 最新增量：回复正确性（2026-11-15）
+
+- **回复全部接入 Cc**：IMAP / POP3 解析新增 Cc、Reply-To、References（迁移 013：messages 补 `cc_json` / `reply_to_json` / `header_references`；mail-parser 的 Cc / Reply-To 地址与 parse_id 裸 Message-ID 均落库）。阅读窗格显示抄送行。
+- **回复目标规则**（`src/domain/mail.ts::replyTargets`，纯函数）：普通回复优先 Reply-To，缺失或只含本账号地址时退回发件人；回复全部合并发件人 + To + Cc，小写去重、剔除本账号地址，抄送进入草稿独立抄送栏；To 全被剔除时降级到 Cc。
+- **发送会话关联头**：outbox worker 快照读草稿 `reply_to_id` 换算原邮件 Message-ID / References，MIME 组装输出 `In-Reply-To` 与完整 `References` 链（逐条补尖括号、防 CR/LF 注入、超 900 字节折行）；原邮件已删除或无 Message-ID 时诚实降级不写头，不伪造会话也不阻塞发送。
+- mail_store 的 MessageRow 向前端暴露 `cc` / `replyTo`（header_message_id / header_references 仍为内部字段）；草稿投影与演示 / e2e harness 同步补 cc；联系人建议纳入 Cc。
+- 验证：`npm run check`（60 个 TS 测试，新增 replyTargets 回归）、`npm run check:native`（201 个 Rust 测试 + fmt + Clippy，新增 Cc / Reply-To / References 解析、回复组装头与降级 / 注入回归）、`npm run test:ui` 62 个 Chromium 回归全部通过（回复全部含 Cc chip、Reply-To 生效、阅读窗格抄送行）。
+- **未验证**：真实收件端验收待执行——抄送人确实收到回复全部、Gmail / Outlook 会话归组（In-Reply-To / References）、Reply-To 列表邮件回对地址；原生 WebView2 手工核对阅读窗格抄送行。
 
 ## 最新增量：真实工作区与演示数据隔离（2026-11-15）
 

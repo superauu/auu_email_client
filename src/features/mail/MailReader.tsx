@@ -1,7 +1,7 @@
 import { Archive, ArrowLeft, CornerUpLeft, Forward, Image, Mail, MailOpen, PenLine, ReplyAll, Sparkles, Star } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { MailMessage, RecoveryAction } from '../../domain/mail';
+import { replyTargets, type MailMessage, type RecoveryAction } from '../../domain/mail';
 import { linkifyText } from '../../domain/linkify';
 import { errorMessage } from '../../domain/errors';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
@@ -14,6 +14,17 @@ import { desktop, isDesktop } from '../../platform/desktop';
 import { useThemeStore } from '../../stores/themeStore';
 
 type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean };
+
+/** 回复全部：收件目标含 Cc；没有任何可回对象时禁用（等同无意义操作）。 */
+function ReplyAllButton({ message, accountEmail, onCompose }: { message: MailMessage; accountEmail: string; onCompose: (message: MailMessage, editing?: boolean, mode?: 'reply' | 'reply-all' | 'forward') => void }) {
+  const targets = replyTargets(message, accountEmail, 'reply-all');
+  const disabled = !targets.to.length;
+  return (
+    <Button variant="secondary" disabled={disabled} title={disabled ? '这封邮件没有其他收件人' : undefined} onClick={() => onCompose(message, false, 'reply-all')}>
+      <ReplyAll size={15} />回复全部
+    </Button>
+  );
+}
 
 function PlainBody({ text, empty, onOpen }: { text: string; empty: string; onOpen: (href: string) => void }) {
   const segments = useMemo(() => linkifyText(text), [text]);
@@ -135,11 +146,11 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
       </div>}
       <div className="reader-labels"><span className={`label tone-${account?.color ?? 'teal'}`}>{account?.name}</span>{message.labelIds.map(id => { const label = labels.find(l => l.id === id); return label && <span key={id} className={`label tone-${label.color}`}>{label.name}</span>; })}{localDraft && <span className="label">本地草稿</span>}{serverDraft && <span className="label">服务器草稿副本</span>}</div>
       <h2>{message.subject}</h2>
-      <div className="message-sender"><Avatar text={message.from.name.slice(0, 1)} color={account?.color} /><div><strong>{message.from.name}</strong><span>{message.from.email}</span><span>收件人：{message.to.join(', ') || '尚未填写'}</span></div><time dateTime={message.receivedAt}>{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(message.receivedAt))}</time></div>
+      <div className="message-sender"><Avatar text={message.from.name.slice(0, 1)} color={account?.color} /><div><strong>{message.from.name}</strong><span>{message.from.email}</span><span>收件人：{message.to.join(', ') || '尚未填写'}</span>{!!message.cc?.length && <span>抄送：{message.cc.join(', ')}</span>}</div><time dateTime={message.receivedAt}>{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(message.receivedAt))}</time></div>
       <div className="reader-actions" role="toolbar" aria-label="邮件操作">
         <Button variant="primary" onClick={() => onCompose(message, message.mailbox === 'drafts')}>{localDraft ? <PenLine size={15} /> : <CornerUpLeft size={15} />}{localDraft ? '编辑草稿' : serverDraft ? '复制为本地草稿' : '回复邮件'}</Button>
         {!localDraft && !serverDraft && <>
-          <Button variant="secondary" disabled={!message.to.some(address => address.trim().toLowerCase() !== account?.email.toLowerCase())} title={message.to.some(address => address.trim().toLowerCase() !== account?.email.toLowerCase()) ? undefined : '这封邮件没有其他收件人'} onClick={() => onCompose(message, false, 'reply-all')}><ReplyAll size={15} />回复全部</Button>
+          <ReplyAllButton message={message} accountEmail={account?.email ?? ''} onCompose={onCompose} />
           <Button variant="secondary" onClick={() => onCompose(message, false, 'forward')}><Forward size={15} />转发</Button>
         </>}
         <span>{localDraft ? '草稿已保存在这台设备上。' : serverDraft ? '复制后在本机编辑，不覆盖服务器草稿。' : `使用 ${account?.email} 回复或转发`}</span>

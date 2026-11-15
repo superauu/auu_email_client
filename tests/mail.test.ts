@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectMessages } from '../src/features/mail/selectors';
+import { replyTargets } from '../src/domain/mail';
 import { demoWorkspace } from '../src/services/demo/fixtures';
 import { demoMailGateway } from '../src/services/demo/DemoMailGateway';
 import { validateDemoDrafts } from '../src/services/demo/drafts';
@@ -64,4 +65,39 @@ test('unread filtering combines with account folder label and search without cha
   assert.deepEqual(selectMessages(messages,{...query,unreadOnly:true,accountId:selected.accountId,folderId:'folder',search:selected.subject}),[selected]);
   assert.equal(selectMessages(messages,{...query,unreadOnly:true,accountId:'other',folderId:'folder',search:selected.subject}).length,0);
   assert.deepEqual(messages,original);
+});
+
+test('replyTargets: normal reply prefers Reply-To and falls back to the sender', () => {
+  const base = { from: { name: 'A', email: 'a@example.test' }, to: ['me@example.test'] };
+  assert.deepEqual(replyTargets({ ...base, replyTo: ['list@lists.example.test'] }, 'me@example.test', 'reply'), {
+    to: ['list@lists.example.test'], cc: [],
+  });
+  // Reply-To 只含本账号地址时退回发件人。
+  assert.deepEqual(replyTargets({ ...base, replyTo: ['me@example.test'] }, 'me@example.test', 'reply'), {
+    to: ['a@example.test'], cc: [],
+  });
+  assert.deepEqual(replyTargets(base, 'me@example.test', 'reply'), { to: ['a@example.test'], cc: [] });
+});
+
+test('replyTargets: reply-all merges To and Cc, drops own address and duplicates', () => {
+  const message = {
+    from: { name: 'A', email: 'a@example.test' },
+    to: ['me@example.test', 'A@EXAMPLE.TEST', 'b@example.test'],
+    cc: ['me@example.test', 'c@example.test', 'b@example.test'],
+  };
+  assert.deepEqual(replyTargets(message, 'me@example.test', 'reply-all'), {
+    to: ['a@example.test', 'b@example.test'], cc: ['c@example.test'],
+  });
+});
+
+test('replyTargets: reply-all keeps at least one recipient even for self-sent mail', () => {
+  const message = {
+    from: { name: 'Me', email: 'me@example.test' },
+    to: ['b@example.test'],
+    cc: ['c@example.test'],
+  };
+  // 发件人是自己：目标降级为其余收件人，Cc 保持独立。
+  assert.deepEqual(replyTargets(message, 'me@example.test', 'reply-all'), {
+    to: ['b@example.test'], cc: ['c@example.test'],
+  });
 });

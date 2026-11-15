@@ -59,11 +59,15 @@ struct SyncPlan {
 pub(crate) struct ParsedMessage {
     pub(crate) content_hash: String,
     pub(crate) header_message_id: Option<String>,
+    /// 原邮件 References 头原文（会话链），回复发送时用于组装 References。
+    pub(crate) header_references: Option<String>,
     uid: u32,
     subject: String,
     sender_name: String,
     sender_email: String,
     recipients_json: String,
+    cc_json: String,
+    reply_to_json: String,
     body_text: String,
     received_at: String,
     unread: bool,
@@ -507,6 +511,41 @@ pub(crate) fn parse_raw(
                 .collect()
         })
         .unwrap_or_default();
+    let cc: Vec<String> = parsed
+        .as_ref()
+        .and_then(|mail| mail.cc())
+        .map(|addresses| {
+            addresses
+                .iter()
+                .filter_map(|address| address.address().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let reply_to: Vec<String> = parsed
+        .as_ref()
+        .and_then(|mail| mail.reply_to())
+        .map(|addresses| {
+            addresses
+                .iter()
+                .filter_map(|address| address.address().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    // References 头可能是单值或列表形态，统一空格连接为一条会话链。
+    let header_references: Option<String> = parsed.as_ref().and_then(|mail| {
+        let value = mail.references();
+        let joined = match value {
+            mail_parser::HeaderValue::Text(text) => text.trim().to_owned(),
+            mail_parser::HeaderValue::TextList(items) => items
+                .iter()
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => String::new(),
+        };
+        (!joined.is_empty()).then_some(joined)
+    });
     Ok(ParsedMessage {
         raw_cache_key: None,
         attachments: parsed
@@ -539,6 +578,7 @@ pub(crate) fn parse_raw(
             .as_ref()
             .and_then(|mail| mail.message_id())
             .map(str::to_owned),
+        header_references,
         uid,
         subject: parsed
             .as_ref()
@@ -553,6 +593,9 @@ pub(crate) fn parse_raw(
         sender_email: email,
         recipients_json: serde_json::to_string(&recipients)
             .map_err(|_| AppError::invalid("邮件收件人无效"))?,
+        cc_json: serde_json::to_string(&cc).map_err(|_| AppError::invalid("邮件抄送地址无效"))?,
+        reply_to_json: serde_json::to_string(&reply_to)
+            .map_err(|_| AppError::invalid("邮件 Reply-To 无效"))?,
         body_text: parsed
             .as_ref()
             .and_then(|mail| mail.body_text(0))
@@ -963,14 +1006,14 @@ fn commit_batch(
         if protected {
             continue;
         }
-        tx.execute("INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation,content_hash,header_message_id,locator_verified,content_hash_verified)
-          VALUES (?1,?2,?3,?1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,1,1)
+        tx.execute("INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,cc_json,reply_to_json,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation,content_hash,header_message_id,header_references,locator_verified,content_hash_verified)
+          VALUES (?1,?2,?3,?1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,1,1)
           ON CONFLICT(account_id,remote_id) DO UPDATE SET subject=excluded.subject,sender_name=excluded.sender_name,sender_email=excluded.sender_email,
-          recipients_json=excluded.recipients_json,body_text=excluded.body_text,received_at=excluded.received_at,
+          recipients_json=excluded.recipients_json,cc_json=excluded.cc_json,reply_to_json=excluded.reply_to_json,body_text=excluded.body_text,received_at=excluded.received_at,
           unread=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='unread'),excluded.unread),
           starred=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='starred'),excluded.starred),
-          remote_folder=excluded.remote_folder,remote_uid_validity=excluded.remote_uid_validity,remote_uid=excluded.remote_uid,remote_generation=excluded.remote_generation,content_hash=excluded.content_hash,header_message_id=excluded.header_message_id,locator_verified=1,content_hash_verified=1,state_revision=messages.state_revision+1",
-          params![id, plan.account_id, remote_id, message.subject, message.sender_name, message.sender_email, message.recipients_json, message.body_text, message.received_at, message.unread, message.starred,remote,cursor.uid_validity,message.uid,plan.generation,message.content_hash,message.header_message_id])
+          remote_folder=excluded.remote_folder,remote_uid_validity=excluded.remote_uid_validity,remote_uid=excluded.remote_uid,remote_generation=excluded.remote_generation,content_hash=excluded.content_hash,header_message_id=excluded.header_message_id,header_references=excluded.header_references,locator_verified=1,content_hash_verified=1,state_revision=messages.state_revision+1",
+          params![id, plan.account_id, remote_id, message.subject, message.sender_name, message.sender_email, message.recipients_json, message.cc_json, message.reply_to_json, message.body_text, message.received_at, message.unread, message.starred,remote,cursor.uid_validity,message.uid,plan.generation,message.content_hash,message.header_message_id,message.header_references])
           .map_err(|_| AppError::storage("邮件批次未能保存"))?;
         let id: String = tx
             .query_row(
@@ -1040,15 +1083,15 @@ pub(crate) fn commit_pop3(
             generated
         };
         tx.execute(
-            "INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation,content_hash,header_message_id,locator_verified,content_hash_verified)
-             VALUES (?1,?2,?3,?1,?4,?5,?6,?7,?8,?9,?10,?11,'INBOX',0,?12,?13,?14,?15,1,1)
+            "INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,cc_json,reply_to_json,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation,content_hash,header_message_id,header_references,locator_verified,content_hash_verified)
+             VALUES (?1,?2,?3,?1,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'INBOX',0,?14,?15,?16,?17,?18,1,1)
              ON CONFLICT(account_id,remote_id) DO UPDATE SET
                subject=excluded.subject,sender_name=excluded.sender_name,sender_email=excluded.sender_email,
-               recipients_json=excluded.recipients_json,body_text=excluded.body_text,received_at=excluded.received_at,
+               recipients_json=excluded.recipients_json,cc_json=excluded.cc_json,reply_to_json=excluded.reply_to_json,body_text=excluded.body_text,received_at=excluded.received_at,
                unread=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='unread'),excluded.unread),
                starred=COALESCE((SELECT value FROM message_changes WHERE message_id=messages.id AND field='starred'),excluded.starred),
                remote_generation=excluded.remote_generation,content_hash=excluded.content_hash,
-               header_message_id=excluded.header_message_id,locator_verified=1,content_hash_verified=1,state_revision=messages.state_revision+1",
+               header_message_id=excluded.header_message_id,header_references=excluded.header_references,locator_verified=1,content_hash_verified=1,state_revision=messages.state_revision+1",
             params![
                 id,
                 account_id,
@@ -1057,6 +1100,8 @@ pub(crate) fn commit_pop3(
                 message.sender_name,
                 message.sender_email,
                 message.recipients_json,
+                message.cc_json,
+                message.reply_to_json,
                 message.body_text,
                 message.received_at,
                 message.unread,
@@ -1064,7 +1109,8 @@ pub(crate) fn commit_pop3(
                 message.uid,
                 generation,
                 message.content_hash,
-                message.header_message_id
+                message.header_message_id,
+                message.header_references
             ],
         )
         .map_err(|_| AppError::storage("POP3 邮件未能保存"))?;
@@ -1172,6 +1218,48 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn parse_raw_keeps_cc_reply_to_and_references() {
+        let raw = concat!(
+            "From: Alice <alice@example.test>\r\n",
+            "To: me@example.test\r\n",
+            "Cc: Carol <carol@example.test>, dave@example.test\r\n",
+            "Reply-To: real@list.example.test\r\n",
+            "References: <a@x.test>\r\n <b@x.test>\r\n",
+            "Message-ID: <mid@x.test>\r\n",
+            "Subject: thread\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n\r\n",
+            "Hello\r\n"
+        );
+        let parsed = parse_raw(1, raw.as_bytes(), crate::now_utc(), true, false).unwrap();
+        let cc: Vec<String> = serde_json::from_str(&parsed.cc_json).unwrap();
+        assert_eq!(cc, vec!["carol@example.test", "dave@example.test"]);
+        let reply_to: Vec<String> = serde_json::from_str(&parsed.reply_to_json).unwrap();
+        assert_eq!(reply_to, vec!["real@list.example.test"]);
+        // mail-parser 的 parse_id 剥掉尖括号：存裸 id，发送组装时再统一补齐。
+        assert_eq!(
+            parsed.header_references.as_deref(),
+            Some("a@x.test b@x.test")
+        );
+        assert_eq!(parsed.header_message_id.as_deref(), Some("mid@x.test"));
+    }
+
+    #[test]
+    fn parse_raw_defaults_when_reply_headers_are_missing() {
+        let raw = concat!(
+            "From: Alice <alice@example.test>\r\n",
+            "To: me@example.test\r\n",
+            "Subject: plain\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n\r\n",
+            "Hello\r\n"
+        );
+        let parsed = parse_raw(1, raw.as_bytes(), crate::now_utc(), true, false).unwrap();
+        assert_eq!(parsed.cc_json, "[]");
+        assert_eq!(parsed.reply_to_json, "[]");
+        assert_eq!(parsed.header_references, None);
+        assert_eq!(parsed.header_message_id, None);
     }
 
     #[test]
@@ -1749,11 +1837,14 @@ mod tests {
             attachments: vec![],
             content_hash: String::new(),
             header_message_id: None,
+            header_references: None,
             uid: 9,
             subject: "Moved".into(),
             sender_name: "Sender".into(),
             sender_email: "sender@example.test".into(),
             recipients_json: "[]".into(),
+            cc_json: "[]".into(),
+            reply_to_json: "[]".into(),
             body_text: "Body".into(),
             received_at: crate::now_utc(),
             unread: false,
@@ -1819,12 +1910,15 @@ mod tests {
             sender_name: "Sender".into(),
             sender_email: "sender@example.test".into(),
             recipients_json: "[]".into(),
+            cc_json: "[]".into(),
+            reply_to_json: "[]".into(),
             body_text: "Different body".into(),
             received_at: crate::now_utc(),
             unread: false,
             starred: true,
             content_hash: "different".into(),
             header_message_id: None,
+            header_references: None,
         };
         commit_batch(&db, &plan, "inbox", "INBOX", old, old.unwrap(), &[body]).unwrap();
         {

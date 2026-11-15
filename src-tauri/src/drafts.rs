@@ -177,6 +177,15 @@ fn project(conn: &Connection, draft: Draft) -> Result<MessageRow, AppError> {
         } else {
             vec![draft.to.clone()]
         },
+        // 草稿 cc 为逗号分隔字符串；仅用于界面投影（草稿不提供回复操作）。
+        cc: draft
+            .cc
+            .split(',')
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        reply_to: Vec::new(),
         subject: if draft.subject.is_empty() {
             "未命名草稿".into()
         } else {

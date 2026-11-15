@@ -17,7 +17,7 @@ import { syncableAccounts, syncJobSummary, isSyncActive, type SyncJob } from '..
 import { useLayoutStore, MIN_LIST_WIDTH, MAX_LIST_WIDTH, MIN_READER_WIDTH, DEFAULT_LIST_WIDTH, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, DEFAULT_SIDEBAR_WIDTH } from '../stores/layoutStore';
 import { desktop, isDesktop } from '../platform/desktop';
 import { errorMessage } from '../domain/errors';
-import type { MailDraft, MailMessage } from '../domain/mail';
+import { replyTargets, type MailDraft, type MailMessage } from '../domain/mail';
 
 export function App() {
   const { status, error, load, query, setQuery, accounts, view, setView } = useWorkspaceStore(useShallow(s => ({ status: s.status, error: s.error, load: s.load, query: s.query, setQuery: s.setQuery, accounts: s.accounts, view: s.view, setView: s.setView })));
@@ -57,14 +57,15 @@ export function App() {
       setDraft({ id: `draft-${crypto.randomUUID()}`, accountId, to: '', subject, bodyText, replyToId: message.id, updatedAt: new Date().toISOString() });
       return;
     }
-    // 回复全部 = 原发件人 + 其他收件人，剔除本账号地址；没有其他收件人时等同回复。
-    const accountEmail = accounts.find(a => a.id === accountId)?.email.toLowerCase() ?? '';
-    const replyAllTo = [...new Set([message?.from.email ?? '', ...(message?.to ?? [])].map(address => address.trim()).filter(address => address && address.toLowerCase() !== accountEmail))];
+    // 回复目标：普通回复优先 Reply-To；回复全部合并发件人 + To + Cc，剔除本账号地址。
+    const accountEmail = accounts.find(a => a.id === accountId)?.email ?? '';
+    const targets = message && !editing && mode !== 'forward' ? replyTargets(message, accountEmail, mode) : null;
     setDraft({
       id: `draft-${crypto.randomUUID()}`, accountId,
-      to: editing ? message?.to.join(', ') ?? '' : message ? mode === 'reply-all' && replyAllTo.length ? replyAllTo.join(', ') : message.from.email : '',
+      to: editing ? message?.to.join(', ') ?? '' : targets ? targets.to.join(', ') : '',
       subject: editing ? message?.subject ?? '' : message ? /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}` : '',
       bodyText: editing ? message?.bodyText ?? '' : '',
+      ...(targets?.cc.length ? { cc: targets.cc.join(', ') } : {}),
       ...(!editing && message ? { replyToId: message.id } : {}), updatedAt: new Date().toISOString(),
     });
   }

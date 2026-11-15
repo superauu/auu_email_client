@@ -47,6 +47,10 @@ export interface MailMessage {
   mailbox: Exclude<MailboxKind, 'starred'>;
   from: { name: string; email: string };
   to: string[];
+  /** 抄送地址（收件侧缓存投影）；缺省 = 未解析或无抄送。 */
+  cc?: string[];
+  /** Reply-To 头地址；缺省 = 未提供，回复时退回发件人。 */
+  replyTo?: string[];
   subject: string;
   preview: string;
   /** Plain text only. Remote HTML must go through a future isolated renderer. */
@@ -126,6 +130,34 @@ export interface WorkspaceSnapshot {
   events: MailEvent[];
   /** accountId → last successful sync time (ISO). Desktop gateway only; absent for demo. */
   syncStates?: Record<string, string>;
+}
+
+/**
+ * 回复目标：普通回复优先 Reply-To（空或只含本账号时退回发件人）；
+ * 回复全部合并发件人 + To + Cc，按地址去重并剔除本账号；To 全被剔除时降级到 Cc。
+ */
+export function replyTargets(
+  message: Pick<MailMessage, 'from' | 'to' | 'cc' | 'replyTo'>,
+  ownEmail: string,
+  mode: 'reply' | 'reply-all',
+): { to: string[]; cc: string[] } {
+  const own = ownEmail.trim().toLowerCase();
+  const seen = new Set<string>();
+  const collect = (addresses: (string | undefined)[]) =>
+    addresses.filter((address): address is string => !!address?.trim()).flatMap(address => address.split(',')).map(address => address.trim()).filter(address => {
+      if (!address) return false;
+      const key = address.toLowerCase();
+      if (key === own || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (mode === 'reply') {
+    const direct = collect(message.replyTo ?? []);
+    return { to: direct.length ? direct : collect([message.from.email]), cc: [] };
+  }
+  const to = collect([message.from.email, ...message.to]);
+  const cc = collect(message.cc ?? []);
+  return to.length ? { to, cc } : { to: cc, cc: [] };
 }
 
 export interface MailQuery {

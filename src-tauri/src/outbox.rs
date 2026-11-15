@@ -188,15 +188,111 @@ fn fold_base64(data: &str) -> String {
         .join("\r\n")
 }
 
-fn assemble(
-    from_name: &str,
-    from_email: &str,
-    recipients: &Recipients,
-    subject: &str,
-    body_text: &str,
-    body_html: Option<&str>,
-    message_id: &str,
-) -> String {
+/// Message-ID 规范化：中和 CR / LF 后补齐尖括号；空白返回 None。
+fn safe_message_id(value: &str) -> Option<String> {
+    let cleaned: String = value
+        .chars()
+        .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        trimmed.to_string()
+    } else {
+        format!("<{trimmed}>")
+    })
+}
+
+/// 回复草稿的会话关联头：In-Reply-To = 原邮件 Message-ID，
+/// References = 原 References 链（逐条规范化）+ 原 Message-ID。
+/// 原邮件已被删除、定位失败或没有 Message-ID 时返回 None（诚实降级，不伪造会话）。
+fn reply_headers(
+    conn: &Connection,
+    account_id: &str,
+    reply_to_id: &Option<String>,
+) -> Option<ReplyHeaders> {
+    let reply_to_id = reply_to_id.as_deref()?;
+    let row: Option<(Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT header_message_id, header_references FROM messages WHERE account_id = ?1 AND id = ?2",
+            params![account_id, reply_to_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap_or(None);
+    let (message_id, references) = row?;
+    let in_reply_to = message_id.as_deref().and_then(safe_message_id)?;
+    let mut chain: Vec<String> = references
+        .map(|value| {
+            value
+                .split_whitespace()
+                .filter_map(safe_message_id)
+                .collect()
+        })
+        .unwrap_or_default();
+    // 原链已含原 Message-ID（例如本机缓存本身就是一封回复）时不再重复。
+    if chain.last().map(String::as_str) != Some(in_reply_to.as_str()) {
+        chain.push(in_reply_to.clone());
+    }
+    Some(ReplyHeaders {
+        in_reply_to,
+        references: Some(chain.join(" ")),
+    })
+}
+
+/// References 可能是长会话链：按空格折行，保证单行不超过 998 字节上限。
+fn fold_references(value: &str) -> String {
+    const HEADER_LABEL: &str = "References: ";
+    const LINE_LIMIT: usize = 900;
+    let mut out = String::from(HEADER_LABEL);
+    let mut line_len = HEADER_LABEL.len();
+    for token in value.split(' ').filter(|token| !token.is_empty()) {
+        if line_len + 1 + token.len() > LINE_LIMIT && line_len > HEADER_LABEL.len() {
+            out.push_str("\r\n ");
+            line_len = 1;
+        } else if line_len > HEADER_LABEL.len() {
+            out.push(' ');
+            line_len += 1;
+        }
+        out.push_str(token);
+        line_len += token.len();
+    }
+    out.push_str("\r\n");
+    out
+}
+
+/// 回复草稿的会话关联头（仅回复且原邮件有 Message-ID 时存在）。
+#[derive(Debug, PartialEq, Eq)]
+struct ReplyHeaders {
+    in_reply_to: String,
+    references: Option<String>,
+}
+
+/// MIME 组装输入：与账号连接 / 信封无关的草稿内容。
+struct MimeInput<'a> {
+    from_name: &'a str,
+    from_email: &'a str,
+    recipients: &'a Recipients,
+    subject: &'a str,
+    body_text: &'a str,
+    body_html: Option<&'a str>,
+    message_id: &'a str,
+    reply: Option<&'a ReplyHeaders>,
+}
+
+fn assemble(input: &MimeInput<'_>) -> String {
+    let (from_name, from_email, recipients, subject, body_text, body_html, message_id, reply) = (
+        input.from_name,
+        input.from_email,
+        input.recipients,
+        input.subject,
+        input.body_text,
+        input.body_html,
+        input.message_id,
+        input.reply,
+    );
     let clean = |text: &str| {
         text.chars()
             .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
@@ -246,8 +342,20 @@ fn assemble(
     } else {
         format!("Cc: {}\r\n", recipients.cc.join(",\r\n "))
     };
+    // 回复关联头：In-Reply-To 指向原邮件 Message-ID，References 携带完整会话链。
+    let (in_reply_to, references_line) = match reply {
+        Some(headers) => (
+            format!("In-Reply-To: {}\r\n", headers.in_reply_to),
+            headers
+                .references
+                .as_deref()
+                .map(fold_references)
+                .unwrap_or_default(),
+        ),
+        None => (String::new(), String::new()),
+    };
     format!(
-        "{from}\r\nTo: {to}\r\n{cc}{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\n{content_headers}\r\n{body}",
+        "{from}\r\nTo: {to}\r\n{cc}{in_reply_to}{references_line}{subject_line}Date: {}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\n{content_headers}\r\n{body}",
         Utc::now().to_rfc2822(),
     )
 }
@@ -355,6 +463,8 @@ struct SendJob {
     body_text: String,
     body_html: String,
     recipients: Recipients,
+    /// 回复草稿的会话关联头；原邮件缺失 / 无 Message-ID 时为 None（诚实降级）。
+    reply: Option<ReplyHeaders>,
 }
 
 /// 短锁快照：取下一个 queued 任务 + 账号 / 草稿信息，并标记 sending。
@@ -385,18 +495,19 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器，也不能发送邮件"));
     }
-    let draft: Option<(u32, String, String, String, String)> = conn
+    let draft: Option<(u32, String, String, String, String, Option<String>)> = conn
         .query_row(
-            "SELECT revision, recipients_json, subject, body_text, body_html FROM drafts WHERE id = ?1",
+            "SELECT revision, recipients_json, subject, body_text, body_html, reply_to_id FROM drafts WHERE id = ?1",
             [&row.draft_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, _, subject, body_text, body_html)) = draft else {
+    let Some((_, _, subject, body_text, body_html, reply_to_id)) = draft else {
         return Err(AppError::invalid("草稿已不存在，无法发送"));
     };
     let recipients = draft_recipients(conn, &row.draft_id)?;
+    let reply = reply_headers(conn, account_id, &reply_to_id);
     conn.execute(
         "UPDATE outbox SET state = 'sending', attempts = attempts + 1, updated_at = ?2 WHERE id = ?1 AND state = 'queued'",
         params![row.id, now()],
@@ -425,6 +536,7 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
         body_text,
         body_html,
         recipients,
+        reply,
     }))
 }
 
@@ -480,15 +592,16 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
     } else {
         imap_transport::Security::Tls
     };
-    let raw = assemble(
-        &job.from_name,
-        &job.from_email,
-        &job.recipients,
-        &job.subject,
-        &job.body_text,
-        Some(job.body_html.as_str()).filter(|html| !html.trim().is_empty()),
-        &job.message_id,
-    );
+    let raw = assemble(&MimeInput {
+        from_name: &job.from_name,
+        from_email: &job.from_email,
+        recipients: &job.recipients,
+        subject: &job.subject,
+        body_text: &job.body_text,
+        body_html: Some(job.body_html.as_str()).filter(|html| !html.trim().is_empty()),
+        message_id: &job.message_id,
+        reply: job.reply.as_ref(),
+    });
     let stream = smtp_send::open(&smtp_host, job.smtp_port, security)?;
     enum PreparedAuth {
         Plain(String),
@@ -867,18 +980,19 @@ mod tests {
 
     #[test]
     fn assembly_encodes_cjk_headers_and_folds_body() {
-        let raw = assemble(
-            "测试发件人",
-            "me@example.test",
-            &Recipients {
+        let raw = assemble(&MimeInput {
+            from_name: "测试发件人",
+            from_email: "me@example.test",
+            recipients: &Recipients {
                 to: vec!["friend@example.test".into()],
                 ..Default::default()
             },
-            "你好 · 收据",
-            "第一行\n第二行",
-            None,
-            "<abc@auumail.local>",
-        );
+            subject: "你好 · 收据",
+            body_text: "第一行\n第二行",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+        });
         assert!(raw.starts_with("From: =?utf-8?B?"));
         assert!(raw.contains("\r\nTo: friend@example.test\r\n"));
         assert!(raw.contains("Subject: =?utf-8?B?"));
@@ -897,18 +1011,19 @@ mod tests {
 
     #[test]
     fn html_body_becomes_multipart_alternative() {
-        let raw = assemble(
-            "me",
-            "me@example.test",
-            &Recipients {
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
                 to: vec!["friend@example.test".into()],
                 ..Default::default()
             },
-            "rich",
-            "plain text",
-            Some("<p>rich <b>text</b></p>"),
-            "<abc@auumail.local>",
-        );
+            subject: "rich",
+            body_text: "plain text",
+            body_html: Some("<p>rich <b>text</b></p>"),
+            message_id: "<abc@auumail.local>",
+            reply: None,
+        });
         assert!(raw.contains("Content-Type: multipart/alternative; boundary=\"=_auumail_"));
         assert!(raw.contains("Content-Type: text/plain; charset=utf-8"));
         assert!(raw.contains("Content-Type: text/html; charset=utf-8"));
@@ -942,18 +1057,19 @@ mod tests {
 
     #[test]
     fn header_injection_is_neutralized() {
-        let raw = assemble(
-            "evil\r\nBcc: x@example.test",
-            "me@example.test",
-            &Recipients {
+        let raw = assemble(&MimeInput {
+            from_name: "evil\r\nBcc: x@example.test",
+            from_email: "me@example.test",
+            recipients: &Recipients {
                 to: vec!["a@example.test".into()],
                 ..Default::default()
             },
-            "subject\r\nBcc: y@example.test",
-            "body",
-            None,
-            "<abc@auumail.local>",
-        );
+            subject: "subject\r\nBcc: y@example.test",
+            body_text: "body",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+        });
         assert!(!raw.contains("Bcc:"), "CR/LF 必须被中和，头部不得注入");
         assert!(raw.matches("Message-ID:").count() == 1);
     }
@@ -989,15 +1105,16 @@ mod tests {
                 .count(),
             1
         );
-        let raw = assemble(
-            &job.from_name,
-            &job.from_email,
-            &job.recipients,
-            "Recipients",
-            "Body",
-            None,
-            &job.message_id,
-        );
+        let raw = assemble(&MimeInput {
+            from_name: &job.from_name,
+            from_email: &job.from_email,
+            recipients: &job.recipients,
+            subject: "Recipients",
+            body_text: "Body",
+            body_html: None,
+            message_id: &job.message_id,
+            reply: None,
+        });
         assert!(raw.contains("\r\nCc: copy@example.test\r\n"));
         assert!(!raw.contains("private@example.test"));
         assert!(!raw.contains("Bcc:"));
@@ -1005,6 +1122,113 @@ mod tests {
             .parse(raw.as_bytes())
             .unwrap();
         assert_eq!(parsed.body_text(0).unwrap(), "Body");
+    }
+
+    #[test]
+    fn reply_drafts_carry_in_reply_to_and_references_headers() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO messages (id, account_id, remote_id, thread_id, subject, sender_name, sender_email, received_at, header_message_id, header_references)
+             VALUES ('orig', 'real', 'r1', 't', '原始', '发件人', 'peer@example.test', '2026-11-14T00:00:00Z', 'orig-id@peer.test', '<a@chain.test> <b@chain.test>')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE drafts SET reply_to_id = 'orig' WHERE id = 'draft-1'",
+            [],
+        )
+        .unwrap();
+        enqueue(&conn, "draft-1", 3).unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        let reply = job.reply.as_ref().unwrap();
+        assert_eq!(reply.in_reply_to, "<orig-id@peer.test>");
+        assert_eq!(
+            reply.references.as_deref(),
+            Some("<a@chain.test> <b@chain.test> <orig-id@peer.test>")
+        );
+        let raw = assemble(&MimeInput {
+            from_name: &job.from_name,
+            from_email: &job.from_email,
+            recipients: &job.recipients,
+            subject: "Re: 原始",
+            body_text: "Body",
+            body_html: None,
+            message_id: &job.message_id,
+            reply: job.reply.as_ref(),
+        });
+        assert!(raw.contains("\r\nIn-Reply-To: <orig-id@peer.test>\r\n"));
+        // 短链单行输出；折行仅在超过 900 字节时发生。
+        assert!(raw.contains("References: <a@chain.test> <b@chain.test> <orig-id@peer.test>\r\n"));
+        // 头部顺序：To/Cc 之后、Subject 之前。
+        let to_pos = raw.find("\r\nTo: ").unwrap();
+        let references_pos = raw.find("References: ").unwrap();
+        let subject_pos = raw.find("\r\nSubject: ").unwrap();
+        assert!(to_pos < references_pos && references_pos < subject_pos);
+    }
+
+    #[test]
+    fn reply_headers_degrade_without_original_or_message_id() {
+        let conn = db();
+        enqueue(&conn, "draft-1", 3).unwrap();
+        // snapshot_job 会把行标记 sending；重置回 queued 以便复测后续场景。
+        fn requeue(conn: &Connection) {
+            conn.execute("UPDATE outbox SET state = 'queued'", [])
+                .unwrap();
+        }
+        // 原邮件已被删除：不阻塞发送，也不写关联头。
+        conn.execute(
+            "UPDATE drafts SET reply_to_id = 'missing' WHERE id = 'draft-1'",
+            [],
+        )
+        .unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        assert!(job.reply.is_none());
+        // 原邮件没有 Message-ID：同样诚实降级。
+        requeue(&conn);
+        conn.execute(
+            "INSERT INTO messages (id, account_id, remote_id, thread_id, subject, sender_name, sender_email, received_at)
+             VALUES ('orig-none', 'real', 'r2', 't', '原始', '发件人', 'peer@example.test', '2026-11-14T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE drafts SET reply_to_id = 'orig-none' WHERE id = 'draft-1'",
+            [],
+        )
+        .unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        assert!(job.reply.is_none());
+        // Message-ID 缺尖括号时补齐；CR/LF 注入被中和（单行内空格）。
+        requeue(&conn);
+        conn.execute(
+            "UPDATE messages SET header_message_id = 'evil\r\nBcc: injected@example.test' WHERE id = 'orig-none'",
+            [],
+        )
+        .unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        let reply = job.reply.as_ref().unwrap();
+        assert_eq!(reply.in_reply_to, "<evil  Bcc: injected@example.test>");
+        // 原邮件没有 References 时，会话链只含原 Message-ID 本身。
+        assert_eq!(
+            reply.references.as_deref(),
+            Some("<evil  Bcc: injected@example.test>")
+        );
+        let raw = assemble(&MimeInput {
+            from_name: &job.from_name,
+            from_email: &job.from_email,
+            recipients: &job.recipients,
+            subject: "Re: 原始",
+            body_text: "Body",
+            body_html: None,
+            message_id: &job.message_id,
+            reply: job.reply.as_ref(),
+        });
+        let in_reply_to_pos = raw.find("In-Reply-To: ").unwrap();
+        assert!(
+            !raw[in_reply_to_pos..].contains("Bcc:\r\n"),
+            "CR/LF 必须被中和"
+        );
+        assert_eq!(raw.matches("In-Reply-To:").count(), 1);
     }
 
     #[test]
@@ -1024,15 +1248,16 @@ mod tests {
         .unwrap();
         let recipients = draft_recipients(&conn, "draft-1").unwrap();
         assert_eq!(recipients.envelope(), vec!["hidden@example.test"]);
-        let raw = assemble(
-            "Sender",
-            "me@example.test",
-            &recipients,
-            "",
-            "正文",
-            None,
-            "<id@example.test>",
-        );
+        let raw = assemble(&MimeInput {
+            from_name: "Sender",
+            from_email: "me@example.test",
+            recipients: &recipients,
+            subject: "",
+            body_text: "正文",
+            body_html: None,
+            message_id: "<id@example.test>",
+            reply: None,
+        });
         assert!(raw.contains("To: undisclosed-recipients:;\r\n"));
         assert!(!raw.contains("hidden@example.test"));
         enqueue(&conn, "draft-1", 3).unwrap();
