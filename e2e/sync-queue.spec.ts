@@ -30,7 +30,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       workspace.messages.find(message => message.id === 'server-draft')!.folderIds = ['drafts-1'];
     }
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
-    let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting';
+    let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting'; let pickFailure = false;
     const htmlRequests: Array<{ id: string; allow: boolean }> = []; const openCalls: string[] = [];
     const outboxActions: Array<{ id: string; action: string }> = [];
     let outboxState: 'queued' | 'sending' | 'unknown' | 'failed' | 'sent' | null = null;
@@ -89,6 +89,14 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           const saved = { ...draft, revision: (draft.revision ?? 0) + 1, updatedAt: new Date().toISOString() };
           drafts.set(saved.id, saved); return project(saved);
         }
+        // 撰写附件：测试桩只回合成元数据（真实读取在 Rust）；可注入一次失败验证诚实报错。
+        case 'mail_compose_pick_attachments': {
+          if (pickFailure) { pickFailure = false; throw new Error('无法读取所选文件「损坏.bin」'); }
+          const currentCount = (input.currentCount as number) ?? 0;
+          if (currentCount >= 20) throw new Error('附件数量已达上限（每封邮件最多 20 个）');
+          const picked = [{ id: `att-${++sequence}`, name: '季度报告.pdf', size: 2048, mediaType: 'application/pdf', sha256: 'a'.repeat(64) }, { id: `att-${++sequence}`, name: '这是一个非常非常非常长的中文附件名称用于检查截断与换行布局的处理方式最终版.docx', size: 8 * 1024 * 1024, mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sha256: 'b'.repeat(64) }];
+          return picked.slice(0, 20 - currentCount);
+        }
         case 'mail_imap_settings': return imapSettings.get(input.accountId as string) ?? {syncAllFolders:true,historyEnabled:false,autoSyncSeconds:0};
         case 'mail_save_imap_settings': if(settingFails){settingFails=false;throw new Error('设置暂时未保存');} imapSettings.set(input.accountId as string,input.settings as {syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number});return;
         case 'mail_account_config': {const account=accounts.find(account=>account.id===input.id)!; return {id:account.id,name:account.name,email:account.email,imapHost:'imap.example.test',imapPort:993,imapSecurity:'tls',smtpHost:'',smtpPort:465,receiveOnly:true,authUser:account.email,avatar:'T',color:'teal'};}
@@ -146,6 +154,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       holdDraftSave() { saveGate = new Promise<void>(resolve => { releaseSave = resolve; }); },
       releaseDraftSave() { saveGate = null; releaseSave(); },
       drafts: () => [...drafts.values()],
+      failNextPick() { pickFailure = true; },
       windowCalls: () => [...windowCalls],
       openCalls: () => [...openCalls],
       htmlRequests: () => [...htmlRequests],
@@ -583,6 +592,35 @@ test('compose stays editable during autosave and sends bcc-only after empty-subj
   const drafts = await page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts());
   expect(drafts).toHaveLength(1);
   expect(drafts[0]).toMatchObject({ bodyText: '保存过程中继续输入的最新内容', bcc: 'private@example.test', subject: '', to: '', accountId: 'real-1' });
+});
+
+test('compose attachments: pick shows chips, saves round-trip and removal stays honest', async ({page}, info) => {
+  await mockDesktop(page); await page.goto('/');
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  const compose = page.locator('.compose-pane');
+  const list = compose.getByRole('list', { name: '附件列表' });
+  await expect(list).toHaveCount(0);
+  await compose.getByRole('button', { name: '添加附件', exact: true }).click();
+  await expect(list).toBeVisible();
+  await expect(list.locator('li')).toHaveCount(2);
+  const pdf = compose.getByRole('button', { name: '移除附件 季度报告.pdf', exact: true });
+  await expect(pdf).toBeVisible();
+  // 长文件名截断在 chip 内，不撑破撰写布局。
+  const long = list.locator('li').nth(1);
+  await expect(long.locator('.compose-attachment-name')).toBeVisible();
+  await expect(compose.getByRole('status').filter({ hasText: '草稿已自动保存' })).toBeVisible();
+  const stored = await page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts());
+  expect(stored[0].attachments).toHaveLength(2);
+  await page.screenshot({ path: info.outputPath('compose-attachments.png') });
+  // 移除：列表只剩一项，草稿自动保存后附件元数据同步移除。
+  await pdf.click();
+  await expect(list.locator('li')).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts()[0]?.attachments?.length ?? 0)).toBe(1);
+  // 选取失败：诚实报错，既有附件保留。
+  await page.evaluate(() => (window as unknown as { __syncTest: { failNextPick: () => void } }).__syncTest.failNextPick());
+  await compose.getByRole('button', { name: '添加附件', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('无法读取所选文件');
+  await expect(list.locator('li')).toHaveCount(1);
 });
 
 test('send is capability-gated, the outbox queue surfaces state, and unknown offers explicit exits', async ({page},info) => {

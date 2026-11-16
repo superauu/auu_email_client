@@ -1,4 +1,28 @@
-import type { MailAccount, MailDraft, MailMessage } from './mail';
+import type { DraftAttachment, MailAccount, MailDraft, MailMessage } from './mail';
+
+/** 附件限制与 Rust 侧对称：最多 20 个、原始字节合计 16 MiB（base64 后约 21.3 MiB）。 */
+export const MAX_ATTACHMENTS = 20;
+export const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
+
+function validateAttachments(raw: unknown): DraftAttachment[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_ATTACHMENTS) throw new Error('附件数量无效或超出限制');
+  const attachments: DraftAttachment[] = [];
+  let total = 0;
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') throw new Error('附件信息无效');
+    const attachment = item as Record<string, unknown>;
+    if (typeof attachment.id !== 'string' || !/^att-[a-zA-Z0-9_-]+$/.test(attachment.id) || attachment.id.length > 100) throw new Error('附件标识无效');
+    if (typeof attachment.name !== 'string' || !attachment.name.trim() || attachment.name.length > 240) throw new Error('附件名称无效或超出长度限制');
+    if (typeof attachment.mediaType !== 'string' || !attachment.mediaType || attachment.mediaType.length > 100) throw new Error('附件类型无效');
+    if (typeof attachment.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(attachment.sha256)) throw new Error('附件校验值无效');
+    if (typeof attachment.size !== 'number' || !Number.isSafeInteger(attachment.size) || attachment.size < 0 || attachment.size > MAX_ATTACHMENT_BYTES) throw new Error('附件大小无效或超出限制');
+    total += attachment.size;
+    if (total > MAX_ATTACHMENT_BYTES) throw new Error('附件总大小超出限制（16 MiB），请移除部分附件后重试');
+    attachments.push({ id: attachment.id, name: attachment.name, size: attachment.size, mediaType: attachment.mediaType, sha256: attachment.sha256 });
+  }
+  return attachments;
+}
 
 export function validateDraft(raw: unknown): MailDraft {
   if (!raw || typeof raw !== 'object') throw new Error('草稿格式无效');
@@ -14,6 +38,7 @@ export function validateDraft(raw: unknown): MailDraft {
   if (value.replyToId !== undefined && (typeof value.replyToId !== 'string' || value.replyToId.length === 0 || value.replyToId.length > 200)) throw new Error('回复关联无效');
   // HTML 正文可选；上限与 Rust 侧对称（200_000 UTF-16 单元）。
   if (value.bodyHtml !== undefined && (typeof value.bodyHtml !== 'string' || value.bodyHtml.length > 200_000)) throw new Error('富文本正文无效或超出长度限制');
+  const attachments = validateAttachments(value.attachments);
   const revision = value.revision ?? 0;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision > 1_000_000_000) throw new Error('草稿版本无效');
   return {
@@ -23,6 +48,7 @@ export function validateDraft(raw: unknown): MailDraft {
     subject: value.subject as string, bodyText: value.bodyText as string, updatedAt: value.updatedAt as string, revision,
     ...(value.bodyHtml ? { bodyHtml: value.bodyHtml as string } : {}),
     ...(value.replyToId ? { replyToId: value.replyToId as string } : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 

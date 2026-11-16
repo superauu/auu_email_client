@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DraftSaveOptions, MailDraft, MailMessage, MailQuery, MessagePatch, RecoveryAction, WorkspaceSnapshot } from '../domain/mail';
+import type { DraftAttachment, DraftSaveOptions, MailDraft, MailMessage, MailQuery, MessagePatch, RecoveryAction, WorkspaceSnapshot } from '../domain/mail';
 import { errorMessage } from '../domain/errors';
 import { isDesktop } from '../platform/desktop';
 import { demoMailGateway } from '../services/demo/DemoMailGateway';
@@ -33,6 +33,8 @@ interface WorkspaceState extends WorkspaceSnapshot {
   sendDraft: (draftId: string, revision: number) => Promise<import('../domain/outbox').OutboxEntry>;
   /** Explicitly discard a local draft (deletes the persisted row). */
   deleteDraft: (draftId: string) => Promise<void>;
+  /** 撰写附件选取（Rust 对话框 + 暂存）；演示环境诚实拒绝。 */
+  pickAttachments: (draftId: string, current: DraftAttachment[]) => Promise<DraftAttachment[]>;
   toggleEvent: (id: string) => void;
   setView: (view: 'mail' | 'events') => void;
   saveDraft: (draft: MailDraft, options?: DraftSaveOptions) => Promise<MailDraft>;
@@ -104,6 +106,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const messages = state.messages.filter(m => m.id !== draftId);
       return { messages, selectedId: state.selectedId === draftId ? selectMessages(messages, state.query)[0]?.id ?? null : state.selectedId };
     });
+  },
+  async pickAttachments(draftId, current) {
+    if (!gateway.pickAttachments) throw new Error('当前环境不支持添加附件。');
+    return gateway.pickAttachments(draftId, current);
   },
   async load() {
     if (get().status === 'loading' || get().status === 'ready') return;

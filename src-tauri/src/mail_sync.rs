@@ -1606,10 +1606,12 @@ mod tests {
                         body_text: "Saved while fetch was blocked".into(),
                         body_html: None,
                         reply_to_id: None,
+                        attachments: vec![],
                         updated_at: crate::now_utc(),
                         revision: 0,
                     },
                     "acc",
+                    &Default::default(),
                 )
                 .map(|_| ())
             }
@@ -1828,10 +1830,12 @@ mod tests {
                     body_text: "Both fetches blocked".into(),
                     body_html: None,
                     reply_to_id: None,
+                    attachments: vec![],
                     updated_at: crate::now_utc(),
                     revision: 0,
                 },
                 "acc2",
+                &Default::default(),
             )
             .is_ok(),
             Err(_) => false,

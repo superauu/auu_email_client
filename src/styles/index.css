@@ -271,6 +271,12 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .compose-address-row > label { flex: 0 0 48px; line-height: 30px; color: var(--text-muted); font-size: 12px; }
 .compose-address-row > input, .compose-address-row > select { flex: 1; min-width: 0; width: 0; height: 30px; padding: 4px 0; border: 0; background: var(--surface); color: var(--text); }
 .compose-address-row > input::placeholder { color: var(--text-subtle); }
+/* 撰写附件列表：chip 行、长名截断、移除按钮；跟随语义 token 与明暗皮肤。 */
+.compose-attachments { list-style: none; margin: 0; padding: 8px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.compose-attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 28px; padding-left: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-selected); font-size: 12px; }
+.compose-attachment > svg { color: var(--text-muted); flex-shrink: 0; }
+.compose-attachment-name { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.compose-attachment-size { flex-shrink: 0; color: var(--text-muted); }
 .compose-recipient-toggles { display: flex; align-items: center; gap: 12px; margin-left: auto; min-height: 30px; }
 .compose-recipient-toggles button { color: var(--accent); font-size: 12px; padding: 3px 0; white-space: nowrap; }
 .compose-recipient-toggles button:disabled { color: var(--text-muted); opacity: 1; }

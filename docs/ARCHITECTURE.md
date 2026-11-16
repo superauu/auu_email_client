@@ -77,8 +77,9 @@ flowchart LR
 | `mail_sync_jobs` | 无 | `{ revision, jobs }` | 有界进程内任务快照 |
 | `mail_cancel_sync` | `jobId` | `{ revision, jobs }` | 排队取消 / 运行中请求停止；cancelRequested 不等于已释放 worker |
 | `mail_list_drafts` | 无 | MailMessage[]（含 draft） | 读取 SQLite 持久草稿 |
-| `mail_save_draft` | `draft, previousAccountId` | MailMessage（含新 revision） | 单事务核对版本和原账号；只保存本机，不发送 |
-| `mail_import_legacy_drafts` | `drafts` | void | 旧演示草稿一次性导入，完整回滚、收据去重 |
+| `mail_save_draft` | `draft, previousAccountId` | MailMessage（含新 revision） | 单事务核对版本和原账号；附件内容从暂存区核 sha256 落库；只保存本机，不发送 |
+| `mail_import_legacy_drafts` | `drafts` | void | 旧演示草稿一次性导入，完整回滚、收据去重；带附件元数据的草稿拒绝 |
+| `mail_compose_pick_attachments` | `draftId, currentTotalBytes, currentCount` | DraftAttachment[]（元数据） | Rust 侧多选对话框 + 进程内暂存；路径与字节不出 Rust；取消返回空数组 |
 | `credential_status` | `provider, accountId` | bool | 只返回存在性，不返回机密 |
 | `credential_save` | `provider, accountId, secret` | void | 写入系统 keyring（Windows Credential Manager） |
 | `credential_delete` | `provider, accountId` | void | 幂等，删除不存在的凭据不算失败 |
@@ -146,3 +147,7 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 ## v14 全目录同步轮次
 
 `imap_round_progress` 保存账号 generation / request_version 对应的原始目录键摘要与剩余队列；`imap_flag_progress` 保存同一轮次、同 UIDVALIDITY 下已核对的 FLAGS 前缀。二者不替换 sync_states，不改既有邮件 / 草稿。完成标记批次时与本机观察同事务提交，完成目录时与轮次清理同事务；网络、解析与检查点序列化均不占 DB 锁。续跑计划强制进入未完成轮次，不能被复用连接的 IDLE 优化跳过。详见 SYNCHRONIZATION 与 IMAP_LIMITS。
+
+## v15 撰写附件
+
+`drafts.attachments_json` 保存有序元数据数组（与 TS `DraftAttachment` 对称）；字节存 `draft_attachment_blobs` 子表（draft 级联删除）。选取经 `mail_compose_pick_attachments`：Rust 对话框读文件、算 sha256 后进进程内暂存（managed state，64 MiB 上限），仅元数据回传前端。保存事务从暂存核 sha256 落库并回收暂存；暂存缺失且无同 sha256 落库行时保存失败（不静默丢附件）。发送 worker 在短锁快照内读字节、锁外组装 multipart/mixed，缺内容按明确失败处理。限额：每封 ≤20 个、合计 16 MiB，TS / Rust 校验对称。详见 COMPOSING 与 SENDING。

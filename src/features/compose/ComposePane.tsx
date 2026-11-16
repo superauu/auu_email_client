@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowLeft, Check, Loader2, Save, Send, Maximize2, Minimize2, Paperclip, Type, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Save, Send, Maximize2, Minimize2, Paperclip, Type, Trash2, X } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import type { MailDraft } from '../../domain/mail';
@@ -10,6 +10,11 @@ import { RichEditor, escapeHtml } from './RichEditor';
 import { RecipientField } from './RecipientField';
 import { isRecipientAddress, recipientError, splitRecipients } from '../../domain/recipients';
 
+/** 与 MailReader 一致的 KB 尺寸展示。 */
+function attachmentSize(size: number): string {
+  return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(size / 1024)} KB`;
+}
+
 export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft; onClose: () => void; onNotice?: (text: string) => void }) {
   const accounts = useWorkspaceStore(s => s.accounts);
   const messages = useWorkspaceStore(s => s.messages);
@@ -17,6 +22,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const sendDraft = useWorkspaceStore(s => s.sendDraft);
   const messageHtmlFragment = useWorkspaceStore(s => s.messageHtmlFragment);
   const deleteDraft = useWorkspaceStore(s => s.deleteDraft);
+  const pickAttachments = useWorkspaceStore(s => s.pickAttachments);
   const [session] = useState(() => new DraftSession(initial, saveDraft));
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const { draft } = state;
@@ -25,6 +31,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const [sendNotice, setSendNotice] = useState('');
   const [sending, setSending] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [quoteHtml, setQuoteHtml] = useState<string | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(!initial.bodyHtml && !initial.revision && !!initial.replyToId);
   const [showCc, setShowCc] = useState(!!initial.cc);
@@ -34,6 +41,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const [closing, setClosing] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
   const busy = sending || discarding || closing;
+  const attachments = draft.attachments ?? [];
   const suggestions = useMemo(() => {
     const contacts = new Map<string, { name: string; email: string }>();
     for (const message of messages.filter(item => item.accountId === draft.accountId && !item.draft)) {
@@ -144,6 +152,24 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
       if (closeAfter) await finishClose();
     }
   }
+  /** 附件选取：Rust 侧对话框 + 暂存，返回新增元数据；取消为空数组（无操作）。 */
+  async function attach() {
+    if (busy || picking) return;
+    setPlatformError('');
+    setPicking(true);
+    try {
+      const current = session.getSnapshot().draft.attachments ?? [];
+      const picked = await pickAttachments(draft.id, current);
+      if (picked.length) session.update({ attachments: [...current, ...picked] });
+    } catch (error) {
+      setPlatformError(errorMessage(error));
+    } finally {
+      setPicking(false);
+    }
+  }
+  function removeAttachment(id: string) {
+    session.update({ attachments: (session.getSnapshot().draft.attachments ?? []).filter(item => item.id !== id) });
+  }
   async function send() {
     const invalid = recipientError([draft.to, draft.cc ?? '', draft.bcc ?? '']);
     if (invalid) { setPlatformError(invalid); return; }
@@ -190,7 +216,9 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
     <div className="compose-commandbar">
       <Button variant="primary" disabled={!canSend || busy || quoteLoading || !!sendNotice} title={sendBlockReason || (quoteLoading ? '正在准备引用原文' : '发送邮件')} onClick={() => void send()}>{sending ? <Loader2 size={15} className="spin" /> : <Send size={15} />}{sending ? '正在登记…' : '发送'}</Button>
       <Button variant="ghost" aria-pressed={formatting} onClick={() => setFormatting(value => !value)}><Type size={16} />格式</Button>
-      <span title="附件发送尚未接通"><Button variant="ghost" disabled aria-label="添加附件（尚未支持）"><Paperclip size={16} />附件</Button></span>
+      {isDesktop()
+        ? <Button variant="ghost" disabled={busy || picking || attachments.length >= 20} aria-label="添加附件" title="添加附件（最多 20 个，合计 16 MiB）" onClick={() => void attach()}>{picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}{picking ? '正在选取…' : '附件'}</Button>
+        : <span title="浏览器演示不能读取本机文件；撰写附件请在桌面版使用"><Button variant="ghost" disabled aria-label="添加附件（仅桌面版可用）"><Paperclip size={16} />附件</Button></span>}
       <span className="compose-local-label">本机草稿</span>
     </div>
     <div className="compose-pane-body">
@@ -201,6 +229,14 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
         {showBcc && <RecipientField label="密送" value={draft.bcc ?? ''} disabled={busy} suggestions={suggestions} onChange={bcc => session.update({ bcc })} />}
         <div className="compose-address-row"><label htmlFor="compose-subject">主题</label><input id="compose-subject" value={draft.subject} disabled={busy} maxLength={1000} onChange={e => { session.update({ subject: e.target.value }); setConfirmSend(false); }} placeholder="添加主题" /></div>
       </div>
+      {attachments.length > 0 && <ul className="compose-attachments" aria-label="附件列表">
+        {attachments.map(item => <li key={item.id} className="compose-attachment">
+          <Paperclip size={13} aria-hidden />
+          <span className="compose-attachment-name" title={item.name}>{item.name}</span>
+          <span className="compose-attachment-size">{attachmentSize(item.size)}</span>
+          <Button variant="ghost" iconOnly aria-label={`移除附件 ${item.name}`} title="移除附件" disabled={busy || picking} onClick={() => removeAttachment(item.id)}><X size={14} /></Button>
+        </li>)}
+      </ul>}
       {quoteLoading && <p className="compose-quote-loading" role="status">正在准备引用原文…</p>}
       <RichEditor initialHtml={initial.bodyHtml ?? ''} initialText={initial.replyToId && !initial.revision && !initial.bodyHtml ? '' : initial.bodyText} quoteHtml={quoteHtml} disabled={busy} formatting={formatting} onChange={(html, text) => session.update({ bodyHtml: html, bodyText: text })} />
     </div>
@@ -208,6 +244,6 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
     {confirmSend && <div className="discard-prompt" role="alert"><span>这封邮件还没有主题，仍然发送吗？</span><Button disabled={busy} onClick={() => void performSend()}>仍然发送</Button><Button variant="ghost" onClick={() => { setConfirmSend(false); document.getElementById('compose-subject')?.focus(); }}>填写主题</Button></div>}
     {closeTarget && <div className="discard-prompt" role="alert"><span>自动保存失败，内容仍保留在本窗口中。</span><Button onClick={() => void save(true)} disabled={state.saving || busy}>{closeTarget === 'window' ? '保存并退出' : '保存并关闭'}</Button><Button variant="ghost" disabled={state.saving || busy} onClick={() => void discard()}>放弃草稿</Button><Button variant="ghost" onClick={() => { setCloseTarget(null); session.resume(); }}>继续编辑</Button></div>}
     <footer className="compose-pane-footer"><span role="status">{state.saving ? <Loader2 size={13} className="spin" /> : state.saved && !state.dirty ? <Check size={13} /> : <Save size={13} />}{status}</span><Button variant="ghost" className="button-danger-ghost" disabled={state.saving || busy} title="删除这份草稿并关闭撰写面" onClick={() => void discard()}><Trash2 size={15} />{discarding ? '正在删除…' : '放弃草稿'}</Button></footer>
-    <div className="compose-capability">{canSend ? `发件账号：${account?.email}` : sendBlockReason} · 暂不支持附件与图片发送</div>
+    <div className="compose-capability">{canSend ? `发件账号：${account?.email}` : sendBlockReason}{isDesktop() ? ' · 暂不支持图片插入' : ' · 附件仅桌面版可用，暂不支持图片插入'}</div>
   </section>;
 }

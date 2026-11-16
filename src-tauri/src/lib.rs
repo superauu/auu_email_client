@@ -1,4 +1,5 @@
 mod account_service;
+mod compose_attach;
 mod credentials;
 mod drafts;
 mod error;
@@ -411,13 +412,15 @@ async fn mail_list_drafts(db: State<'_, Db>) -> Result<Vec<mail_store::MessageRo
 #[tauri::command]
 async fn mail_save_draft(
     db: State<'_, Db>,
+    staging: State<'_, compose_attach::ComposeStaging>,
     draft: drafts::Draft,
     previous_account_id: String,
 ) -> Result<mail_store::MessageRow, AppError> {
     let conn = db.inner().0.clone();
+    let staging = staging.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
-        drafts::save(&mut conn, &draft, &previous_account_id)
+        drafts::save(&mut conn, &draft, &previous_account_id, &staging)
     })
     .await
     .map_err(|_| AppError::storage("草稿保存任务未完成"))?
@@ -425,11 +428,16 @@ async fn mail_save_draft(
 
 /// 放弃草稿：用户显式点击后从本机删除草稿行（已进入发送流程的草稿拒绝删除）。
 #[tauri::command]
-async fn mail_delete_draft(db: State<'_, Db>, draft_id: String) -> Result<(), AppError> {
+async fn mail_delete_draft(
+    db: State<'_, Db>,
+    staging: State<'_, compose_attach::ComposeStaging>,
+    draft_id: String,
+) -> Result<(), AppError> {
     let conn = db.inner().0.clone();
+    let staging = staging.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
-        drafts::delete(&mut conn, &draft_id)
+        drafts::delete(&mut conn, &draft_id, &staging)
     })
     .await
     .map_err(|_| AppError::storage("草稿删除任务未完成"))?
@@ -438,15 +446,36 @@ async fn mail_delete_draft(db: State<'_, Db>, draft_id: String) -> Result<(), Ap
 #[tauri::command]
 async fn mail_import_legacy_drafts(
     db: State<'_, Db>,
+    staging: State<'_, compose_attach::ComposeStaging>,
     drafts: Vec<drafts::Draft>,
 ) -> Result<(), AppError> {
     let conn = db.inner().0.clone();
+    let staging = staging.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
-        drafts::import_legacy(&mut conn, &drafts)
+        drafts::import_legacy(&mut conn, &drafts, &staging)
     })
     .await
     .map_err(|_| AppError::storage("草稿导入任务未完成"))?
+}
+
+/// 撰写附件选取：Rust 侧多选文件对话框（前端不接触路径），读入暂存区后仅返回元数据。
+#[tauri::command]
+async fn mail_compose_pick_attachments(
+    staging: State<'_, compose_attach::ComposeStaging>,
+    app: tauri::AppHandle,
+    draft_id: String,
+    current_total_bytes: usize,
+    current_count: usize,
+) -> Result<Vec<drafts::DraftAttachment>, AppError> {
+    compose_attach::pick(
+        staging.inner().clone(),
+        app,
+        draft_id,
+        current_total_bytes,
+        current_count,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -690,6 +719,7 @@ pub fn run() {
                 .map_err(|error| std::io::Error::other(error.message))?;
             app.manage(scheduler);
             app.manage(Db(conn));
+            app.manage(compose_attach::ComposeStaging::default());
             app.manage(AppPaths { data, skins });
             Ok(())
         })
@@ -724,6 +754,7 @@ pub fn run() {
             mail_save_draft,
             mail_delete_draft,
             mail_import_legacy_drafts,
+            mail_compose_pick_attachments,
             mail_verify_account,
             mail_save_account,
             mail_delete_account,

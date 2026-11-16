@@ -98,6 +98,14 @@ export const desktopMail = {
   async saveDraft(draft: MailDraft, options?: DraftSaveOptions): Promise<MailMessage> {
     return invoke('mail_save_draft', { draft, previousAccountId: options?.previousAccountId ?? draft.accountId });
   },
+  /** Rust 侧多选文件对话框 + 暂存；仅元数据回传，路径与字节不出 Rust。 */
+  async pickAttachments(draftId: string, current: import('../domain/mail').DraftAttachment[]): Promise<import('../domain/mail').DraftAttachment[]> {
+    return invoke('mail_compose_pick_attachments', {
+      draftId,
+      currentTotalBytes: current.reduce((total, item) => total + item.size, 0),
+      currentCount: current.length,
+    });
+  },
   async importLegacyDrafts(drafts: MailDraft[]): Promise<void> { await invoke('mail_import_legacy_drafts', { drafts }); },
 };
 

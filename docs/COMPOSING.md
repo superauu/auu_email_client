@@ -1,6 +1,6 @@
 # 邮件撰写
 
-更新：2026-11-15。参考 [Outlook 新建邮件](https://support.microsoft.com/en-us/outlook/mail/create-an-email-message-in-outlook) 的地址分行与抄送 / 密送，以及 [Outlook 网页版格式选项](https://support.microsoft.com/en-us/outlook/customize-your-email-message-in-outlook-on-the-web) 的格式选项，沿用 AuuMail 皮肤与右栏工作区；按当前产品反馈将格式栏放在正文上方。
+更新：2026-11-16。参考 [Outlook 新建邮件](https://support.microsoft.com/en-us/outlook/mail/create-an-email-message-in-outlook) 的地址分行与抄送 / 密送，以及 [Outlook 网页版格式选项](https://support.microsoft.com/en-us/outlook/customize-your-email-message-in-outlook-on-the-web) 的格式选项，沿用 AuuMail 皮肤与右栏工作区；按当前产品反馈将格式栏放在正文上方。
 
 ## 当前行为
 
@@ -15,16 +15,18 @@
 - 新输入正文为 1.45 行高、段前段后均为 0，Enter 保留段落语义但不额外空一行，Shift+Enter 为段内换行；原邮件显式行距不随编辑器压缩。
 - 已保存草稿使用其现有引用，不从服务器自动覆盖；旧版本已经丢失的排版需从原邮件新建回复。
 - 自动保存时继续编辑，顺序写入最新缓冲区；Ctrl / Cmd + S 手动保存。旧纯文本草稿不会在初始化时清空，打开 / 关闭未修改的空白撰写不制造草稿。关闭失败保留内容并暂停自动保存，明确继续编辑才恢复。
+- 撰写附件（2026-11-16）：命令栏「附件」按钮在桌面版打开 Rust 侧多选文件对话框；主题下方以 chip 列出文件名（长名截断）+ 大小 + 移除按钮。每封邮件最多 20 个附件、原始字节合计 16 MiB，超限选取与保存均明确拒绝。浏览器演示不支持读取本机文件，按钮禁用并说明。
 
 ## 存储与发送
 
 - `MailDraft.cc / bcc` 为可选字符串，旧草稿缺省为空；每栏最多 1000 UTF-16 单元，TS 与 Rust 同步校验。无效地址可作为未完成草稿保存。
 - SQLite v12 追加 `drafts.cc / bcc`，旧迁移不改；桌面只存 SQLite，浏览器只存演示覆盖层。保存沿用 revision + previousAccountId；回复锁定所属账号，抄送 / 密送随草稿原子移动。
+- 附件存储（v15）：`drafts.attachments_json` 保存有序元数据数组（id / name / size / mediaType / sha256，与 TS `DraftAttachment` 对称），字节在 `draft_attachment_blobs` 子表（随草稿级联删除）。选取时文件字节只进 Rust 进程内暂存区（64 MiB 上限），保存事务内核对 sha256 后写入子表并回收暂存；暂存缺失且无同 sha256 落库内容时保存失败并提示重新添加，不静默丢附件。前端不接触文件路径，路径只在 Rust 侧流转。
 - outbox 登记和 worker 快照均读取三类地址。SMTP 信封合并并去重；MIME 头仅输出 To / Cc，绝不输出 Bcc 或将密送合入 To。仅密送时 To 为 `undisclosed-recipients:;`。
-- 纯文本 MIME 使用一次 Content-Type 与 base64 传输编码；富文本仍为 multipart/alternative。Message-ID、同账号队列、generation 与 unknown 不自动重发规则见 [SENDING](SENDING.md)。
+- 纯文本 MIME 使用一次 Content-Type 与 base64 传输编码；富文本仍为 multipart/alternative。有附件时正文外包一层 multipart/mixed：附件为 base64 part，Content-Disposition: attachment，文件名 ASCII 安全字符用引号串、其余用 RFC2047 编码，CR/LF 注入中和，非法 media_type 回退 octet-stream；无附件输出与既有格式逐字节一致。快照时逐个核对子表内容 sha256 与大小，缺失或不一致即失败，不发送不完整邮件。Message-ID、同账号队列、generation 与 unknown 不自动重发规则见 [SENDING](SENDING.md)。
 
 ## 验证与边界
 
-浏览器测试覆盖标签编辑与建议、抄送 / 密送恢复及账号切换、旧纯文本与空白撰写、选区格式与链接、安全粘贴、保存中继续输入、仅密送与空主题确认。Rust 覆盖字段持久化 / 旧版迁移、无效地址拒绝、全信封与密送隐私、纯文本 MIME 解码。IPC harness 仅验证界面流程，不等同真实服务器验收。
+浏览器测试覆盖标签编辑与建议、抄送 / 密送恢复及账号切换、旧纯文本与空白撰写、选区格式与链接、安全粘贴、保存中继续输入、仅密送与空主题确认、演示环境附件禁用说明与桌面附件选取 / chip / 保存往返 / 移除 / 失败诚实报错。Rust 覆盖字段与附件持久化 / v15 迁移、暂存调解（新增 / 移除 / 缺失报错 / 事务回滚保留暂存）、限额拒绝、multipart/mixed 经 mail_parser 回读（中文名 / 注入字符 / 字节逐位一致 / text+html+附件 / 无附件不变）。IPC harness 仅验证界面流程，不等同真实服务器验收。
 
-附件 / 图片发送、签名管理、定时发送、云端通讯录和独立撰写窗口尚未实现。新增抄送 / 密送的真实服务器投递、收件端排版与原生 WebView2 手工验收尚待执行；本轮不自动连接账号发送验收邮件。
+签名管理、定时发送、云端通讯录、独立撰写窗口与图片插入（正文内联 / 粘贴图片）尚未实现。附件真实 SMTP 投递与收件端可下载且内容一致的验收待执行；新增抄送 / 密送的真实收件端验收与原生 WebView2 手工核对同样待执行；本轮不自动连接账号发送验收邮件。

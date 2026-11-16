@@ -8,6 +8,7 @@ export const demoMailGateway: MailGateway = {
   mode: 'demo',
   async requestBody() { throw new Error('演示邮件没有可下载的远端原文。'); },
   async exportAttachment() { throw new Error('演示邮件没有真实附件，请在桌面版同步 IMAP 邮件。'); },
+  async pickAttachments() { throw new Error('浏览器演示不能读取本机文件；撰写附件请在桌面版使用。'); },
   async requestRecovery() { throw new Error('演示邮件不提供远端定位核对，请在桌面版使用真实 IMAP 缓存。'); },
   async loadWorkspace(signal) {
     signal?.throwIfAborted();

@@ -101,9 +101,20 @@ export interface MailDraft {
   /** 富文本正文（编辑器产出，服务端消毒后持久化）；缺省 = 纯文本草稿。 */
   bodyHtml?: string;
   replyToId?: string;
+  /** 撰写附件元数据；内容保存在 Rust 暂存区，保存草稿时落 SQLite，前端不回传字节。 */
+  attachments?: DraftAttachment[];
   updatedAt: Timestamp;
   /** Persisted revision; omitted only for legacy drafts, which are treated as revision zero. */
   revision?: number;
+}
+
+/** 撰写附件元数据：id 稳定句柄（att-*）；sha256 与 size 在保存 / 发送时核对内容一致性。 */
+export interface DraftAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mediaType: string;
+  sha256: string;
 }
 
 export interface DraftSaveOptions {
@@ -185,6 +196,11 @@ export interface MailGateway {
   sendDraft?(draftId: string, revision: number): Promise<import('./outbox').OutboxEntry>;
   /** Delete a local draft after the user explicitly discards it; idempotent, rejects while queued in outbox. */
   deleteDraft?(draftId: string): Promise<void>;
+  /**
+   * 撰写附件选取：Rust 侧打开多选对话框、读入暂存区，仅返回新增附件元数据；
+   * 取消选择返回空数组。演示环境不支持（诚实拒绝）。current 为草稿现有附件。
+   */
+  pickAttachments?(draftId: string, current: DraftAttachment[]): Promise<DraftAttachment[]>;
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;

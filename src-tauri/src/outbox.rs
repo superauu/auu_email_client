@@ -1,7 +1,7 @@
 //! Outbox：发送队列与结果语义（docs/SENDING.md）。
 //! Message-ID 登记时生成一次、全部尝试复用；DATA 终点号后的不明确结果一律 unknown，
 //! 不自动重试、不自动判失败；出口只有用户明确确认或同步后 Sent 目录命中。
-use crate::{credentials, error::AppError, imap_transport, mail_oauth, smtp_send};
+use crate::{credentials, drafts, error::AppError, imap_transport, mail_oauth, smtp_send};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -177,6 +177,14 @@ pub(crate) fn encode_rfc2047(text: &str) -> String {
         .join("\r\n ")
 }
 
+/// 发送侧附件载荷：内容在短锁快照内从 SQLite 读出，组装在锁外完成。
+#[derive(Clone, Debug)]
+pub(crate) struct AttachmentPayload {
+    pub name: String,
+    pub media_type: String,
+    pub content: Vec<u8>,
+}
+
 /// RFC5322 组装。头部注入防护：显示名 / 主题中的 CR / LF 替换为空格。
 fn fold_base64(data: &str) -> String {
     data.as_bytes()
@@ -280,10 +288,60 @@ struct MimeInput<'a> {
     body_html: Option<&'a str>,
     message_id: &'a str,
     reply: Option<&'a ReplyHeaders>,
+    /// 撰写附件：非空时正文外包一层 multipart/mixed（parts 顺序 = 草稿元数据顺序）。
+    attachments: &'a [AttachmentPayload],
+}
+
+/// 附件头部值消毒：media_type 仅保留 token 字符，非法回退 octet-stream；
+/// 文件名中和 CR/LF 后，ASCII 安全字符用引号串，否则用 RFC2047 encoded-word。
+fn attachment_headers(name: &str, media_type: &str, content: &[u8]) -> String {
+    let type_token: String = media_type
+        .bytes()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'+' | b'.' | b'_'))
+        .map(|c| c as char)
+        .collect();
+    let safe_type = if type_token.contains('/') && !type_token.starts_with('/') {
+        type_token
+    } else {
+        "application/octet-stream".into()
+    };
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('"');
+    const FILENAME_SAFE: &str =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .()-_";
+    let filename = if !cleaned.is_empty()
+        && cleaned.chars().all(|c| FILENAME_SAFE.contains(c))
+        && cleaned.len() <= 60
+    {
+        format!("\"{cleaned}\"")
+    } else {
+        encode_rfc2047(if cleaned.is_empty() {
+            "attachment.bin"
+        } else {
+            cleaned
+        })
+    };
+    format!(
+        "Content-Type: {safe_type}; name={filename}\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename={filename}\r\n\r\n{}",
+        fold_base64(&BASE64.encode(content))
+    )
 }
 
 fn assemble(input: &MimeInput<'_>) -> String {
-    let (from_name, from_email, recipients, subject, body_text, body_html, message_id, reply) = (
+    let (
+        from_name,
+        from_email,
+        recipients,
+        subject,
+        body_text,
+        body_html,
+        message_id,
+        reply,
+        attachments,
+    ) = (
         input.from_name,
         input.from_email,
         input.recipients,
@@ -292,6 +350,7 @@ fn assemble(input: &MimeInput<'_>) -> String {
         input.body_html,
         input.message_id,
         input.reply,
+        input.attachments,
     );
     let clean = |text: &str| {
         text.chars()
@@ -314,7 +373,7 @@ fn assemble(input: &MimeInput<'_>) -> String {
         "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
         fold_base64(&BASE64.encode(body_text.as_bytes()))
     );
-    let (content_headers, body) = match body_html.filter(|html| !html.trim().is_empty()) {
+    let (mut content_headers, mut body) = match body_html.filter(|html| !html.trim().is_empty()) {
         Some(html) => {
             let boundary = format!("=_auumail_{}", Uuid::new_v4().simple());
             let html_part = format!(
@@ -332,6 +391,28 @@ fn assemble(input: &MimeInput<'_>) -> String {
             format!("{}\r\n", fold_base64(&BASE64.encode(body_text.as_bytes()))),
         ),
     };
+    // 有附件时正文外包一层 multipart/mixed；无附件输出与既有格式逐字节一致。
+    // 约定与 alternative 层一致：part 末尾不带 CRLF，由分隔的 "\r\n--boundary" 提供。
+    if !attachments.is_empty() {
+        let mixed = format!("=_auumail_{}", Uuid::new_v4().simple());
+        let inner_body = body.trim_end_matches("\r\n");
+        let inner = format!("{content_headers}\r\n{inner_body}");
+        let mut parts = vec![format!("--{mixed}\r\n{inner}")];
+        for attachment in attachments {
+            // attachment_headers 末尾为 base64（无 CRLF）；空内容时以空行结束，仍为合法 part。
+            parts.push(format!(
+                "--{mixed}\r\n{}",
+                attachment_headers(
+                    &attachment.name,
+                    &attachment.media_type,
+                    &attachment.content
+                )
+            ));
+        }
+        parts.push(format!("--{mixed}--\r\n"));
+        content_headers = format!("Content-Type: multipart/mixed; boundary=\"{mixed}\"\r\n");
+        body = parts.join("\r\n");
+    }
     let to = if recipients.to.is_empty() {
         "undisclosed-recipients:;".into()
     } else {
@@ -360,11 +441,11 @@ fn assemble(input: &MimeInput<'_>) -> String {
     )
 }
 
-/// 登记发送：校验修订 / 能力 / 收件人，生成一次 Message-ID 并全程复用。
+/// 登记发送：校验修订 / 能力 / 收件人 / 附件限额，生成一次 Message-ID 并全程复用。
 pub(crate) fn enqueue(conn: &Connection, draft_id: &str, revision: u32) -> Result<Entry, AppError> {
-    let draft: Option<(String, u32, String, String, String)> = conn
+    let draft: Option<(String, u32, String, String, String, String)> = conn
         .query_row(
-            "SELECT id, revision, recipients_json, subject, body_text FROM drafts WHERE id = ?1",
+            "SELECT id, revision, recipients_json, subject, body_text, attachments_json FROM drafts WHERE id = ?1",
             [draft_id],
             |r| {
                 Ok((
@@ -373,17 +454,22 @@ pub(crate) fn enqueue(conn: &Connection, draft_id: &str, revision: u32) -> Resul
                     r.get::<_, String>(2)?,
                     r.get(3)?,
                     r.get(4)?,
+                    r.get(5)?,
                 ))
             },
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, stored_revision, _, _, _)) = draft else {
+    let Some((_, stored_revision, _, _, _, attachments_json)) = draft else {
         return Err(AppError::invalid("草稿不存在"));
     };
     if stored_revision != revision {
         return Err(AppError::conflict("草稿已被修改，请保存后重新发送"));
     }
+    // 防御纵深：保存时已校验，登记时再核对元数据限额（不读内容）。
+    let attachments: Vec<drafts::DraftAttachment> = serde_json::from_str(&attachments_json)
+        .map_err(|_| AppError::storage("草稿附件数据损坏"))?;
+    drafts::validate_attachments(&attachments)?;
     draft_recipients(conn, draft_id)?;
     let blocked: bool = conn
         .query_row(
@@ -463,6 +549,8 @@ struct SendJob {
     body_text: String,
     body_html: String,
     recipients: Recipients,
+    /// 撰写附件内容（短锁内读出，锁外组装）。
+    attachments: Vec<AttachmentPayload>,
     /// 回复草稿的会话关联头；原邮件缺失 / 无 Message-ID 时为 None（诚实降级）。
     reply: Option<ReplyHeaders>,
 }
@@ -495,17 +583,45 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器，也不能发送邮件"));
     }
-    let draft: Option<(u32, String, String, String, String, Option<String>)> = conn
+    /// (revision, recipients_json, subject, body_text, body_html, reply_to_id, attachments_json)
+    type DraftSnapshot = (u32, String, String, String, String, Option<String>, String);
+    let draft: Option<DraftSnapshot> = conn
         .query_row(
-            "SELECT revision, recipients_json, subject, body_text, body_html, reply_to_id FROM drafts WHERE id = ?1",
+            "SELECT revision, recipients_json, subject, body_text, body_html, reply_to_id, attachments_json FROM drafts WHERE id = ?1",
             [&row.draft_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         )
         .optional()
         .map_err(|_| AppError::storage("无法读取草稿"))?;
-    let Some((_, _, subject, body_text, body_html, reply_to_id)) = draft else {
+    let Some((_, _, subject, body_text, body_html, reply_to_id, attachments_json)) = draft else {
         return Err(AppError::invalid("草稿已不存在，无法发送"));
     };
+    // 附件内容：按元数据逐个从子表读取并核对 sha256；缺失即失败，不发送不完整的邮件。
+    let metadata: Vec<drafts::DraftAttachment> = serde_json::from_str(&attachments_json)
+        .map_err(|_| AppError::storage("草稿附件数据损坏"))?;
+    let mut attachments = Vec::with_capacity(metadata.len());
+    for item in metadata {
+        let (sha, content): (String, Vec<u8>) = conn
+            .query_row(
+                "SELECT sha256, content FROM draft_attachment_blobs WHERE draft_id = ?1 AND attachment_id = ?2",
+                params![row.draft_id, item.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| AppError::storage("无法读取附件内容"))?
+            .ok_or_else(|| AppError::storage(format!("附件「{}」内容缺失，请重新添加后再发送。", item.name)))?;
+        if sha != item.sha256 || content.len() != item.size {
+            return Err(AppError::storage(format!(
+                "附件「{}」与本机记录不一致，请重新添加后再发送。",
+                item.name
+            )));
+        }
+        attachments.push(AttachmentPayload {
+            name: item.name,
+            media_type: item.media_type,
+            content,
+        });
+    }
     let recipients = draft_recipients(conn, &row.draft_id)?;
     let reply = reply_headers(conn, account_id, &reply_to_id);
     conn.execute(
@@ -536,6 +652,7 @@ fn snapshot_job(conn: &Connection, account_id: &str) -> Result<Option<SendJob>, 
         body_text,
         body_html,
         recipients,
+        attachments,
         reply,
     }))
 }
@@ -601,6 +718,7 @@ fn deliver(db: &crate::mail_sync::SharedDb, job: &SendJob) -> Result<(), AppErro
         body_html: Some(job.body_html.as_str()).filter(|html| !html.trim().is_empty()),
         message_id: &job.message_id,
         reply: job.reply.as_ref(),
+        attachments: &job.attachments,
     });
     let stream = smtp_send::open(&smtp_host, job.smtp_port, security)?;
     enum PreparedAuth {
@@ -788,6 +906,7 @@ fn current(conn: &Connection, entry_id: &str, expected: &str) -> Result<Entry, A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn db() -> Connection {
         let mut db = Connection::open_in_memory().unwrap();
@@ -992,6 +1111,7 @@ mod tests {
             body_html: None,
             message_id: "<abc@auumail.local>",
             reply: None,
+            attachments: &[],
         });
         assert!(raw.starts_with("From: =?utf-8?B?"));
         assert!(raw.contains("\r\nTo: friend@example.test\r\n"));
@@ -1023,6 +1143,7 @@ mod tests {
             body_html: Some("<p>rich <b>text</b></p>"),
             message_id: "<abc@auumail.local>",
             reply: None,
+            attachments: &[],
         });
         assert!(raw.contains("Content-Type: multipart/alternative; boundary=\"=_auumail_"));
         assert!(raw.contains("Content-Type: text/plain; charset=utf-8"));
@@ -1069,6 +1190,7 @@ mod tests {
             body_html: None,
             message_id: "<abc@auumail.local>",
             reply: None,
+            attachments: &[],
         });
         assert!(!raw.contains("Bcc:"), "CR/LF 必须被中和，头部不得注入");
         assert!(raw.matches("Message-ID:").count() == 1);
@@ -1114,6 +1236,7 @@ mod tests {
             body_html: None,
             message_id: &job.message_id,
             reply: None,
+            attachments: &[],
         });
         assert!(raw.contains("\r\nCc: copy@example.test\r\n"));
         assert!(!raw.contains("private@example.test"));
@@ -1155,6 +1278,7 @@ mod tests {
             body_html: None,
             message_id: &job.message_id,
             reply: job.reply.as_ref(),
+            attachments: &[],
         });
         assert!(raw.contains("\r\nIn-Reply-To: <orig-id@peer.test>\r\n"));
         // 短链单行输出；折行仅在超过 900 字节时发生。
@@ -1222,6 +1346,7 @@ mod tests {
             body_html: None,
             message_id: &job.message_id,
             reply: job.reply.as_ref(),
+            attachments: &[],
         });
         let in_reply_to_pos = raw.find("In-Reply-To: ").unwrap();
         assert!(
@@ -1257,6 +1382,7 @@ mod tests {
             body_html: None,
             message_id: "<id@example.test>",
             reply: None,
+            attachments: &[],
         });
         assert!(raw.contains("To: undisclosed-recipients:;\r\n"));
         assert!(!raw.contains("hidden@example.test"));
@@ -1296,5 +1422,196 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    // ── 撰写附件 MIME 组装 ──────────────────────────────────────
+
+    fn attachment(name: &str, media_type: &str, content: &[u8]) -> AttachmentPayload {
+        AttachmentPayload {
+            name: name.into(),
+            media_type: media_type.into(),
+            content: content.to_vec(),
+        }
+    }
+
+    /// 回读解析结果：text / html 正文与附件 (文件名, 字节) 列表。
+    struct ParsedMail {
+        text: Option<String>,
+        attachments: Vec<(String, Vec<u8>)>,
+    }
+
+    /// 用 mail_parser 回读组装结果。
+    fn parse_back(raw: &str) -> ParsedMail {
+        use mail_parser::MimeHeaders;
+        let parsed = mail_parser::MessageParser::default()
+            .parse(raw.as_bytes())
+            .expect("MIME 必须可解析");
+        let attachments = (0..parsed.attachment_count())
+            .map(|index| {
+                let part = parsed.attachment(index).expect("附件存在");
+                (
+                    part.attachment_name().unwrap_or_default().to_string(),
+                    part.contents().to_vec(),
+                )
+            })
+            .collect();
+        let text = parsed.body_text(0).map(|body| body.into_owned());
+        ParsedMail { text, attachments }
+    }
+
+    #[test]
+    fn text_body_with_attachments_becomes_multipart_mixed_and_roundtrips() {
+        let content: Vec<u8> = (0..=255u8).cycle().take(5000).collect();
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "带附件",
+            body_text: "正文内容",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[
+                attachment("季度报告.pdf", "application/pdf", &content),
+                attachment("notes.txt", "text/plain", b"plain notes"),
+            ],
+        });
+        assert!(raw.contains("Content-Type: multipart/mixed; boundary=\"=_auumail_"));
+        assert!(!raw.contains("multipart/alternative"));
+        assert!(raw.contains("Content-Disposition: attachment"));
+        assert!(raw.contains("Content-Transfer-Encoding: base64"));
+        // 组装结果按 CRLF 折行后每行内不得再含 CR/LF（头部注入防护）。
+        for line in raw.split("\r\n") {
+            assert!(!line.contains('\r') && !line.contains('\n'));
+        }
+        let parsed = parse_back(&raw);
+        assert_eq!(parsed.text.as_deref(), Some("正文内容"));
+        // 纯文本 + 附件：不存在真正的 HTML part（mail_parser 会为纯文本合成 html，故查头）。
+        assert!(!raw.contains("Content-Type: text/html"));
+        assert_eq!(parsed.attachments.len(), 2);
+        assert_eq!(parsed.attachments[0].0, "季度报告.pdf");
+        assert_eq!(parsed.attachments[0].1, content, "字节逐位一致");
+        assert_eq!(parsed.attachments[1].0, "notes.txt");
+        assert_eq!(parsed.attachments[1].1, b"plain notes");
+    }
+
+    #[test]
+    fn html_body_with_attachments_keeps_alternative_inside_mixed() {
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "rich + files",
+            body_text: "plain",
+            body_html: Some("<p>rich <b>text</b></p>"),
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[attachment(
+                "data.bin",
+                "application/octet-stream",
+                &[1, 2, 3],
+            )],
+        });
+        assert!(raw.contains("Content-Type: multipart/mixed"));
+        assert!(raw.contains("Content-Type: multipart/alternative"));
+        let parsed = parse_back(&raw);
+        assert_eq!(parsed.text.as_deref(), Some("plain"));
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].1, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn attachment_names_are_neutralized_and_fallback_type_applies() {
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "names",
+            body_text: "body",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[
+                attachment("报告 最终版.txt", "text/plain", b"a"),
+                attachment("bad\r\nname.bin", "not a valid type!", b"b"),
+            ],
+        });
+        let parsed = parse_back(&raw);
+        assert_eq!(parsed.attachments[0].0, "报告 最终版.txt");
+        assert_eq!(parsed.attachments[1].0, "bad  name.bin");
+        assert_eq!(parsed.attachments[1].1, b"b");
+        // 非法 media_type 被中和为合法 token；头部无裸 CR/LF。
+        assert!(!raw.contains("not a valid type!"));
+    }
+
+    #[test]
+    fn enqueue_rejects_attachment_metadata_over_limits() {
+        let conn = db();
+        let over: Vec<String> = (0..21)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"att-{index:04}","name":"{index}.bin","size":1024,"mediaType":"application/octet-stream","sha256":"{}"}}"#,
+                    "a".repeat(64)
+                )
+            })
+            .collect();
+        conn.execute(
+            "UPDATE drafts SET attachments_json = ?1 WHERE id = 'draft-1'",
+            [format!("[{}]", over.join(","))],
+        )
+        .unwrap();
+        assert_eq!(enqueue(&conn, "draft-1", 3).unwrap_err().code, "invalid");
+        // 损坏的 JSON 也不能登记。
+        conn.execute(
+            "UPDATE drafts SET attachments_json = '{broken' WHERE id = 'draft-1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(enqueue(&conn, "draft-1", 3).unwrap_err().code, "storage");
+    }
+
+    #[test]
+    fn snapshot_loads_attachment_payloads_and_rejects_missing_or_mismatched_content() {
+        let conn = db();
+        let content = b"payload bytes".to_vec();
+        let sha = format!("{:x}", Sha256::digest(&content));
+        let metadata = format!(
+            r#"[{{"id":"att-1","name":"file.txt","size":{},"mediaType":"text/plain","sha256":"{sha}"}}]"#,
+            content.len()
+        );
+        conn.execute(
+            "UPDATE drafts SET attachments_json = ?1 WHERE id = 'draft-1'",
+            [&metadata],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO draft_attachment_blobs (draft_id, attachment_id, sha256, content) VALUES ('draft-1', 'att-1', ?1, ?2)",
+            params![sha, content],
+        )
+        .unwrap();
+        enqueue(&conn, "draft-1", 3).unwrap();
+        let job = snapshot_job(&conn, "real").unwrap().unwrap();
+        assert_eq!(job.attachments.len(), 1);
+        assert_eq!(job.attachments[0].name, "file.txt");
+        assert_eq!(job.attachments[0].content, content);
+        // 内容缺失：快照失败（发送按 failed 处理，不发送不完整邮件）。
+        conn.execute("DELETE FROM outbox", []).unwrap();
+        conn.execute("DELETE FROM draft_attachment_blobs", [])
+            .unwrap();
+        enqueue(&conn, "draft-1", 3).unwrap();
+        let error = match snapshot_job(&conn, "real") {
+            Err(error) => error,
+            Ok(_) => panic!("附件缺失时快照必须失败"),
+        };
+        assert!(error.message.contains("内容缺失"));
     }
 }

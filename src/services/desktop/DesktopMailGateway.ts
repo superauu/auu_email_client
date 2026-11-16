@@ -41,6 +41,9 @@ export const desktopMailGateway: MailGateway = {
   async saveDraft(draft, options) {
     return desktopMail.saveDraft(draft, options);
   },
+  async pickAttachments(draftId, current) {
+    return desktopMail.pickAttachments(draftId, current);
+  },
   async updateMessage(accountId, messageId, patch) { return desktopMail.updateMessage(accountId, messageId, patch); },
   async keepMessageLocal(accountId, messageId) { return desktopMail.keepMessageLocal(accountId, messageId); },
 };

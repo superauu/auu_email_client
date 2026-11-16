@@ -1,8 +1,17 @@
 # 当前状态
 
-更新时间：2026-11-16。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成回复正确性修复（回复全部接入 Cc、Reply-To、发送会话关联头）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-16。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成撰写附件发送（选取 → 草稿落库 → multipart/mixed 发送，真实附件投递验收待执行）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：全目录同步提交与续跑（2026-11-16）
+## 最新增量：撰写附件发送（2026-11-16）
+
+- **选取**：桌面版命令栏「附件」按钮（原禁用占位）打开 Rust 侧多选文件对话框（`mail_compose_pick_attachments`，复用 tauri-plugin-dialog）；文件字节只进 Rust 进程内暂存区（64 MiB 上限），前端仅持有元数据（id / name / size / mediaType / sha256），路径不跨 IPC。取消选择为空数组，不伪装成功。
+- **存储（v15，追加迁移）**：`drafts.attachments_json` 保存有序元数据；字节在 `draft_attachment_blobs` 子表（draft 级联删除）。保存事务内核对 sha256 后落库并回收暂存；暂存缺失且无同 sha256 已落库内容时保存失败并提示重新添加，不静默丢附件。限额每封 ≤20 个、合计 16 MiB，TS（`validateDraft`）与 Rust（`validate_attachments`）对称校验。旧版演示草稿导入拒绝附件元数据。
+- **发送**：登记重复校验限额；worker 短锁快照从子表逐个核 sha256 / 大小读出内容，锁外组装 multipart/mixed（附件 base64、Content-Disposition: attachment、文件名 RFC2047 / 注入中和、非法 media_type 回退 octet-stream）；无附件输出与既有格式逐字节一致。附件缺失按明确 failed，不发送不完整邮件；Message-ID 复用、unknown 语义、同账号队列全部继承不变。
+- **UI**：主题下方附件 chip 列表（长名截断 + KB 大小 + 移除按钮，语义 token 适配三皮肤明暗）；演示环境按钮禁用并说明「浏览器演示不能读取本机文件」；能力栏文案改为「暂不支持图片插入」。
+- 验证：`npm run check`（61 TS / lint / schema / 类型 / 构建）、`npm run check:native`（225 Rust / fmt / Clippy）、`npm run test:ui`（**64 个 Chromium 回归**，新增演示禁用说明与桌面选取 / chip / 保存往返 / 移除 / 失败诚实报错）全部通过；新增 Rust 覆盖 v15 迁移保留旧草稿、暂存调解（新增 / 移除 / 缺失报错 / 重试）、限额拒绝与 multipart/mixed 经 mail_parser 回读（中文名 / 注入字符 / 字节逐位一致 / 无附件不变）。
+- **未验证**：真实附件投递验收待执行（真实账号发送带附件邮件、收件端可下载且内容一致）；原生 WebView2 手工核对附件 chip 布局与超限拒绝提示未执行；接近 16 MiB 的真实文件冒烟未执行。详情见 [COMPOSING](COMPOSING.md)、[SENDING](SENDING.md)、[DRAFTS](DRAFTS.md)、[ARCHITECTURE](ARCHITECTURE.md)。
+
+## 历史增量：全目录同步提交与续跑（2026-11-16）
 
 - 已定位原生实际卡点：一批 48 封约 65 MiB 原文全部下载后才提交，触及任务预算后重复下载该批；目录轮次也从头重扫。改为按约 4 MiB / 最多 10 封提交完整前缀，单封较大时单独处理，明确 through_uid，未下载部分不推进游标。硬限额与原文完整性核对保持。
 - 实际验证还发现 Gmail 某封 RFC822.SIZE 为 1689、完整 literal 为 1709 字节，旧校验误判导致永久重试。完整 BODY 差异必须独立复读同 UID 且原文字节相等后才接受，按实际 literal 长度缓存；分块下载追加 EOF 核对，不接受截断原文。UID、UIDVALIDITY、传输限额、原文配额与不跳过 UID 的规则保留。

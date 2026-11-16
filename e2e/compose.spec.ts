@@ -123,6 +123,18 @@ test('format toolbar stays above the editor and Enter adds one compact line', as
   await expect(editor).toContainText('第一行');
 });
 
+test('attachments are desktop-only in the demo with an honest disabled state', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  const compose = page.locator('.compose-pane');
+  const attach = compose.getByRole('button', { name: '添加附件（仅桌面版可用）' });
+  await expect(attach).toBeDisabled();
+  // 悬停说明与能力栏文案：明确说明不能读取本机文件，不伪装可用。
+  const wrapped = attach.locator('xpath=..');
+  await expect(wrapped).toHaveAttribute('title', /浏览器演示不能读取本机文件/);
+  await expect(compose.locator('.compose-capability')).toContainText('附件仅桌面版可用');
+  await expect(compose.getByRole('list', { name: '附件列表' })).toHaveCount(0);
+});
+
 test('newsletter quotation keeps borderless tables, spacing and colors after draft recovery', async ({ page }, info) => {
   const bodyHtml = '<p><br></p><div>原始邮件</div><blockquote data-auumail-quote="true"><div style="color:#262626;background-color:#ffffff;font:14px Arial;line-height:20px"><table width="620" border="0" cellspacing="0" cellpadding="0" align="center"><tr><td><table width="100%" border="0" cellspacing="0" cellpadding="0"><tr><td style="padding:24px;text-align:center"><h1 style="font-size:24px;line-height:30px;margin:0">产品动态</h1><p style="margin:8px 0 0">这里是原邮件的内容。</p></td></tr><tr><td bgcolor="#f4f4f4" style="padding:16px;text-align:center"><a href="https://example.test/review" style="color:#ffffff;background-color:#4545cc;display:inline-block;padding:8px 16px;text-decoration:none">查看详情</a></td></tr></table></td></tr></table></div></blockquote>';
   await page.addInitScript(({ bodyHtml }) => {

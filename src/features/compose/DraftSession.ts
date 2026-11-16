@@ -37,7 +37,7 @@ export class DraftSession {
     this.state = { ...this.state, ...changes };
     for (const listener of this.listeners) listener();
   }
-  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'cc' | 'bcc' | 'subject' | 'bodyText' | 'bodyHtml'>>) {
+  update(changes: Partial<Pick<MailDraft, 'accountId' | 'to' | 'cc' | 'bcc' | 'subject' | 'bodyText' | 'bodyHtml' | 'attachments'>>) {
     if (Object.entries(changes).every(([key, value]) => this.state.draft[key as keyof MailDraft] === value)) return;
     this.editVersion += 1;
     this.publish({ draft: { ...this.state.draft, ...changes }, dirty: true, saved: false, error: null });

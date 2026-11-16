@@ -1,6 +1,6 @@
 # 本地草稿
 
-状态：2026-11-15。保存草稿只写本机；发送由独立 outbox 路径完成，不上传服务器 Drafts。撰写交互见 [COMPOSING](COMPOSING.md)，发送见 [SENDING](SENDING.md)。
+状态：2026-11-16。保存草稿只写本机；发送由独立 outbox 路径完成，不上传服务器 Drafts。撰写交互见 [COMPOSING](COMPOSING.md)，发送见 [SENDING](SENDING.md)。
 
 ## 存储与边界
 
@@ -8,6 +8,7 @@
 - 浏览器 gateway：只有演示账号，使用 `auumail.demo.drafts.v1` localStorage，最多 100 份。不是实际邮箱连接。
 - UI 统一经过 workspaceStore.saveDraft；组件不操作数据库或存储。
 - `MailMessage.draft` 保存可重新编辑的原始 MailDraft。列表可显示“未命名草稿”，但编辑器里的空主题仍为空；replyToId 和 revision 不丢失。
+- 撰写附件（v15，2026-11-16）：元数据存 `drafts.attachments_json`（id / name / size / mediaType / sha256），字节存 `draft_attachment_blobs` 子表并随草稿级联删除。选取经 `mail_compose_pick_attachments`（Rust 对话框 + 进程内暂存，前端不接触路径）；保存事务内核对 sha256 后落库，暂存缺失且无已落库内容时明确失败。每封邮件最多 20 个、合计 16 MiB；演示环境不支持选取并禁用说明。
 
 ## 自动保存
 
@@ -30,13 +31,13 @@
 ## 关闭与恢复
 
 - 编辑器关闭 / Esc / 桌面关闭按钮：先自动保存草稿再收起，无需手动确认；自动保存失败时显示兜底条（保存并关闭 / 放弃草稿 / 继续编辑），内容不静默丢弃。
-- 放弃草稿是唯一的删除入口：撰写面底部显式按钮，调用 mail_delete_draft 删除本机草稿行（幂等；已进入发送流程的草稿拒绝删除）并关闭撰写面。
+- 放弃草稿是唯一的删除入口：撰写面底部显式按钮，调用 mail_delete_draft 删除本机草稿行（幂等；已进入发送流程的草稿拒绝删除）并关闭撰写面；附件字节随外键级联删除，Rust 暂存一并回收。
 - 浏览器刷新 / 离开：dirty 或保存中通过 beforeunload 请求原生离页确认。浏览器可能不触发该事件，不能用它替代自动保存。
-- 强制结束进程、断电或系统崩溃不保证最后 800ms 内的未落盘输入恢复。重启后从草稿箱打开最后成功保存版本。
+- 强制结束进程、断电或系统崩溃不保证最后 800ms 内的未落盘输入恢复。重启后从草稿箱打开最后成功保存版本；未落库的暂存附件随进程消失，重开草稿时按已保存内容呈现，不显示丢失内容。
 
 ## 数据库与旧版迁移
 
-003_local_drafts.sql 追加 revision、账号 / 时间索引和 local_imports 收据表。已有 v2 drafts 保留内容并赋 revision=1。不得修改 001 / 002。
+003_local_drafts.sql 追加 revision、账号 / 时间索引和 local_imports 收据表。已有 v2 drafts 保留内容并赋 revision=1。不得修改 001 / 002。v15 追加附件列与 BLOB 子表，旧草稿缺省无附件；旧版导入（v3 收据流程）拒绝带附件元数据的草稿而不是静默剥离。
 
 桌面正常启动不再初始化演示账号，也不再自动导入旧 WebView localStorage 演示草稿。原 localStorage 与 SQLite 中已导入的演示草稿保留原样，但不进入真实工作区；浏览器仍使用独立演示存储。旧导入 IPC 仅保留兼容与测试能力：只允许旧演示账号，最多 100 份，事务与导入收据去重，相同 ID 的已有 SQLite 草稿不覆盖。
 
@@ -46,13 +47,14 @@
 
 | 命令 | 输入 | 返回 |
 | --- | --- | --- |
-| mail_list_drafts | 无 | MailMessage[]，包含 draft 元数据 |
+| mail_list_drafts | 无 | MailMessage[]，包含 draft 元数据与附件元数据 |
 | mail_delete_draft | draftId | void |
 | mail_save_draft | draft、previousAccountId | 持久化后的 MailMessage，含新 revision |
 | mail_import_legacy_drafts | drafts | void，事务完成或完整回滚 |
+| mail_compose_pick_attachments | draftId、currentTotalBytes、currentCount | 新增附件元数据；取消为空数组；不接收路径 |
 
-服务器时间用于新保存的 updatedAt；日期与 ID 不作为并发控制替代物。收件人 / 抄送 / 密送和主题上限各 1000 个 UTF-16 单位，正文 50000、HTML 200000。v12 追加 cc / bcc，旧草稿缺省为空。地址无效时可继续保存草稿，发送时另做语法校验。
+服务器时间用于新保存的 updatedAt；日期与 ID 不作为并发控制替代物。收件人 / 抄送 / 密送和主题上限各 1000 个 UTF-16 单位，正文 50000、HTML 200000。v12 追加 cc / bcc，旧草稿缺省为空。地址无效时可继续保存草稿，发送时另做语法校验。附件名称 ≤240 字符、id 为 `att-` 前缀、sha256 为 64 位十六进制。
 
 ## 后续
 
-附件 / 图片发送、服务器草稿同步、冲突内容对照及多窗口恢复待后续。SMTP / outbox、富文本、抄送 / 密送已实现，验证边界见 STATUS 与 COMPOSING。
+图片发送（正文内联 / 粘贴图片）、服务器草稿同步、冲突内容对照及多窗口恢复待后续。SMTP / outbox、富文本、抄送 / 密送与撰写附件已实现，验证边界见 STATUS 与 COMPOSING。

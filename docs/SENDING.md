@@ -1,6 +1,6 @@
 # 发送与 outbox 设计（SMTP）
 
-状态：2026-11-15 已实现（既有真实 Gmail 发送已验收；本轮新增抄送 / 密送已自动验证，真实投递待验收）。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
+状态：2026-11-16 已实现（既有真实 Gmail 发送已验收；本轮新增撰写附件发送，真实附件投递待验收）。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
 
 ## 目标
 
@@ -11,11 +11,19 @@
 - 密码账号：SMTP TLS 直连（465）与 STARTTLS（587）。SMTP STARTTLS 路径此前仅做过连接验证，实现时补全与测试。
 - Gmail OAuth：已申请 `https://mail.google.com/`，XOAUTH2 可用于 smtp.gmail.com:465 / 587，无需新增 scope。
 - Microsoft OAuth：当初刻意未申请 `SMTP.Send`（OAUTH_SETUP 约定），Open 后发送按钮禁用并说明原因；注册应用补 scope 前不得伪装可用。
-- 撰写支持纯文本 / HTML 与 To / Cc / Bcc；附件 / 图片发送待后续，详见 COMPOSING。
+- 撰写支持纯文本 / HTML 与 To / Cc / Bcc；附件发送已实现（2026-11-16，见下），图片发送（正文内联）待后续，详见 COMPOSING。
 
 ## 收件人隔离（2026-11-15）
 
 草稿 v12 保存独立 cc / bcc 字段，登记与 worker 快照均检查三栏地址。SMTP RCPT 使用合并去重的完整信封；MIME 只写 To / Cc，密送地址不写入头部，仅密送时 To 为 undisclosed-recipients。空主题在 UI 明确确认，服务端仍允许。字段长度、地址编辑与回归见 COMPOSING。纯文本输出明确 base64 传输编码且只含一次 Content-Type；HTML 使用 multipart/alternative。
+
+## 撰写附件发送（2026-11-16）
+
+- 登记（enqueue）读取 `drafts.attachments_json` 并重复校验限额（≤20 个、合计 16 MiB，与保存侧同一 `validate_attachments`）；元数据损坏按 storage 错误拒绝登记。
+- worker 快照按元数据逐个从 `draft_attachment_blobs` 读取字节并核对 sha256 与大小；缺失或不一致报错（发送按 failed 语义落为明确失败），不发送不完整邮件。内容在短锁快照内读出，MIME 组装在锁外完成。
+- 组装：有附件时在正文（text 或 multipart/alternative）外再包一层 `multipart/mixed`；附件为 base64 part，`Content-Disposition: attachment`，文件名 CR/LF 中和后 ASCII 安全字符用引号串、其余 RFC2047-B 编码，`name=` 与 `filename=` 同值；非法 media_type 的 token 字符白名单过滤后回退 `application/octet-stream`。无附件输出与既有格式逐字节一致。
+- 总大小无客户端 SMTP SIZE 预检：服务器因限额拒绝按明确 failed 展示服务器错误，不伪装；本地保存侧的 16 MiB 限额先于发送拦截大部分超限。
+- 铁律不变：Message-ID 复用、unknown 语义、不自动重试、同账号队列均与无附件发送一致。
 
 ## 回复会话关联（2026-11-15）
 
@@ -72,6 +80,7 @@ failed --[手动重试]--> queued                  (明确拒绝错误不自动�
 
 - 逐命令 SMTP 脚本会话（沿用 IMAP MockStream 模式）：正常投递、命令阶段拒绝、DATA 后断线（unknown）、超时（unknown）、AUTH 失败（failed）、STARTTLS 升级、TLS 465、XOAUTH2 挑战。
 - 网络步骤中验证 DB 未持锁；outbox 落盘重开恢复 queued / unknown；Message-ID 复用断言；Sent 核对解析 unknown 的单测（命中 / 不命中两种）。
+- 附件组装回归（2026-11-16）：multipart/mixed 经 mail_parser 回读（中文名 / 注入字符 / 字节逐位一致 / text+html+附件 / 无附件不变）、登记限额与损坏元数据拒绝、快照缺失附件报错。
 - e2e：发送按钮状态（演示账号禁用 + 说明）、排队 / 发送中徽标、unknown 的两个出口；IPC harness 扩展 outbox 命令。
 
 ## 真实验收（实现后）
@@ -81,8 +90,9 @@ failed --[手动重试]--> queued                  (明确拒绝错误不自动�
 3. 断网发送 → 结果不明 → 恢复网络后经 Sent 核对自动 resolved-sent。
 4. 收件人拒绝 → failed，修改后手动重试成功。
 5. Gmail OAuth 账号经 XOAUTH2 SMTP 发送成功；Microsoft 账号发送按钮保持禁用。
+6. 附件投递（待执行）：真实账号发送带附件邮件，收件端可下载且内容逐字节一致。
 
 ## 明确不做
 
-- 附件 / 图片发送、群发调度、定时发送、S/MIME。
+- 图片发送（正文内联 / 粘贴图片）、群发调度、定时发送、S/MIME、EHLO SIZE 解析与 MAIL FROM SIZE= 参数。
 - 自动重试 unknown；本地合成 Sent 邮件；未配置签名发布的对外分发。
