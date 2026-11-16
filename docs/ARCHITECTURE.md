@@ -142,3 +142,7 @@ FTS5 已通过 `mail_page_messages` 的 `search` 参数暴露；输入按空白�
 新增 IPC：mail_imap_settings(accountId)、mail_save_imap_settings(accountId, settings)、mail_request_body(accountId, messageId, revision)、mail_export_attachment(accountId, messageId, index)、mail_account_config(id)、mail_oauth_start(account, config)、mail_oauth_status(flowId)、mail_oauth_cancel(flowId)、mail_message_html(accountId, messageId, allowRemoteImages)（返回消毒后的沙箱 srcdoc；缓存缺失 / 账号不匹配报错，前端回退纯文本）、mail_message_html_fragment(accountId, messageId)（compose 严格消毒的正文片段，供回复 / 转发引用进编辑器）、open_external(url)（scheme 白名单 http/https/mailto，经系统默认应用打开）、mail_send_draft(draftId, revision)、mail_outbox_list / mail_outbox_cancel / mail_outbox_resolve(id, action) / mail_retry_outbox(id)（outbox 条目见 domain/outbox.ts）。返回类型见 domain/imap.ts、domain/oauth.ts 和 platform/desktop.ts；附件返回 bool 区分用户取消，OAuth 阶段不能当作已保存。请求恢复增加 auto-continue，完整确认契约不变。
 
 上述当前行为优先于早期版本说明；配置 / 默认值与锁边界详见 SYNCHRONIZATION、IMAP_LIMITS、OAUTH_SETUP、IMAP_COMPLETION。
+
+## v14 全目录同步轮次
+
+`imap_round_progress` 保存账号 generation / request_version 对应的原始目录键摘要与剩余队列；`imap_flag_progress` 保存同一轮次、同 UIDVALIDITY 下已核对的 FLAGS 前缀。二者不替换 sync_states，不改既有邮件 / 草稿。完成标记批次时与本机观察同事务提交，完成目录时与轮次清理同事务；网络、解析与检查点序列化均不占 DB 锁。续跑计划强制进入未完成轮次，不能被复用连接的 IDLE 优化跳过。详见 SYNCHRONIZATION 与 IMAP_LIMITS。

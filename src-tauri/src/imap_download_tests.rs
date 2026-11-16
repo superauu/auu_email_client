@@ -1,5 +1,29 @@
 use super::*;
 use crate::imap_writeback::tests::{session, step};
+
+#[test]
+fn bounded_commit_stops_before_deferred_uid_and_failure_keeps_the_completed_prefix() {
+    let body = raw(3 * 1024 * 1024);
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s,_,log) = session(vec![
+        step("RFC822.SIZE", &format!("* 1 FETCH (UID 1 RFC822.SIZE {0})\r\n* 2 FETCH (UID 10 RFC822.SIZE {0})\r\n{{tag}} OK sizes\r\n",body.len())),
+        step("UID FETCH 1 (UID FLAGS", &(fetch(1,&body)+"{tag} OK body\r\n")),
+        fence(1),
+        step("RFC822.SIZE", &format!("* 2 FETCH (UID 10 RFC822.SIZE {})\r\n{{tag}} OK sizes\r\n",body.len())),
+        step("UID FETCH 10 (UID FLAGS", "{tag} NO temporary failure\r\n"),
+    ],None);
+    let batch = fetch_batch(&mut s, 1, 10, "INBOX", 1, dir.path(), true).unwrap();
+    assert_eq!(batch.through_uid, 9);
+    assert_eq!(batch.messages.len(), 1);
+    let key = batch.messages[0].raw_cache_key.as_ref().unwrap();
+    assert!(fetch_batch(&mut s, 10, 10, "INBOX", 1, dir.path(), true).is_err());
+    assert_eq!(crate::mail_cache::read(dir.path(), key).unwrap(), body);
+    assert!(!log
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|command| command.contains("UID FETCH 1,10")));
+}
 fn fence(validity: u32) -> (String, String) {
     step(
         "EXAMINE",
@@ -11,6 +35,60 @@ fn raw(size: usize) -> Vec<u8> {
         b"Subject: Test\r\nFrom: s@example.test\r\nContent-Type: text/plain\r\n\r\n".to_vec();
     bytes.resize(size, b'x');
     bytes
+}
+
+#[test]
+fn size_discrepancy_requires_a_second_identical_full_literal() {
+    let body = raw(200);
+    for estimate in [180, 220] {
+        for changed in [false, true] {
+            let mut again = body.clone();
+            if changed {
+                *again.last_mut().unwrap() = b'y';
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let (mut s, _, _) = session(
+                vec![
+                    step(
+                        "RFC822.SIZE",
+                        &format!(
+                            "* 1 FETCH (UID 1 RFC822.SIZE {estimate})\r\n{{tag}} OK metadata\r\n"
+                        ),
+                    ),
+                    step(
+                        "UID FETCH 1 (UID FLAGS",
+                        &(fetch(1, &body) + "{tag} OK body\r\n"),
+                    ),
+                    step(
+                        "UID FETCH 1 (UID BODY.PEEK[])",
+                        &(fetch(1, &again) + "{tag} OK confirm\r\n"),
+                    ),
+                    fence(1),
+                ],
+                None,
+            );
+            let result = fetch_range(&mut s, 1, 1, "INBOX", 1, dir.path());
+            if changed {
+                assert!(result.is_err());
+            } else {
+                let message = result.unwrap().remove(0);
+                assert_eq!(
+                    crate::mail_cache::read(dir.path(), message.raw_cache_key.as_ref().unwrap())
+                        .unwrap(),
+                    body
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_download_eof_does_not_accept_an_underestimated_size_as_complete() {
+    assert!(eof(b"* 1 FETCH (UID 1 BODY[]<10> {0}\r\n)\r\n", 1, 10).unwrap());
+    assert!(eof(b"* 1 FETCH (UID 1 BODY[]<10> NIL)\r\n", 1, 10).unwrap());
+    assert!(!eof(b"* 1 FETCH (UID 1 BODY[]<10> {1}\r\nx)\r\n", 1, 10).unwrap());
+    assert!(eof(b"* 1 FETCH (UID 2 BODY[]<10> {0}\r\n)\r\n", 1, 10).is_err());
+    assert!(eof(b"* 1 FETCH (UID 1 BODY[]<9> {0}\r\n)\r\n", 1, 10).is_err());
 }
 fn fetch(uid: u32, raw: &[u8]) -> String {
     format!("* 1 FETCH (UID {uid} RFC822.SIZE {} FLAGS (\\Seen) INTERNALDATE \"11-Nov-2026 00:00:00 +0000\" BODY[] {{{}}}\r\n{})\r\n",raw.len(),raw.len(),std::str::from_utf8(raw).unwrap())
@@ -82,6 +160,10 @@ fn partial_download_assembles_more_than_one_literal_limit_with_exact_offsets() {
             ),
         ));
     }
+    steps.push(step(
+        &format!("BODY.PEEK[]<{size}.1>"),
+        &format!("* 1 FETCH (UID 1 BODY[]<{size}> {{0}}\r\n)\r\n{{tag}} OK eof\r\n"),
+    ));
     steps.push(step("RFC822.SIZE",&format!("* 1 FETCH (UID 1 RFC822.SIZE {size} FLAGS (\\Seen) INTERNALDATE \"11-Nov-2026 00:00:00 +0000\")\r\n{{tag}} OK metadata\r\n")));
     steps.push(fence(1));
     let (mut s, _, _) = session(steps, None);

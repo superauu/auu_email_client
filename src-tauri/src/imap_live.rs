@@ -93,6 +93,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
     imap_writeback::rebind_control(&live.trace)?;
     let full = live.dirty
         || plan.force_full
+        || plan.resume_round
         || live.last_full.elapsed()
             >= Duration::from_secs(u64::from(plan.settings.auto_sync_seconds.max(60)));
     let mut outcome = if full {
@@ -101,7 +102,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
             &plan,
             &mut live.session,
             Some(&live.trace),
-            crate::imap_download::fetch_range,
+            crate::imap_download::fetch_batch,
         )?;
         live.dirty = outcome.more_mail;
         live.last_full = Instant::now();
@@ -112,7 +113,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
             &plan,
             &mut live.session,
             Some(&live.trace),
-            crate::imap_download::fetch_range,
+            crate::imap_download::fetch_batch,
             false,
         )?
     } else {

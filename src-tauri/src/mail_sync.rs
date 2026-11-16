@@ -16,9 +16,21 @@ pub type SharedDb = Arc<Mutex<Connection>>;
 mod extended_tests;
 #[path = "imap_live.rs"]
 mod live;
+#[path = "imap_round.rs"]
+mod round;
 const INITIAL_WINDOW: u32 = 50;
 const FETCH_UID_SPAN: u32 = 100;
 const SYNCED_KINDS: [&str; 3] = ["inbox", "sent", "archive"];
+
+/// Opt-in protocol timing diagnostics; never include account names or mail content.
+pub(crate) fn trace_sync(folder: &str, stage: &str) {
+    if cfg!(debug_assertions) && std::env::var_os("AUUMAIL_SYNC_TRACE").is_some() {
+        eprintln!(
+            "imap-sync folder={} stage={stage}",
+            &crate::mail_recovery::hash(folder.as_bytes())[..12]
+        );
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +54,8 @@ struct Cursor {
 }
 
 struct SyncPlan {
+    request_version: Option<i64>,
+    resume_round: bool,
     oauth: Option<crate::mail_oauth::Config>,
     force_full: bool,
     condstore: bool,
@@ -140,6 +154,8 @@ fn prepare(conn: &Connection, id: &str) -> Result<SyncPlan, AppError> {
         .filter(|port| (1..=65535).contains(port))
         .ok_or_else(|| AppError::invalid("账号缺少有效的 IMAP 端口"))? as u16;
     Ok(SyncPlan {
+        request_version: conn.query_row("SELECT request_version FROM imap_sync_requests WHERE account_id=?1", [id], |r| r.get(0)).optional().map_err(|_| AppError::storage("无法读取同步请求版本"))?,
+        resume_round: conn.query_row("SELECT EXISTS(SELECT 1 FROM imap_round_progress WHERE account_id=?1 AND generation=?2)", params![id,generation], |r| r.get(0)).map_err(|_| AppError::storage("无法读取目录轮次"))?,
         oauth: profile
             .get("oauth")
             .filter(|v| !v.is_null())
@@ -301,7 +317,8 @@ type Fetcher<S> = fn(
     &str,
     u32,
     &std::path::Path,
-) -> Result<Vec<ParsedMessage>, AppError>;
+    bool,
+) -> Result<crate::imap_download::DownloadBatch, AppError>;
 #[cfg(test)]
 fn sync_with_session_trace<S: Read + Write>(
     db: &SharedDb,
@@ -309,7 +326,7 @@ fn sync_with_session_trace<S: Read + Write>(
     session: imap::Session<S>,
     trace: Option<&imap_writeback::Trace>,
 ) -> Result<SyncOutcome, AppError> {
-    sync_with_fetcher(db, plan, session, trace, crate::imap_download::fetch_range)
+    sync_with_fetcher(db, plan, session, trace, crate::imap_download::fetch_batch)
 }
 #[cfg(test)]
 fn sync_with_fetcher<S: Read + Write>(
@@ -428,22 +445,57 @@ fn sync_session_mode<S: Read + Write>(
             }
         }
     }
-    for (kind, remote) in targets.into_iter().filter(|_| full) {
+    let mut progress = if full {
+        Some(round::Round::load(db, plan, &targets)?)
+    } else {
+        None
+    };
+    let ordered: Vec<_> = progress
+        .as_ref()
+        .map(|progress| {
+            progress
+                .pending
+                .iter()
+                .filter_map(|key| {
+                    targets
+                        .iter()
+                        .find(|(kind, remote)| round::key(kind, remote) == *key)
+                        .cloned()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (processed, (kind, remote)) in ordered.into_iter().enumerate() {
+        if processed >= 8 || crate::sync_control::yield_due() {
+            outcome.has_more = true;
+            break;
+        }
         match sync_folder(db, plan, session, &kind, &remote, fetch) {
             Ok((count, more)) => {
                 outcome.fetched_messages += count;
                 outcome.has_more |= more;
                 outcome.more_mail |= more;
+                if let Some(progress) = &mut progress {
+                    progress.finished(db, plan, &round::key(&kind, &remote), more)?;
+                }
             }
             Err(error) if kind != "inbox" && error.code == "network" => {
                 outcome.retry_needed = true;
                 outcome
                     .warnings
                     .push(format!("{remote} 文件夹同步失败：{}", error.message));
+                if let Some(progress) = &mut progress {
+                    progress.finished(db, plan, &round::key(&kind, &remote), true)?;
+                }
+                // An interrupted/limited connection must not be reused for later folders.
+                break;
             }
             Err(error) => return Err(error),
         }
     }
+    outcome.has_more |= progress
+        .as_ref()
+        .is_some_and(|progress| !progress.pending.is_empty());
     {
         let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
         let remaining:i64=conn.query_row("SELECT COUNT(*) FROM message_changes WHERE account_id=?1 AND state IN ('queued','failed')",[&plan.account_id],|r|r.get(0)).map_err(|_|AppError::storage("无法核对剩余修改"))?;
@@ -632,6 +684,7 @@ fn sync_folder<S: Read + Write>(
     remote: &str,
     fetch: Fetcher<S>,
 ) -> Result<(usize, bool), AppError> {
+    trace_sync(remote, "select");
     let (mailbox, highest) = if plan.condstore {
         crate::imap_condstore::select(session, remote, false)?
     } else {
@@ -672,13 +725,21 @@ fn sync_folder<S: Read + Write>(
     } else {
         None
     };
+    let flag_key = round::key(kind, remote);
+    let checked_uid = round::flag_position(db, plan, &flag_key, validity)?;
     let known: Vec<(String, u32, i64)> = {
         let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
         ensure_current(&conn, plan)?;
-        let mut stmt=conn.prepare("SELECT id,remote_uid,state_revision FROM messages WHERE account_id=?1 AND remote_folder=?2 AND remote_uid_validity=?3 AND remote_generation=?4 ORDER BY remote_uid").map_err(|_|AppError::storage("无法读取标记快照"))?;
+        let mut stmt=conn.prepare("SELECT id,remote_uid,state_revision FROM messages WHERE account_id=?1 AND remote_folder=?2 AND remote_uid_validity=?3 AND remote_generation=?4 AND remote_uid>?5 ORDER BY remote_uid").map_err(|_|AppError::storage("无法读取标记快照"))?;
         let result = stmt
             .query_map(
-                params![plan.account_id, remote, validity, plan.generation],
+                params![
+                    plan.account_id,
+                    remote,
+                    validity,
+                    plan.generation,
+                    checked_uid
+                ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(|_| AppError::storage("无法读取标记快照"))?
@@ -687,7 +748,11 @@ fn sync_folder<S: Read + Write>(
         result
     };
     loop {
-        let end = if mailbox.exists == 0 {
+        if crate::sync_control::yield_due() {
+            return Ok((count, true));
+        }
+        trace_sync(remote, "incremental-batch");
+        let mut end = if mailbox.exists == 0 {
             next.saturating_sub(1)
         } else {
             start
@@ -695,7 +760,20 @@ fn sync_folder<S: Read + Write>(
                 .min(next.saturating_sub(1))
         };
         let messages = if start <= end && mailbox.exists > 0 {
-            let messages = fetch(session, start, end, remote, validity, &plan.cache_root)?;
+            let batch = fetch(
+                session,
+                start,
+                end,
+                remote,
+                validity,
+                &plan.cache_root,
+                true,
+            )?;
+            if batch.through_uid < start || batch.through_uid > end {
+                return Err(AppError::network("下载批次返回了无效的 UID 提交边界"));
+            }
+            end = batch.through_uid;
+            let messages = batch.messages;
             if messages.len() > FETCH_UID_SPAN as usize {
                 return Err(AppError::network("服务器返回的邮件批次超出请求上限"));
             }
@@ -724,6 +802,7 @@ fn sync_folder<S: Read + Write>(
             last_uid,
         };
         commit_batch(db, plan, kind, remote, expected, next_cursor, &messages)?;
+        trace_sync(remote, "batch-committed");
         count += messages.len();
         expected = Some(next_cursor);
         batches += 1;
@@ -736,8 +815,13 @@ fn sync_folder<S: Read + Write>(
         }
         start = last_uid.saturating_add(1);
     }
-    let mut watermark_safe = true;
+    // Across a resumed scan retain the older MODSEQ; never promote a partial observation.
+    let mut watermark_safe = checked_uid == 0;
+    trace_sync(remote, "flags");
     for batch in known.chunks(100) {
+        if crate::sync_control::yield_due() {
+            return Ok((count, true));
+        }
         let set = batch
             .iter()
             .map(|(_, uid, _)| uid.to_string())
@@ -827,6 +911,7 @@ fn sync_folder<S: Read + Write>(
                 tx.execute("UPDATE messages SET remote_missing=0,state_revision=state_revision+1 WHERE id=?1 AND account_id=?2 AND remote_missing=1 AND remote_uid=?3 AND remote_uid_validity=?4 AND remote_generation=?5",params![id,plan.account_id,uid,validity,plan.generation]).map_err(|_|AppError::storage("无法恢复远端存在状态"))?;
             }
         }
+        round::save_flags(&tx, plan, &flag_key, validity, batch.last().unwrap().1)?;
         tx.commit()
             .map_err(|_| AppError::storage("服务器标记提交失败"))?;
     }
@@ -844,7 +929,22 @@ fn sync_folder<S: Read + Write>(
         if before > 1 {
             let end = before - 1;
             let start = end.saturating_sub(FETCH_UID_SPAN - 1).max(1);
-            let messages = fetch(session, start, end, remote, validity, &plan.cache_root)?;
+            // History moves backwards; retain its complete fixed range semantics.
+            let batch = fetch(
+                session,
+                start,
+                end,
+                remote,
+                validity,
+                &plan.cache_root,
+                false,
+            )?;
+            if batch.through_uid != end {
+                return Err(AppError::network(
+                    "历史下载未覆盖完整请求区间，未推进历史进度",
+                ));
+            }
+            let messages = batch.messages;
             if messages.len() > FETCH_UID_SPAN as usize
                 || messages.iter().any(|m| m.uid < start || m.uid > end)
             {
@@ -1155,15 +1255,21 @@ mod tests {
         _: &str,
         _: u32,
         _: &std::path::Path,
-    ) -> Result<Vec<ParsedMessage>, AppError> {
-        s.uid_fetch(
-            format!("{start}:{end}"),
-            "(UID FLAGS INTERNALDATE BODY.PEEK[])",
-        )
-        .map_err(|e| crate::imap_limits::network(e, "测试 FETCH 失败"))?
-        .iter()
-        .map(parse_message)
-        .collect()
+        _: bool,
+    ) -> Result<crate::imap_download::DownloadBatch, AppError> {
+        let messages = s
+            .uid_fetch(
+                format!("{start}:{end}"),
+                "(UID FLAGS INTERNALDATE BODY.PEEK[])",
+            )
+            .map_err(|e| crate::imap_limits::network(e, "测试 FETCH 失败"))?
+            .iter()
+            .map(parse_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(crate::imap_download::DownloadBatch {
+            messages,
+            through_uid: end,
+        })
     }
 
     #[derive(Debug)]
@@ -1648,7 +1754,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome.fetched_messages, 1);
-        assert_eq!(outcome.warnings.len(), 1);
+        assert!(outcome.retry_needed && outcome.has_more);
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Sent Items")));
     }
 
     #[test]

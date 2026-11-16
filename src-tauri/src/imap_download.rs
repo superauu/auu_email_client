@@ -12,6 +12,14 @@ use std::{
 };
 const BATCH_BYTES: u32 = 8 * 1024 * 1024;
 const CHUNK_BYTES: u32 = 256 * 1024;
+const COMMIT_BYTES: u64 = 4 * 1024 * 1024;
+const COMMIT_MESSAGES: usize = 10;
+
+pub(crate) struct DownloadBatch {
+    pub messages: Vec<ParsedMessage>,
+    /// Inclusive covered UID boundary; never advance past a deferred message.
+    pub through_uid: u32,
+}
 #[cfg(test)]
 #[path = "imap_download_tests.rs"]
 mod tests;
@@ -26,6 +34,31 @@ pub(crate) fn fetch_range<S: Read + Write>(
     validity: u32,
     cache: &Path,
 ) -> Result<Vec<ParsedMessage>, AppError> {
+    download_range(session, start, end, folder, validity, cache, false).map(|batch| batch.messages)
+}
+
+pub(crate) fn fetch_batch<S: Read + Write>(
+    session: &mut imap::Session<S>,
+    start: u32,
+    end: u32,
+    folder: &str,
+    validity: u32,
+    cache: &Path,
+    bounded_commit: bool,
+) -> Result<DownloadBatch, AppError> {
+    download_range(session, start, end, folder, validity, cache, bounded_commit)
+}
+
+fn download_range<S: Read + Write>(
+    session: &mut imap::Session<S>,
+    start: u32,
+    end: u32,
+    folder: &str,
+    validity: u32,
+    cache: &Path,
+    bounded_commit: bool,
+) -> Result<DownloadBatch, AppError> {
+    mail_sync::trace_sync(folder, "download-metadata");
     if start == 0 || end < start || end - start >= 100 {
         return Err(AppError::invalid("下载 UID 区间无效或超过 100"));
     }
@@ -52,6 +85,28 @@ pub(crate) fn fetch_range<S: Read + Write>(
         }
     }
     drop(metadata);
+    let mut through_uid = end;
+    if bounded_commit {
+        let mut bytes = 0u64;
+        for (selected, (&uid, &size)) in sizes.iter().enumerate() {
+            if selected > 0
+                && (selected >= COMMIT_MESSAGES || bytes + u64::from(size) > COMMIT_BYTES)
+            {
+                through_uid = uid - 1;
+                break;
+            }
+            bytes += u64::from(size);
+        }
+        sizes.retain(|uid, _| *uid <= through_uid);
+    }
+    mail_sync::trace_sync(
+        folder,
+        &format!(
+            "download-bodies count={} bytes={}",
+            sizes.len(),
+            sizes.values().map(|n| u64::from(*n)).sum::<u64>()
+        ),
+    );
     let mut output = vec![];
     let mut group = vec![];
     let mut bytes = 0;
@@ -78,7 +133,10 @@ pub(crate) fn fetch_range<S: Read + Write>(
     if now.uid_validity != Some(validity) {
         return Err(AppError::conflict("下载期间 UIDVALIDITY 改变，未提交原文"));
     }
-    Ok(output)
+    Ok(DownloadBatch {
+        messages: output,
+        through_uid,
+    })
 }
 fn fetch_group<S: Read + Write>(
     s: &mut imap::Session<S>,
@@ -100,15 +158,27 @@ fn fetch_group<S: Read + Write>(
         let uid = m
             .uid
             .filter(|u| group.contains(u) && seen.insert(*u))
-            .ok_or_else(invalid)?;
-        let raw = m
-            .body()
-            .filter(|raw| raw.len() == sizes[&uid] as usize)
-            .ok_or_else(invalid)?;
-        if m.size.is_some_and(|size| size != sizes[&uid]) {
+            .ok_or_else(|| {
+                mail_sync::trace_sync("download", "invalid-body-uid");
+                invalid()
+            })?;
+        let raw = m.body().ok_or_else(invalid)?;
+        if raw.is_empty() || raw.len() > MAX_RAW as usize {
             return Err(invalid());
         }
-        let mut spool = Spool::new(cache, sizes[&uid])?;
+        if raw.len() != sizes[&uid] as usize || m.size.is_some_and(|size| size != sizes[&uid]) {
+            // RFC822.SIZE can be inaccurate on canonicalizing servers (RFC 2683 §3.4.5).
+            // The parser's complete literal boundary is authoritative, but confirm an
+            // anomalous body independently before it becomes a trusted cached original.
+            mail_sync::trace_sync("download", "confirm-size-discrepancy");
+            let confirm = s
+                .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+                .map_err(|e| crate::imap_limits::network(e, "原文大小差异复核失败"))?;
+            if confirm.len() != 1 || confirm[0].uid != Some(uid) || confirm[0].body() != Some(raw) {
+                return Err(invalid());
+            }
+        }
+        let mut spool = Spool::new(cache, raw.len() as u32)?;
         spool.append(raw)?;
         let (key, _) = spool.finish()?;
         let mut parsed = mail_sync::parse_message(m)?;
@@ -116,6 +186,14 @@ fn fetch_group<S: Read + Write>(
         out.push(parsed);
     }
     if seen.len() != group.len() {
+        mail_sync::trace_sync(
+            "download",
+            &format!(
+                "missing-bodies expected={} actual={}",
+                group.len(),
+                seen.len()
+            ),
+        );
         return Err(invalid());
     }
     Ok(())
@@ -138,6 +216,13 @@ fn partial<S: Read + Write>(
         spool.append(chunk(&response, uid, offset, count)?)?;
         offset += count;
     }
+    // A short RFC822.SIZE estimate must never turn a prefix into a full original.
+    let tail = s
+        .run_command_and_read_response(format!("UID FETCH {uid} (UID BODY.PEEK[]<{size}.1>)"))
+        .map_err(|e| crate::imap_limits::network(e, "分块下载末尾核对失败"))?;
+    if !eof(&tail, uid, size)? {
+        return Err(invalid());
+    }
     let metadata = s
         .uid_fetch(uid.to_string(), "(UID RFC822.SIZE FLAGS INTERNALDATE)")
         .map_err(|e| crate::imap_limits::network(e, "分块下载后复核大小失败"))?;
@@ -159,6 +244,46 @@ fn partial<S: Read + Write>(
     )?;
     parsed.raw_cache_key = Some(key);
     Ok(parsed)
+}
+fn eof(response: &[u8], uid: u32, offset: u32) -> Result<bool, AppError> {
+    let mut remaining = response;
+    let mut result = None;
+    while !remaining.is_empty() {
+        let (rest, parsed) = imap_proto::parse_response(remaining).map_err(|_| invalid())?;
+        if rest.len() >= remaining.len() {
+            return Err(invalid());
+        }
+        remaining = rest;
+        if let Response::Fetch(_, attrs) = parsed {
+            let ids: Vec<_> = attrs
+                .iter()
+                .filter_map(|attr| {
+                    if let AttributeValue::Uid(id) = attr {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if ids != [uid] {
+                return Err(invalid());
+            }
+            for attr in attrs {
+                if let AttributeValue::BodySection {
+                    section: None,
+                    index: Some(index),
+                    data,
+                } = attr
+                {
+                    if index != offset || result.is_some() {
+                        return Err(invalid());
+                    }
+                    result = Some(data.is_none_or(|bytes| bytes.is_empty()));
+                }
+            }
+        }
+    }
+    result.ok_or_else(invalid)
 }
 fn chunk(response: &[u8], uid: u32, offset: u32, count: u32) -> Result<&[u8], AppError> {
     let mut remaining = response;

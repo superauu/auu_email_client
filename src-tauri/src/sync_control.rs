@@ -54,6 +54,16 @@ pub(crate) fn current() -> Option<Control> {
 pub(crate) fn check() -> Result<(), AppError> {
     current().map_or(Ok(()), |c| c.check())
 }
+/// Leave enough time for one bounded protocol command and a guarded local commit.
+pub(crate) fn yield_due() -> bool {
+    current().is_some_and(|c| {
+        c.deadline.get().is_some_and(|deadline| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .is_none_or(|left| left <= Duration::from_secs(75))
+        })
+    })
+}
 pub(crate) struct Guard(Option<Control>);
 pub(crate) fn enter(control: Control) -> Guard {
     Guard(CURRENT.with(|slot| slot.replace(Some(control))))

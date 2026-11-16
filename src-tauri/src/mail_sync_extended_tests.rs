@@ -1,6 +1,63 @@
 use super::tests::{db, fetch, first, fixture_fetch, plan};
 use super::*;
 use crate::imap_writeback::tests::{session, step};
+
+#[test]
+fn all_folder_round_continues_at_the_next_folder_instead_of_starting_over() {
+    let db = db();
+    crate::imap_settings::save(
+        &db.lock().unwrap(),
+        "acc",
+        &crate::imap_settings::Settings {
+            sync_all_folders: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let folders: Vec<_> = std::iter::once("INBOX".to_owned())
+        .chain((1..9).map(|i| format!("Folder/{i}")))
+        .collect();
+    let listing = || {
+        step(
+            "LIST",
+            &(folders
+                .iter()
+                .map(|name| format!("* LIST () \"/\" \"{name}\"\r\n"))
+                .collect::<String>()
+                + "{tag} OK list\r\n"),
+        )
+    };
+    let empty = |name: &str| {
+        step(&format!("SELECT \"{name}\""),"* 0 EXISTS\r\n* OK [UIDVALIDITY 1] valid\r\n* OK [UIDNEXT 1] next\r\n{tag} OK selected\r\n")
+    };
+    let mut steps = vec![listing()];
+    steps.extend(folders[..8].iter().map(|name| empty(name)));
+    steps.push(step("LOGOUT", "* BYE bye\r\n{tag} OK logout\r\n"));
+    let (s, trace, _) = session(steps, None);
+    let first = sync_with_fetcher(&db, &plan(&db), s, Some(&trace), fixture_fetch).unwrap();
+    assert!(first.has_more);
+    let next_plan = plan(&db);
+    assert!(next_plan.resume_round);
+    let (s, trace, log) = session(
+        vec![
+            listing(),
+            empty(&folders[8]),
+            step("LOGOUT", "* BYE bye\r\n{tag} OK logout\r\n"),
+        ],
+        None,
+    );
+    assert!(
+        !sync_with_fetcher(&db, &next_plan, s, Some(&trace), fixture_fetch)
+            .unwrap()
+            .has_more
+    );
+    assert!(!log
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|command| command.contains("SELECT \"INBOX\"")));
+    assert!(!plan(&db).resume_round);
+}
 fn condstore_boundary(seq: u64, read_only: bool) -> (String, String) {
     step(&format!("{} \"INBOX\" (CONDSTORE)",if read_only{"EXAMINE"}else{"SELECT"}),&format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 1000] valid\r\n* OK [UIDNEXT 1002] next\r\n* OK [HIGHESTMODSEQ {seq}] highest\r\n{{tag}} OK selected\r\n"))
 }
