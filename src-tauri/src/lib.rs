@@ -19,6 +19,9 @@ mod mail_store;
 mod mail_sync;
 mod mail_verify;
 mod message_changes;
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod oauth_build_tests;
 mod outbox;
 mod pop3;
 mod skins;

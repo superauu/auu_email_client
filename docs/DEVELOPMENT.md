@@ -9,6 +9,8 @@
 
 前端端口固定为 **7317**，仅监听 127.0.0.1。原先尝试 1420 时本机 Windows 返回 EACCES（落入 Hyper-V 保留区 1327–1426），后改用 4317；2026-11-14 发现 4317 也被保留区 4311–4410 占用，统一改用 7317。这类保留区间随重启漂移，如再次遇到 EACCES，用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看后另选端口；修改时必须同步 Vite、Playwright、Tauri devUrl 与 devCsp。
 
+Google OAuth secret 通过 Rust 构建进程环境变量 `AUUMAIL_GOOGLE_CLIENT_SECRET` 或忽略的 `src-tauri/google-oauth-secret.local` 注入；环境变量优先。release 缺值拒绝构建，CI 单测使用虚构值且不依赖真实 secret。修改配置后须重建 Rust，见 [OAUTH_SETUP](OAUTH_SETUP.md)。
+
 ## 日常工作顺序
 
 1. 阅读 AGENTS、STATUS 与对应功能规范；先明确本轮可验收范围。

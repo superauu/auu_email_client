@@ -9,6 +9,8 @@ artifacts/
 .env.*
 !.env.example
 *.local
+# Private desktop OAuth build input (never include in source, logs, or artifacts).
+src-tauri/google-oauth-secret.local
 *.db
 *.db-shm
 *.db-wal

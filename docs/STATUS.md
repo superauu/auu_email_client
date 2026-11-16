@@ -1,8 +1,24 @@
 # 当前状态
 
-更新时间：2026-11-15。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成回复正确性修复（回复全部接入 Cc、Reply-To、发送会话关联头）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-16。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权与真实发送均已验收；本轮完成回复正确性修复（回复全部接入 Cc、Reply-To、发送会话关联头）。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下 A3.7 及更早是历史记录，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：回复正确性（2026-11-15）
+## 最新增量：全目录同步提交与续跑（2026-11-16）
+
+- 已定位原生实际卡点：一批 48 封约 65 MiB 原文全部下载后才提交，触及任务预算后重复下载该批；目录轮次也从头重扫。改为按约 4 MiB / 最多 10 封提交完整前缀，单封较大时单独处理，明确 through_uid，未下载部分不推进游标。硬限额与原文完整性核对保持。
+- 实际验证还发现 Gmail 某封 RFC822.SIZE 为 1689、完整 literal 为 1709 字节，旧校验误判导致永久重试。完整 BODY 差异必须独立复读同 UID 且原文字节相等后才接受，按实际 literal 长度缓存；分块下载追加 EOF 核对，不接受截断原文。UID、UIDVALIDITY、传输限额、原文配额与不跳过 UID 的规则保留。
+- v14 追加目录轮次与 FLAGS 检查点，不修改历史迁移，不清邮件 / 草稿 / 既有游标。以账号 generation 与 request_version 保护，新请求 / 重配不被旧任务覆盖。每 worker 最多 8 个目录，并在安全边界预留 75 秒，原队列继续剩余目录；已完成目录不反复遍历，FLAGS 跨批恢复不升级部分 MODSEQ。
+- 修改前已创建本机私有数据库备份与邮件 / 草稿核对基线；不提交备份、真实邮件、诊断日志或截图。源码中的可选诊断只输出目录摘要与阶段 / 计数。
+- 验证完成：`npm run check`（60 TS / lint / schema / 类型 / 构建）、`npm run check:native`（211 Rust / fmt / Clippy）通过；4 个相关 Chromium 回归通过。原生新构建使用用户现有 Gmail 实测：大批原文逐批提交，两个约 25 MiB 原文与后续邮件均完成；最终目录的大小差异经独立复读通过，轮次待办归零。之后额外手动完整同步，25/25 目录均更新到该轮时间（2026-11-15T22:37:41Z 至 22:38:12Z，即悉尼 2026-11-16 09:37:41–09:38:12），请求无错误，界面曾显示已同步及新邮件通知启用。原有自动同步 60 秒 / 全目录开启 / 历史关闭设置保持，后续 IDLE 与自动轮次属于正常后台检查。
+- 最终本机基线核对：修改前的 422 条邮件记录无缺失、主题 / 发件人 / 收件人 / 正文 / 日期等内容哈希未变；全部 7 份既有草稿逐行哈希未变；新增 49 条缓存记录。备份与核对工件仅存本机忽略位置，不含于提交；未发送验收邮件、未删除服务器邮件或改写草稿。当前原生程序保持运行。详情见 [SYNCHRONIZATION](SYNCHRONIZATION.md)。
+
+## 历史增量：Google OAuth secret 私有构建注入（2026-11-16）
+
+- 移除源码中的 Google Client Secret 明文，保留公开 Client ID；build.rs 优先读 `AUUMAIL_GOOGLE_CLIENT_SECRET`，本机回退忽略的 `src-tauri/google-oauth-secret.local`，生成到忽略的 Cargo OUT_DIR。不通过 Cargo 指令输出值，不新增依赖、IPC 或数据库迁移。
+- 首次迁移时原值转存本机忽略配置；现已将用户提供的新 secret 写入该配置，保持相同 Client ID / token 请求 / keyring 路径，不撤销授权、不改账号或 refresh token。新值未进入受控文件或暂存区；2026-11-16 已重启新构建、以既有 keyring 授权完成实际 Google 令牌刷新及 Gmail IMAP 连接，多个目录批次落盘。旧 secret 的 Google 停用状态未核验，未视为完成全部轮换。
+- 环境变量优先且显式空白禁用回退；开发缺值可构建，Google 令牌请求前明确失败，release 缺值直接拒绝构建。测试改用虚构 secret，覆盖缺值、配置优先级、值校验与生成转义；CI 无需真实凭据。
+- 验证：`npm run check`（60 TS / lint / schema / 类型 / 构建）、`npm run check:native`（204 Rust / fmt / Clippy）全部通过；显式禁用私有配置的 4 个 OAuth 测试另行通过，验证 CI 不依赖真实 secret。普通桌面 `cargo build` 通过，首次构建已核对私有凭据注入，用户提供新值后再次构建并核对新值进入可执行文件；私有配置被 Git 忽略，受控工作文件及暂存区无新 secret 明文。随后按用户授权完成原生真实同步验证：新进程使用新注入值，既有授权可用；本轮更新了 24 个缓存同步 scope 中的 15 个，最新提交为 2026-11-15T21:31:25Z。全目录核对触及单任务 300 秒预算后自动续跑，整轮尚未完整完成，不能标为全目录同步验收通过。为停止测试续跑已从 UI 停止，数据库请求为 paused，已保存批次保留，程序保持运行；没有发送验收邮件。Google 旧 secret 停用后的再次刷新验证尚未执行。分步操作见 [OAUTH_SETUP](OAUTH_SETUP.md)。
+
+## 历史增量：回复正确性（2026-11-15）
 
 - **回复全部接入 Cc**：IMAP / POP3 解析新增 Cc、Reply-To、References（迁移 013：messages 补 `cc_json` / `reply_to_json` / `header_references`；mail-parser 的 Cc / Reply-To 地址与 parse_id 裸 Message-ID 均落库）。阅读窗格显示抄送行。
 - **回复目标规则**（`src/domain/mail.ts::replyTargets`，纯函数）：普通回复优先 Reply-To，缺失或只含本账号地址时退回发件人；回复全部合并发件人 + To + Cc，小写去重、剔除本账号地址，抄送进入草稿独立抄送栏；To 全被剔除时降级到 Cc。

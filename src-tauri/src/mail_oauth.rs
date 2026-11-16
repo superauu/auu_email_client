@@ -23,13 +23,12 @@ fn common() -> String {
     "common".into()
 }
 /// 内置的 Google 公共桌面应用标识。Client ID 本身是公开信息（明文出现在授权 URL 中），
-/// 不是机密；桌面客户端按 PKCE 流程使用，不需要也不保存 client secret。
+/// 不是机密；桌面客户端使用 PKCE，配套 secret 只从私有构建配置注入。
 pub(crate) const GOOGLE_BUILTIN_CLIENT_ID: &str =
     "968245167784-7t1n7fbgjqh8iu04ha9scm43jjkevjmp.apps.googleusercontent.com";
-/// Google 桌面应用的 client secret。Google 明确桌面应用是公共客户端、secret 不作为机密
-/// （安全由 PKCE 保证），但其令牌端点当前仍要求请求携带该值（缺失返回 invalid_request）。
-/// 随应用分发是桌面客户端的标准做法；它不是用户凭据，不进入 keyring / SQLite / 日志。
-const GOOGLE_BUILTIN_CLIENT_SECRET: &str = "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";
+// Google desktop clients cannot keep an embedded secret confidential. PKCE protects
+// code exchange, not app identity. Build configuration must never enter tracked source.
+include!(concat!(env!("OUT_DIR"), "/google_oauth_secret.rs"));
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Config {
@@ -157,15 +156,21 @@ fn parse_token(raw: &[u8], config: &Config) -> Result<Token, AppError> {
 fn with_builtin_secret(
     config: &Config,
     mut fields: Vec<(String, String)>,
-) -> Vec<(String, String)> {
+    secret: Option<&str>,
+) -> Result<Vec<(String, String)>, AppError> {
     if config.provider == Provider::Google && config.client_id == GOOGLE_BUILTIN_CLIENT_ID {
-        fields.push(("client_secret".into(), GOOGLE_BUILTIN_CLIENT_SECRET.into()));
+        let secret = secret.filter(|secret| !secret.is_empty()).ok_or_else(|| {
+            AppError::invalid(
+                "此构建未配置 Google OAuth 凭据，请使用已配置的桌面构建；现有邮箱数据未更改",
+            )
+        })?;
+        fields.push(("client_secret".into(), secret.into()));
     }
-    fields
+    Ok(fields)
 }
 fn token_request(config: &Config, fields: Vec<(String, String)>) -> Result<Token, AppError> {
     config.validate()?;
-    let fields = with_builtin_secret(config, fields);
+    let fields = with_builtin_secret(config, fields, GOOGLE_BUILTIN_CLIENT_SECRET)?;
     crate::sync_control::check()?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -365,8 +370,12 @@ mod tests {
             client_id: GOOGLE_BUILTIN_CLIENT_ID.into(),
             tenant: "common".into(),
         };
-        let fields =
-            with_builtin_secret(&google, vec![("grant_type".into(), "refresh_token".into())]);
+        let fields = with_builtin_secret(
+            &google,
+            vec![("grant_type".into(), "refresh_token".into())],
+            Some("synthetic-google-secret"),
+        )
+        .unwrap();
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[1].0, "client_secret");
         assert!(!fields[1].1.is_empty());
@@ -375,8 +384,12 @@ mod tests {
             client_id: "custom-id.apps.googleusercontent.com".into(),
             tenant: "common".into(),
         };
-        let fields =
-            with_builtin_secret(&custom, vec![("grant_type".into(), "refresh_token".into())]);
+        let fields = with_builtin_secret(
+            &custom,
+            vec![("grant_type".into(), "refresh_token".into())],
+            None,
+        )
+        .unwrap();
         assert_eq!(fields.len(), 1, "自定义 Client ID 不附带内置 secret");
         let microsoft = Config {
             provider: Provider::Microsoft,
@@ -386,8 +399,21 @@ mod tests {
         let fields = with_builtin_secret(
             &microsoft,
             vec![("grant_type".into(), "refresh_token".into())],
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(fields.len(), 1, "Microsoft 公共客户端不使用 secret");
+    }
+    #[test]
+    fn missing_google_build_secret_fails_before_network_without_changing_credentials() {
+        let google = Config {
+            provider: Provider::Google,
+            client_id: GOOGLE_BUILTIN_CLIENT_ID.into(),
+            tenant: "common".into(),
+        };
+        let error = with_builtin_secret(&google, vec![], None).unwrap_err();
+        assert!(error.message.contains("此构建未配置"));
+        assert!(with_builtin_secret(&google, vec![], Some("")).is_err());
     }
     #[test]
     fn google_empty_client_id_falls_back_to_builtin_registration() {
