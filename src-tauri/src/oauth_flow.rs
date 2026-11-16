@@ -176,14 +176,22 @@ fn respond(socket: &mut TcpStream, ok: bool) {
     let reply=format!("HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",if ok{"200 OK"}else{"400 Bad Request"},body.len(),body);
     let _ = socket.write_all(reply.as_bytes());
 }
-const LOGO_SVG: &str = include_str!("../../public/logo.svg");
+const LOGO_PNG: &[u8] = include_bytes!("../../public/logo.png");
+// 回调页保持无脚本、无外部资源；品牌图以内嵌 data URI 引入，尺寸与原图标 CSS 对齐。
+fn logo_img() -> String {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    format!(
+        "<img src=\"data:image/png;base64,{}\" alt=\"AuuMail\" draggable=\"false\" />",
+        BASE64.encode(LOGO_PNG)
+    )
+}
 // 静态回调页：无脚本、无外部资源；CSS 花括号决定了不能用 format!，用占位符替换填充文案。
 const CALLBACK_TEMPLATE: &str = r#"<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title><style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #0f1e33 0%, #0c182a 55%, #091221 100%); font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #e8f1f7; padding: 24px; }
   .card { width: 100%; max-width: 430px; border: 1px solid rgba(139, 171, 196, 0.22); border-radius: 16px; background: rgba(9, 18, 33, 0.72); padding: 42px 36px 34px; text-align: center; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); }
-  .card svg { width: 72px; height: 72px; }
+  .card img { width: 72px; height: 72px; }
   h1 { font-size: 19px; font-weight: 600; margin: 20px 0 10px; letter-spacing: 0.02em; color: #dcecf5; }
   .status { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 8px; vertical-align: 1px; background: #27e5dd; box-shadow: 0 0 8px rgba(39, 229, 221, 0.8); }
   .status.bad { background: #e5b227; box-shadow: 0 0 8px rgba(229, 178, 39, 0.8); }
@@ -209,7 +217,7 @@ fn callback_page(ok: bool) -> String {
         .replace("{heading}", heading)
         .replace("{message}", message)
         .replace("{tone}", if ok { "" } else { " bad" })
-        .replace("{logo}", LOGO_SVG)
+        .replace("{logo}", &logo_img())
 }
 fn wait(
     listener: TcpListener,
@@ -413,6 +421,7 @@ mod tests {
         assert!(page.contains("授权成功"));
         assert!(page.contains("text/html") || page.contains("<!DOCTYPE html>"));
         assert!(page.contains("AuuMail"));
+        assert!(page.contains("src=\"data:image/png;base64,"), "品牌图必须以内嵌 data URI 提供，不得引用外部资源");
         let lowered = page.to_ascii_lowercase();
         for forbidden in ["<script", "<link", "@import", "url(http", "<iframe"] {
             assert!(!lowered.contains(forbidden), "回调页不得包含 {forbidden}");

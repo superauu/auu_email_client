@@ -65,7 +65,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
       {reauthorizing && <OAuthDialog account={reauthorizing.account} initial={reauthorizing.config} onClose={() => setReauthorizing(null)} onSaved={reload} />}
       {wizardOpen && <AccountWizardDialog open initial={editing} tone={nextTone} onClose={() => setWizardOpen(false)} onSaved={reload} />}
       </Tabs.Content>
-      <Tabs.Content value="about" className="settings-body"><div className="about-brand"><img src="/logo.svg" alt="" /><div><h3>AuuMail</h3><p>让邮件井然有序。</p></div><span className="label">v{info?.version ?? '0.1.0'}</span></div><div className="info-card"><h3>基础架构预览</h3><p>桌面工作区仅包含你添加的邮箱及其邮件；浏览器预览独立使用演示数据。星标、归档、已读、草稿与事件完成状态保存在本机；桌面版使用本地数据库，浏览器仅提供演示。</p><p>{info ? `本地数据库已${info.databaseReady ? '准备就绪' : '停止'}，支持读取已同步邮件和本地草稿。` : '浏览器预览支持界面和内置皮肤，目录扫描与数据库由桌面版提供。'}</p></div></Tabs.Content>
+      <Tabs.Content value="about" className="settings-body"><div className="about-brand"><img src="/logo.png" alt="" /><div><h3>AuuMail</h3><p>让邮件井然有序。</p></div><span className="label">v{info?.version ?? '0.1.0'}</span></div><div className="info-card"><h3>基础架构预览</h3><p>桌面工作区仅包含你添加的邮箱及其邮件；浏览器预览独立使用演示数据。星标、归档、已读、草稿与事件完成状态保存在本机；桌面版使用本地数据库，浏览器仅提供演示。</p><p>{info ? `本地数据库已${info.databaseReady ? '准备就绪' : '停止'}，支持读取已同步邮件和本地草稿。` : '浏览器预览支持界面和内置皮肤，目录扫描与数据库由桌面版提供。'}</p></div></Tabs.Content>
     </Tabs.Root>{error && <p className="inline-error" role="alert">{error}</p>}
   </Dialog>;
 }

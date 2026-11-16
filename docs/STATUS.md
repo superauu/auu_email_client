@@ -1,8 +1,14 @@
 # 当前状态
 
-更新时间：2026-11-16。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。抄送 / 密送独立收件、真实 POP3、Outlook 会话归组仍待验收；本轮另发现中文附件名的严格 MIME 参数解析兼容问题，尚未修复。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-17。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。抄送 / 密送独立收件、真实 POP3、Outlook 会话归组仍待验收；本轮另发现中文附件名的严格 MIME 参数解析兼容问题，尚未修复。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：Gmail 自发自收真实验收（2026-11-16）
+## 最新增量：应用图标更换（2026-11-17）
+
+- **范围**：以 `docs/auu-mail/auu-mail-512.png` 为源执行 `npx tauri icon`，重新生成 `src-tauri/icons` 全套图像（icon.ico / icns / PNG、Windows Square 与 Store logo、android / ios），共 50 个图像文件更新；两个 XML 配置（自适应图标背景色）本就不含图像内容、保持不变。`tauri.conf.json` 的 `bundle.icon` 指向不变。应用内品牌图三处同步更换：顶栏（App.tsx）与关于页（SettingsDialog.tsx）改用 `public/logo.png`（auu-mail-256 拷贝）；OAuth 回调等待页（oauth_flow.rs）改为 `include_bytes!` + base64 内嵌 data URI，页面保持无脚本、无外部资源；旧 `public/logo.svg` 已删除。
+- **验证**：源图核对为 512×512、四角透明；`npm run check` 通过（lint / skins / build / 63 TS 测试）；`npm run check:native` 通过（fmt / cargo test / clippy -D warnings，230 Rust 测试），并为回调页新增断言"品牌图必须以内嵌 data URI 提供"。浏览器实际查看顶栏 28px 与关于页 48px，新图标显示正常。
+- **边界**：OAuth 回调页仅经 Rust 测试验证，未走真实授权流程目视确认。图标再生成源以 `docs/auu-mail/auu-mail-512.png` 入库跟踪；该目录其余导出尺寸（16–256 与 ico）保持未跟踪，需要时可由源图重新生成。Windows 资源管理器有图标缓存，重装或清理缓存前任务栏可能仍显示旧图标。
+
+## 历史增量：Gmail 自发自收真实验收（2026-11-16）
 
 - **范围**：按用户“发给我自己”的明确选择，使用现有 Gmail 账号，经 Windows 原生撰写向同一账号发送主题标记 `[AuuMail 实测 5e72cd]` 的合成测试邮件，再从原生阅读窗格回复。To 为本账号，Cc / Bcc 留空，没有向第三方测试地址发信。
 - **真实投递与附件通过**：原邮件包含 170 字节中文文件名 UTF-8 文本和 4096 字节二进制文件。两个附件的 SQLite 存储、收件完整原文解码及 Gmail 网页实际下载均与原文件逐字节一致，并核对 SHA-256；Gmail 正确显示两个文件名。原生系统文件对话框、附件 chip、收件附件列表均已操作 / 核对。
