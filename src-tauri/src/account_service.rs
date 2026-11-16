@@ -16,7 +16,7 @@ pub(crate) fn configuration(
     if !matches!(provider.as_str(), "imap" | "pop3") || p["status"] == "demo" {
         return Err(AppError::invalid("请选择真实的 IMAP 或 POP3 账号"));
     }
-    let value = serde_json::json!({"id":id,"name":name,"email":email,"imapHost":p["imapHost"],"imapPort":p["imapPort"],"imapSecurity":p.get("imapSecurity").cloned().unwrap_or(serde_json::json!("tls")),"smtpHost":p.get("smtpHost").cloned().unwrap_or(serde_json::json!("")),"smtpPort":p.get("smtpPort").cloned().unwrap_or(serde_json::json!(465)),"authUser":p["authUser"],"avatar":p["avatar"],"color":p["color"],"receiveOnly":p.get("receiveOnly").cloned().unwrap_or(serde_json::json!(false)),"oauth":p["oauth"]});
+    let value = serde_json::json!({"id":id,"provider":provider,"name":name,"email":email,"imapHost":p["imapHost"],"imapPort":p["imapPort"],"imapSecurity":p.get("imapSecurity").cloned().unwrap_or(serde_json::json!("tls")),"smtpHost":p.get("smtpHost").cloned().unwrap_or(serde_json::json!("")),"smtpPort":p.get("smtpPort").cloned().unwrap_or(serde_json::json!(465)),"authUser":p["authUser"],"avatar":p["avatar"],"color":p["color"],"receiveOnly":p.get("receiveOnly").cloned().unwrap_or(serde_json::json!(false)),"oauth":p["oauth"]});
     serde_json::from_value(value).map_err(|_| AppError::storage("账号配置不完整，请重新配置"))
 }
 pub(crate) fn existing_generation(
@@ -113,6 +113,20 @@ pub(crate) fn persist(
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    #[test]
+    fn pop3_configuration_preserves_the_protocol_when_reopened() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::storage::migrate(&mut conn).unwrap();
+        conn.execute_batch("INSERT INTO accounts(id,provider,email,display_name,created_at,profile_json)
+          VALUES ('pop','pop3','pop@example.test','POP','2026-11-16T00:00:00Z',
+          '{\"status\":\"connected\",\"imapHost\":\"pop.example.test\",\"imapPort\":995,\"authUser\":\"pop@example.test\",\"avatar\":\"P\",\"color\":\"teal\"}');").unwrap();
+        let value = configuration(&conn, "pop").unwrap();
+        assert_eq!(value.provider, "pop3");
+        assert_eq!(value.imap_port, 995);
+        assert_eq!(value.auth_user, "pop@example.test");
+        assert!(configuration(&conn, "missing").is_err());
+    }
+
     #[test]
     fn failed_account_commit_restores_keyring_and_stale_authorization_cannot_overwrite() {
         let dir = tempfile::tempdir().unwrap();

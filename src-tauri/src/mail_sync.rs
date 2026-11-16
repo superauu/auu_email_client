@@ -213,7 +213,19 @@ fn prepare(conn: &Connection, id: &str) -> Result<SyncPlan, AppError> {
 pub fn validate_accounts(db: &SharedDb, ids: &[String]) -> Result<(), AppError> {
     let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
     for id in ids {
-        prepare(&conn, id)?;
+        let provider: Option<String> = conn
+            .query_row("SELECT provider FROM accounts WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|_| AppError::storage("无法读取账号协议"))?;
+        match provider.as_deref() {
+            Some("imap") => {
+                prepare(&conn, id)?;
+            }
+            Some("pop3") => crate::pop3::validate_account(&conn, id)?,
+            _ => return Err(AppError::invalid("找不到可同步的 IMAP 或 POP3 账号")),
+        }
     }
     Ok(())
 }
@@ -1298,6 +1310,46 @@ mod tests {
     }
     pub(super) fn plan(db: &SharedDb) -> SyncPlan {
         prepare(&db.lock().unwrap(), "acc").unwrap()
+    }
+    #[test]
+    fn manual_sync_preflight_accepts_mixed_pop3_and_imap_without_imap_cursor_parsing_for_pop3() {
+        let db = db();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch("INSERT INTO accounts(id,provider,email,display_name,profile_json,created_at)
+              SELECT 'pop','pop3',email,display_name,profile_json,created_at FROM accounts WHERE id='acc';
+              INSERT INTO sync_states(account_id,scope,cursor,updated_at) VALUES ('pop','imap:inbox','not-an-imap-cursor','2026-11-16T00:00:00Z');").unwrap();
+        }
+        validate_accounts(&db, &["pop".into()]).unwrap();
+        validate_accounts(&db, &["acc".into(), "pop".into()]).unwrap();
+        assert!(validate_accounts(&db, &["acc".into(), "missing".into()]).is_err());
+        for profile in [
+            serde_json::json!({"status":"demo","imapHost":"127.0.0.1","imapPort":995,"authUser":"me@example.test"}),
+            serde_json::json!({"status":"offline","imapHost":"127.0.0.1","imapPort":0,"authUser":"me@example.test"}),
+            serde_json::json!({"status":"offline","imapHost":"127.0.0.1","imapPort":65536,"authUser":"me@example.test"}),
+            serde_json::json!({"status":"offline","imapHost":" ","imapPort":995,"authUser":"me@example.test"}),
+            serde_json::json!({"status":"offline","imapHost":"127.0.0.1","imapPort":995,"authUser":" "}),
+        ] {
+            db.lock()
+                .unwrap()
+                .execute(
+                    "UPDATE accounts SET profile_json=?1 WHERE id='pop'",
+                    [profile.to_string()],
+                )
+                .unwrap();
+            assert_eq!(
+                validate_accounts(&db, &["pop".into()]).unwrap_err().code,
+                "invalid"
+            );
+        }
+        db.lock()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET provider='microsoft' WHERE id='pop'",
+                [],
+            )
+            .unwrap();
+        assert!(validate_accounts(&db, &["pop".into()]).is_err());
     }
     fn prefix(validity: u32, next: u32) -> String {
         format!("* OK IMAP4rev1 ready\r\na1 OK login\r\n* LIST (\\HasNoChildren) \"/\" INBOX\r\na2 OK list\r\n* 1 EXISTS\r\n* OK [UIDVALIDITY {validity}] valid\r\n* OK [UIDNEXT {next}] next\r\na3 OK selected\r\n")

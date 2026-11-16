@@ -187,8 +187,7 @@ struct SendSnapshot {
     cache_root: std::path::PathBuf,
 }
 
-fn snapshot(db: &SharedDb, id: &str) -> Result<SendSnapshot, AppError> {
-    let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+fn profile(conn: &rusqlite::Connection, id: &str) -> Result<serde_json::Value, AppError> {
     let profile: String = conn
         .query_row(
             "SELECT profile_json FROM accounts WHERE id = ?1 AND provider = 'pop3'",
@@ -203,6 +202,31 @@ fn snapshot(db: &SharedDb, id: &str) -> Result<SendSnapshot, AppError> {
     if profile["status"] == "demo" {
         return Err(AppError::invalid("演示账号不会连接服务器"));
     }
+    for field in ["imapHost", "authUser"] {
+        if profile[field]
+            .as_str()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(AppError::invalid("账号缺少 POP3 服务器或登录用户"));
+        }
+    }
+    if profile["imapPort"]
+        .as_u64()
+        .is_none_or(|port| !(1..=65535).contains(&port))
+    {
+        return Err(AppError::invalid("账号缺少有效的 POP3 端口"));
+    }
+    Ok(profile)
+}
+
+/// 手动入队与 worker 快照共用只读配置校验，不执行网络或凭据 I/O。
+pub(crate) fn validate_account(conn: &rusqlite::Connection, id: &str) -> Result<(), AppError> {
+    profile(conn, id).map(|_| ())
+}
+
+fn snapshot(db: &SharedDb, id: &str) -> Result<SendSnapshot, AppError> {
+    let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+    let profile = profile(&conn, id)?;
     let seen: Vec<String> = conn
         .query_row(
             "SELECT cursor FROM sync_states WHERE account_id = ?1 AND scope = ?2",

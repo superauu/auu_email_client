@@ -9,7 +9,22 @@ pub(crate) struct Settings {
     pub auto_sync_seconds: u32,
 }
 pub(crate) fn read(conn: &rusqlite::Connection, account: &str) -> Result<Settings, AppError> {
-    conn.query_row("SELECT sync_all_folders,history_enabled,auto_sync_seconds FROM imap_settings WHERE account_id=?1",[account],|r|Ok(Settings{sync_all_folders:r.get(0)?,history_enabled:r.get(1)?,auto_sync_seconds:r.get(2)?})).optional().map(|v|v.unwrap_or_default()).map_err(|_|AppError::storage("无法读取 IMAP 同步设置"))
+    conn.query_row(
+        "SELECT CASE WHEN a.provider='pop3' THEN 0 ELSE s.sync_all_folders END,
+      CASE WHEN a.provider='pop3' THEN 0 ELSE s.history_enabled END,s.auto_sync_seconds
+      FROM imap_settings s JOIN accounts a ON a.id=s.account_id WHERE account_id=?1",
+        [account],
+        |r| {
+            Ok(Settings {
+                sync_all_folders: r.get(0)?,
+                history_enabled: r.get(1)?,
+                auto_sync_seconds: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map(|v| v.unwrap_or_default())
+    .map_err(|_| AppError::storage("无法读取同步设置"))
 }
 pub(crate) fn save(
     conn: &rusqlite::Connection,
@@ -21,11 +36,14 @@ pub(crate) fn save(
             "自动同步间隔必须为 60–86400 秒，或 0 表示关闭",
         ));
     }
-    let real:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1 AND provider='imap' AND COALESCE(json_extract(CASE WHEN json_valid(profile_json) THEN profile_json ELSE '{}' END,'$.status'),'')!='demo')",[account],|r|r.get(0)).map_err(|_|AppError::storage("无法读取账号"))?;
-    if !real {
-        return Err(AppError::invalid("请选择真实 IMAP 账号"));
+    let provider: Option<String> = conn.query_row("SELECT provider FROM accounts WHERE id=?1 AND provider IN ('imap','pop3') AND COALESCE(json_extract(CASE WHEN json_valid(profile_json) THEN profile_json ELSE '{}' END,'$.status'),'')!='demo'",[account],|r|r.get(0)).optional().map_err(|_|AppError::storage("无法读取账号"))?;
+    let Some(provider) = provider else {
+        return Err(AppError::invalid("请选择真实 IMAP 或 POP3 账号"));
+    };
+    if provider == "pop3" && (value.sync_all_folders || value.history_enabled) {
+        return Err(AppError::invalid("POP3 不支持多文件夹或 IMAP 历史回填设置"));
     }
-    conn.execute("INSERT INTO imap_settings(account_id,sync_all_folders,history_enabled,auto_sync_seconds) VALUES (?1,?2,?3,?4) ON CONFLICT(account_id) DO UPDATE SET sync_all_folders=excluded.sync_all_folders,history_enabled=excluded.history_enabled,auto_sync_seconds=excluded.auto_sync_seconds",params![account,value.sync_all_folders,value.history_enabled,value.auto_sync_seconds]).map_err(|_|AppError::storage("无法保存 IMAP 设置"))?;
+    conn.execute("INSERT INTO imap_settings(account_id,sync_all_folders,history_enabled,auto_sync_seconds) VALUES (?1,?2,?3,?4) ON CONFLICT(account_id) DO UPDATE SET sync_all_folders=excluded.sync_all_folders,history_enabled=excluded.history_enabled,auto_sync_seconds=excluded.auto_sync_seconds",params![account,value.sync_all_folders,value.history_enabled,value.auto_sync_seconds]).map_err(|_|AppError::storage("无法保存同步设置"))?;
     Ok(())
 }
 pub(crate) fn scope(folder: &str) -> String {
@@ -73,6 +91,52 @@ pub(crate) fn display_name(raw: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    #[test]
+    fn pop3_auto_sync_is_account_scoped_and_rejects_imap_only_options() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::storage::migrate(&mut conn).unwrap();
+        conn.execute_batch("INSERT INTO accounts (id,provider,email,display_name,created_at,profile_json) VALUES
+          ('pop','pop3','pop@example.test','POP','2026-11-16T00:00:00Z','{\"status\":\"connected\"}'),
+          ('imap','imap','imap@example.test','IMAP','2026-11-16T00:00:00Z','{\"status\":\"connected\"}'),
+          ('demo','pop3','demo@example.test','Demo','2026-11-16T00:00:00Z','{\"status\":\"demo\"}');
+          INSERT INTO imap_settings VALUES ('pop',1,1,0);").unwrap();
+        let initial = read(&conn, "pop").unwrap();
+        assert!(!initial.sync_all_folders && !initial.history_enabled);
+        let value = Settings {
+            auto_sync_seconds: 300,
+            ..Settings::default()
+        };
+        save(&conn, "pop", &value).unwrap();
+        assert_eq!(read(&conn, "pop").unwrap().auto_sync_seconds, 300);
+        assert_eq!(read(&conn, "imap").unwrap().auto_sync_seconds, 0);
+        assert!(save(&conn, "demo", &value).is_err());
+        assert!(save(&conn, "missing", &value).is_err());
+        assert!(save(
+            &conn,
+            "pop",
+            &Settings {
+                auto_sync_seconds: 1,
+                ..Settings::default()
+            }
+        )
+        .is_err());
+        for value in [
+            Settings {
+                sync_all_folders: true,
+                ..Settings::default()
+            },
+            Settings {
+                history_enabled: true,
+                ..Settings::default()
+            },
+        ] {
+            assert!(save(&conn, "pop", &value).is_err());
+            save(&conn, "imap", &value).unwrap();
+        }
+        assert_eq!(read(&conn, "pop").unwrap().auto_sync_seconds, 300);
+    }
+
     #[test]
     fn modified_utf7_changes_only_the_display_and_bad_names_survive() {
         assert_eq!(super::display_name("&ZeVnLIqe-"), "日本語");

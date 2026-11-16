@@ -7,11 +7,11 @@ export const useImapStore = create<{
   save: (accountId: string, settings: ImapSettings) => Promise<void>;
 }>(() => ({
   load(accountId) {
-    if (!isDesktop()) return Promise.reject(new Error('IMAP 设置仅在桌面版可用。'));
+    if (!isDesktop()) return Promise.reject(new Error('同步设置仅在桌面版可用。'));
     return desktopImapGateway.loadSettings(accountId);
   },
   save(accountId, settings) {
-    if (!isDesktop()) return Promise.reject(new Error('IMAP 设置仅在桌面版可用。'));
+    if (!isDesktop()) return Promise.reject(new Error('同步设置仅在桌面版可用。'));
     return desktopImapGateway.saveSettings(accountId, settings);
   },
 }));

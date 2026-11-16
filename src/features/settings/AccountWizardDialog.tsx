@@ -28,7 +28,7 @@ function toInput(form: Form, tone: Tone, id?: string | null, provider: 'imap' | 
   return {
     id, provider, receiveOnly: form.receiveOnly, name: form.name.trim(), email: form.email.trim(),
     imapHost: form.imapHost.trim(), imapPort: Number(form.imapPort) || 993,
-    imapSecurity: form.imapSecurity,
+    imapSecurity: provider === 'pop3' ? 'tls' : form.imapSecurity,
     smtpHost: form.smtpHost.trim(), smtpPort: Number(form.smtpPort) || 465,
     authUser: form.authUser.trim(), avatar: (form.name.trim()[0] ?? 'A').toUpperCase(), color: tone,
   };
@@ -44,8 +44,8 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
   open: boolean; tone: Tone; onClose: () => void; onSaved: () => Promise<void>; initial?: RealAccountInput;
 }) {
   const [form, setForm] = useState<Form>(() => initial ? { name: initial.name, email: initial.email, imapHost: initial.imapHost, imapPort: String(initial.imapPort), imapSecurity: initial.imapSecurity ?? 'tls', smtpHost: initial.smtpHost, smtpPort: String(initial.smtpPort), authUser: initial.authUser, password: '', receiveOnly: initial.receiveOnly ?? false } : initialForm);
-  // 编辑模式跳过提供商选择，直接进入 IMAP 表单。
-  const [providerId, setProviderId] = useState<ProviderId | null>(initial ? 'imap' : null);
+  // 编辑模式保留已保存的协议，不能将 POP3 原地重配成 IMAP。
+  const [providerId, setProviderId] = useState<ProviderId | null>(initial ? initial.provider === 'pop3' ? 'pop3' : 'imap' : null);
   const [formError, setFormError] = useState('');
   const [report, setReport] = useState<MailVerifyReport | null>(null);
   const [testing, setTesting] = useState(false);
@@ -80,7 +80,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
       setForm(current => ({ ...current, imapHost: target.endpoints!.imapHost, imapPort: String(target.endpoints!.imapPort), imapSecurity: target.endpoints!.imapSecurity, smtpHost: target.endpoints!.smtpHost, smtpPort: String(target.endpoints!.smtpPort), authUser: current.authUser.trim() || current.email.trim() }));
     }
     if (id === 'pop3') {
-      setForm(current => ({ ...current, imapPort: current.imapPort === '993' ? '995' : current.imapPort }));
+      setForm(current => ({ ...current, imapSecurity: 'tls', imapPort: ['993', '143'].includes(current.imapPort) ? '995' : current.imapPort }));
     }
   }
 
@@ -100,7 +100,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
         provider: providerId === 'pop3' ? 'pop3' : 'imap',
         receiveOnly: form.receiveOnly,
         imapHost: form.imapHost.trim(), imapPort: Number(form.imapPort),
-        imapSecurity: form.imapSecurity,
+        imapSecurity: providerId === 'pop3' ? 'tls' : form.imapSecurity,
         smtpHost: form.smtpHost.trim(), smtpPort: Number(form.smtpPort), authUser: form.authUser.trim(),
       }, form.password));
     } catch (error) { setReport(null); setSaveError(errorMessage(error)); }
@@ -134,7 +134,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
   }
 
   const providerStep = !initial && !providerId;
-  const title = initial ? '更新 IMAP 邮箱连接' : providerStep ? '添加邮箱账号' : preset ? `添加 ${preset.label} 账号` : '添加邮箱账号';
+  const title = initial ? `更新 ${providerId === 'pop3' ? 'POP3' : 'IMAP'} 邮箱连接` : providerStep ? '添加邮箱账号' : preset ? `添加 ${preset.label} 账号` : '添加邮箱账号';
   const description = providerStep ? '选择邮箱提供商，之后只需填写名称和地址。' : oauthOnly ? '授权在系统浏览器完成，凭据只保存在本机。' : '连接信息与密码只保存在本机。';
   const dialogBusy = testing || saving || oauth.running;
 
@@ -162,12 +162,12 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
         <label><span>邮箱地址</span><input value={form.email} onChange={update('email')} type="email" placeholder={oauthOnly ? 'you@gmail.com' : 'you@example.com'} autoComplete="off" /></label>
         {!oauthOnly && <>
           <label><span>{providerId === 'pop3' ? 'POP3 服务器' : 'IMAP 服务器'}</span><input value={form.imapHost} onChange={update('imapHost')} placeholder={providerId === 'pop3' ? 'pop3.example.com' : 'imap.example.com'} autoComplete="off" /></label>
-          <label><span>IMAP 端口</span><input value={form.imapPort} onChange={update('imapPort')} inputMode="numeric" autoComplete="off" /></label>
-          <label><span>IMAP 加密</span><select value={form.imapSecurity} disabled={testing || saving} onChange={event => {
+          <label><span>{providerId === 'pop3' ? 'POP3 端口' : 'IMAP 端口'}</span><input value={form.imapPort} onChange={update('imapPort')} inputMode="numeric" autoComplete="off" /></label>
+          <label><span>{providerId === 'pop3' ? 'POP3 加密' : 'IMAP 加密'}</span><select value={form.imapSecurity} disabled={testing || saving} onChange={event => {
             const security = event.target.value === 'starttls' ? 'starttls' : 'tls';
             setForm(current => ({ ...current, imapSecurity: security, imapPort: ['993', '143'].includes(current.imapPort) ? security === 'starttls' ? '143' : '993' : current.imapPort }));
             setReport(null);
-          }}><option value="tls">TLS 直连（通常 993）</option><option value="starttls">STARTTLS（通常 143）</option></select></label>
+          }}><option value="tls">TLS 直连（通常 {providerId === 'pop3' ? '995' : '993'}）</option>{providerId !== 'pop3' && <option value="starttls">STARTTLS（通常 143）</option>}</select></label>
           <label><span>仅收信</span><input type="checkbox" checked={form.receiveOnly} onChange={event => { setForm({ ...form, receiveOnly: event.target.checked }); setReport(null); }} />不验证 SMTP</label>
           <label><span>SMTP 服务器</span><input disabled={form.receiveOnly} value={form.smtpHost} onChange={update('smtpHost')} placeholder="smtp.example.com" autoComplete="off" /></label>
           <label><span>SMTP 端口</span><input disabled={form.receiveOnly} value={form.smtpPort} onChange={update('smtpPort')} inputMode="numeric" autoComplete="off" /></label>
@@ -175,9 +175,9 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
           <label><span>{preset.authHint ? '授权码' : '密码'}</span><input value={form.password} onChange={update('password')} type="password" placeholder={preset.authHint ? preset.authHint : '密码只写入系统凭据库'} autoComplete="new-password" /></label>
         </>}
       </fieldset>
-      {!oauthOnly && <p className="wizard-note">{preset.authHint ? `${preset.authHint} ` : ''}IMAP 可选 TLS 直连或必须成功升级的 STARTTLS，不支持明文登录。SMTP 使用 TLS 直连（通常 465）。验证只登录并列出文件夹，不读取正文或发送邮件；保存后可手动同步。</p>}
+      {!oauthOnly && <p className="wizard-note">{preset.authHint ? `${preset.authHint} ` : ''}{providerId === 'pop3' ? 'POP3 仅支持 TLS 直连（通常 995）。验证只登录并读取邮件数量，不下载邮件、不删除服务器副本。' : 'IMAP 可选 TLS 直连或必须成功升级的 STARTTLS，不支持明文登录。验证只登录并列出文件夹，不读取正文。'}SMTP 使用 TLS 直连（通常 465）。验证不发送邮件；保存后可手动同步。</p>}
       {report && <div className="verify-report" role="status">
-        <Probe label="IMAP" probe={report.imap} extra={report.imap.ok && report.folderCount !== null ? `，发现 ${report.folderCount} 个文件夹` : undefined} />
+        <Probe label={providerId === 'pop3' ? 'POP3' : 'IMAP'} probe={report.imap} extra={report.imap.ok && report.folderCount !== null ? `，发现 ${report.folderCount} ${providerId === 'pop3' ? '封邮件' : '个文件夹'}` : undefined} />
         <Probe label="SMTP" probe={report.smtp} />
       </div>}
       {oauth.flow && <p className="oauth-status" role="status">{oauthPhaseText[oauth.flow.state]}{oauth.flow.folderCount !== null ? `发现 ${oauth.flow.folderCount} 个文件夹。` : ''}</p>}
