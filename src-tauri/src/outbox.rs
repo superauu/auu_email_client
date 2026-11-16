@@ -46,7 +46,14 @@ fn entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
 pub(crate) fn list(conn: &Connection) -> Result<Vec<Entry>, AppError> {
     let mut statement = conn
         .prepare(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM outbox ORDER BY queued_at DESC, id DESC LIMIT 128"
+            "SELECT {ENTRY_COLUMNS} FROM outbox
+             WHERE state != 'sent' OR id IN (
+               SELECT id FROM outbox WHERE state = 'sent' ORDER BY queued_at DESC, id DESC LIMIT 128
+             )
+             ORDER BY CASE WHEN resolved_by = 'keep-local' THEN 4
+               WHEN state = 'unknown' THEN 0 WHEN state = 'failed' THEN 1
+               WHEN state IN ('queued', 'sending') THEN 2 ELSE 3 END,
+               queued_at DESC, id DESC"
         ))
         .map_err(|_| AppError::storage("无法读取发送队列"))?;
     let entries = statement
@@ -864,12 +871,35 @@ pub(crate) fn resolve(conn: &Connection, entry_id: &str, action: &str) -> Result
 }
 
 pub(crate) fn retry(conn: &Connection, entry_id: &str) -> Result<Entry, AppError> {
-    conn.execute(
-        "UPDATE outbox SET state = 'queued', last_error = NULL, updated_at = ?2 WHERE id = ?1 AND state = 'failed'",
-        params![entry_id, now()],
-    )
-    .map_err(|_| AppError::storage("无法重排发送任务"))?;
+    let changed = conn
+        .execute(
+            "UPDATE outbox SET state = 'queued', last_error = NULL, updated_at = ?2
+         WHERE id = ?1 AND state = 'failed' AND COALESCE(resolved_by, '') != 'keep-local'",
+            params![entry_id, now()],
+        )
+        .map_err(|_| AppError::storage("无法重排发送任务"))?;
+    if changed != 1 {
+        return Err(AppError::conflict(
+            "只能重试明确失败的任务；仅保留本机的任务不能再次发送。",
+        ));
+    }
     current(conn, entry_id, "queued")
+}
+
+/// 明确失败后退回草稿：只解除 outbox 占用，正文、附件、账号与 revision 均不改。
+/// keep-local 来自 unknown，并非明确拒绝，不能通过此入口绕过防重复发送保护。
+pub(crate) fn return_to_draft(conn: &Connection, entry_id: &str) -> Result<Entry, AppError> {
+    conn.query_row(
+        &format!("DELETE FROM outbox WHERE id = ?1 AND state = 'failed'
+          AND COALESCE(resolved_by, '') != 'keep-local'
+          AND EXISTS(SELECT 1 FROM drafts WHERE drafts.id = outbox.draft_id AND drafts.account_id = outbox.account_id)
+          RETURNING {ENTRY_COLUMNS}"),
+        [entry_id],
+        entry,
+    )
+    .optional()
+    .map_err(|_| AppError::storage("无法退回本机草稿"))?
+    .ok_or_else(|| AppError::conflict("发送状态已变化；只有明确失败的任务可以返回草稿修改。"))
 }
 
 pub(crate) fn cancel(conn: &Connection, entry_id: &str) -> Result<Entry, AppError> {
@@ -1400,10 +1430,102 @@ mod tests {
         assert_eq!(entry.state, "failed");
         assert_eq!(entry.resolved_by.as_deref(), Some("keep-local"));
         assert!(entry.last_error.as_deref().unwrap().contains("仅保留本机"));
-        let entry = retry(&conn, &entry.id).unwrap();
+        assert_eq!(retry(&conn, &entry.id).unwrap_err().code, "conflict");
+        assert_eq!(
+            return_to_draft(&conn, &entry.id).unwrap_err().code,
+            "conflict"
+        );
+        conn.execute(
+            "UPDATE outbox SET state = 'unknown', resolved_by = NULL",
+            [],
+        )
+        .unwrap();
+        let entry = resolve(&conn, &entry.id, "retry").unwrap();
         assert_eq!(entry.state, "queued");
         assert_eq!(entry.attempts, 1, "重试不重置已尝试次数");
         assert_eq!(entry.last_error, None);
+    }
+
+    #[test]
+    fn failed_tasks_retry_with_the_same_id_or_return_an_unchanged_draft() {
+        let mut conn = db();
+        let queued = enqueue(&conn, "draft-1", 3).unwrap();
+        for state in ["queued", "sending", "unknown", "sent"] {
+            conn.execute("UPDATE outbox SET state = ?1", [state])
+                .unwrap();
+            assert!(return_to_draft(&conn, &queued.id).is_err());
+            assert!(retry(&conn, &queued.id).is_err());
+        }
+        conn.execute("UPDATE outbox SET state = 'failed', attempts = 2", [])
+            .unwrap();
+        let retried = retry(&conn, &queued.id).unwrap();
+        assert_eq!(retried.message_id, queued.message_id);
+        assert_eq!(retried.attempts, 2);
+        conn.execute("UPDATE outbox SET state = 'failed'", [])
+            .unwrap();
+        let hash = crate::mail_recovery::hash(&[1, 2, 3]);
+        conn.execute(
+            "INSERT INTO draft_attachment_blobs VALUES ('draft-1', 'att-1', ?1, X'010203')",
+            [&hash],
+        )
+        .unwrap();
+        let attachments = serde_json::json!([{ "id": "att-1", "name": "保留.txt", "size": 3, "mediaType": "text/plain", "sha256": hash }]);
+        conn.execute("UPDATE drafts SET attachments_json = ?1, cc = 'copy@example.test', bcc = 'private@example.test', body_html = '<p>正文</p>' WHERE id = 'draft-1'", [attachments.to_string()]).unwrap();
+        let before = drafts::list(&conn).unwrap()[0].draft.clone().unwrap();
+        return_to_draft(&conn, &queued.id).unwrap();
+        assert!(return_to_draft(&conn, &queued.id).is_err());
+        assert!(list(&conn).unwrap().is_empty());
+        assert_eq!(
+            drafts::list(&conn).unwrap()[0].draft.as_ref(),
+            Some(&before)
+        );
+        let bytes: Vec<u8> = conn
+            .query_row(
+                "SELECT content FROM draft_attachment_blobs WHERE draft_id = 'draft-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bytes, [1, 2, 3]);
+        let saved = drafts::save(
+            &mut conn,
+            &before,
+            "real",
+            &crate::compose_attach::ComposeStaging::default(),
+        )
+        .unwrap();
+        assert_eq!(saved.draft.unwrap().revision, 4);
+        let bytes: Vec<u8> = conn
+            .query_row(
+                "SELECT content FROM draft_attachment_blobs WHERE draft_id = 'draft-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bytes, [1, 2, 3]);
+    }
+
+    #[test]
+    fn old_unresolved_tasks_remain_visible_after_more_than_128_successes() {
+        let conn = db();
+        let old = enqueue(&conn, "draft-1", 3).unwrap();
+        conn.execute(
+            "UPDATE outbox SET state='unknown', queued_at='2000-01-01T00:00:00Z'",
+            [],
+        )
+        .unwrap();
+        for index in 0..140 {
+            conn.execute(
+                "INSERT INTO outbox(id,account_id,draft_id,state,idempotency_key,updated_at,queued_at)
+              VALUES (?1,'real','draft-1','sent',?1,'2026-11-16T00:00:00Z','2026-11-16T00:00:00Z')",
+                [format!("sent-{index:03}")],
+            )
+            .unwrap();
+        }
+        let entries = list(&conn).unwrap();
+        assert_eq!(entries.len(), 129);
+        assert_eq!(entries[0].id, old.id);
+        assert_eq!(entries[0].state, "unknown");
     }
 
     #[test]

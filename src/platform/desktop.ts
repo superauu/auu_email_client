@@ -75,6 +75,7 @@ export const desktopMail = {
   async deleteDraft(draftId: string): Promise<void> { return invoke('mail_delete_draft', { draftId }); },
   async outboxList(): Promise<import('../domain/outbox').OutboxEntry[]> { return invoke('mail_outbox_list'); },
   async cancelOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_cancel', { id }); },
+  async returnOutboxDraft(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_return_draft', { id }); },
   async resolveOutbox(id: string, action: 'keep-local' | 'retry'): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_outbox_resolve', { id, action }); },
   async retryOutbox(id: string): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_retry_outbox', { id }); },
   async updateEvent(id: string, completed: boolean): Promise<void> { return invoke('mail_update_event', { id, completed }); },

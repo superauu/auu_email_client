@@ -20,6 +20,6 @@ export function outboxSummary(entry: OutboxEntry): string {
     case 'sending': return '正在发送…';
     case 'sent': return entry.resolvedBy === 'sent-folder' ? '已发送（经 Sent 目录确认）' : '已发送';
     case 'unknown': return `结果不明（已尝试 ${entry.attempts} 次），不会自动重发`;
-    case 'failed': return `发送失败：${entry.lastError ?? '请重试'}`;
+    case 'failed': return entry.resolvedBy === 'keep-local' ? '仅保留本机（投递结果未确认，不会再次发送）' : `发送失败：${entry.lastError ?? '请重试'}`;
   }
 }

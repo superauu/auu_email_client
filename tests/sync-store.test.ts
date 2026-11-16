@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSyncStore } from '../src/stores/syncStore';
 import type { SyncJob, SyncQueueSnapshot } from '../src/domain/sync';
+import type { OutboxEntry } from '../src/domain/outbox';
 
 const job = (id: string, status: SyncJob['status'], accountId = id): SyncJob => ({
   id, accountId, status, queuedAt: '2026-11-11T00:00:00Z', startedAt: null, finishedAt: null, outcome: null, error: null,
@@ -14,6 +15,50 @@ function setup() {
   const transport = { available: () => true, enqueue: async (_ids: string[]) => snapshot, read: async () => snapshot, cancel: async (_id: string) => snapshot, refreshWorkspace: async () => { refreshes += 1; } };
   return { transport, store: createSyncStore(transport, 5), setSnapshot: (next: SyncQueueSnapshot) => { snapshot = next; }, refreshes: () => refreshes };
 }
+
+const outboxEntry = (state: OutboxEntry['state'] = 'failed'): OutboxEntry => ({ id: 'ob-1', draftId: 'draft-1', accountId: 'a', messageId: '<once@example.test>', state, attempts: 2, lastError: '服务器拒绝', queuedAt: '2026-11-16T00:00:00Z', updatedAt: '2026-11-16T00:00:00Z', resolvedBy: null });
+
+test('outbox actions deduplicate and a stale poll cannot restore a released task', async () => {
+  const release = deferred<OutboxEntry>();
+  const poll = deferred<OutboxEntry[]>();
+  const started = deferred<void>();
+  let reads = 0; let actions = 0; let refreshes = 0;
+  const store = createSyncStore({
+    available: () => true, enqueue: async () => ({ revision: 0, jobs: [] }), read: async () => ({ revision: 0, jobs: [] }), cancel: async () => ({ revision: 0, jobs: [] }),
+    refreshWorkspace: async () => { refreshes += 1; },
+    outboxList: async () => { reads += 1; if (reads === 2) { started.resolve(); return poll.promise; } return reads === 1 ? [outboxEntry()] : []; },
+    returnOutboxDraft: async () => { actions += 1; return release.promise; },
+  });
+  await store.getState().refresh();
+  const oldPoll = store.getState().refresh(); await started.promise;
+  const returning = store.getState().outboxReturnDraft('ob-1');
+  assert.deepEqual(store.getState().outboxPending, ['ob-1']);
+  assert.equal(await store.getState().outboxReturnDraft('ob-1'), false);
+  release.resolve(outboxEntry());
+  assert.equal(await returning, true);
+  poll.resolve([outboxEntry()]); await oldPoll;
+  assert.equal(actions, 1); assert.equal(refreshes, 1);
+  assert.deepEqual(store.getState().outbox, []);
+  assert.deepEqual(store.getState().outboxPending, []);
+});
+
+test('outbox failures keep the task and surface the error; retry preserves the returned message identity', async () => {
+  let fail = true;
+  let entry = outboxEntry();
+  const store = createSyncStore({
+    available: () => true, enqueue: async () => ({ revision: 0, jobs: [] }), read: async () => ({ revision: 0, jobs: [] }), cancel: async () => ({ revision: 0, jobs: [] }),
+    refreshWorkspace: async () => {}, outboxList: async () => [entry],
+    retryOutbox: async () => { if (fail) throw new Error('发送状态已变化'); entry = { ...entry, state: 'queued', lastError: null }; return entry; },
+  });
+  await store.getState().refresh();
+  assert.equal(await store.getState().outboxRetry('ob-1'), false);
+  assert.equal(store.getState().outbox[0].state, 'failed');
+  assert.match(store.getState().error!, /发送状态已变化/);
+  fail = false;
+  assert.equal(await store.getState().outboxRetry('ob-1'), true);
+  assert.equal(store.getState().outbox[0].messageId, '<once@example.test>');
+  assert.equal(store.getState().outbox[0].state, 'queued');
+});
 
 test('out-of-order queue responses cannot erase a newer job, and pending submissions deduplicate', async () => {
   const { transport, store } = setup(); const first = deferred<SyncQueueSnapshot>(); const calls: string[][] = [];

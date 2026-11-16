@@ -14,6 +14,7 @@ interface SyncTransport {
   /** Outbox 队列（docs/SENDING.md）；浏览器 harness 可缺省。 */
   outboxList?: () => Promise<OutboxEntry[]>;
   cancelOutbox?: (id: string) => Promise<OutboxEntry>;
+  returnOutboxDraft?: (id: string) => Promise<OutboxEntry>;
   resolveOutbox?: (id: string, action: 'keep-local' | 'retry') => Promise<OutboxEntry>;
   retryOutbox?: (id: string) => Promise<OutboxEntry>;
 }
@@ -22,13 +23,16 @@ interface SyncState {
   jobs: SyncJob[];
   submitting: string[];
   outbox: OutboxEntry[];
+  outboxLoaded: boolean;
+  outboxPending: string[];
   error: string | null;
   enqueue: (ids: string[]) => Promise<void>;
   refresh: () => Promise<void>;
   cancel: (jobId: string) => Promise<void>;
-  outboxCancel: (id: string) => Promise<void>;
-  outboxResolve: (id: string, action: 'keep-local' | 'retry') => Promise<void>;
-  outboxRetry: (id: string) => Promise<void>;
+  outboxCancel: (id: string) => Promise<boolean>;
+  outboxReturnDraft: (id: string) => Promise<boolean>;
+  outboxResolve: (id: string, action: 'keep-local' | 'retry') => Promise<boolean>;
+  outboxRetry: (id: string) => Promise<boolean>;
   monitor: () => () => void;
 }
 
@@ -41,8 +45,28 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
   let refreshingWorkspace = false;
   let pollingFailed = false;
   let lastWorkspaceRefresh = 0;
+  let outboxEpoch = 0;
   const acknowledged = new Set<string>();
   const store = create<SyncState>((set, get) => {
+    async function changeOutbox(id: string, action: ((id: string) => Promise<OutboxEntry>) | undefined, remove = false) {
+      if (!transport.available() || !action || get().outboxPending.includes(id)) return false;
+      outboxEpoch += 1;
+      set(state => ({ outboxPending: [...state.outboxPending, id], error: null }));
+      try {
+        const entry = await action(id);
+        outboxEpoch += 1;
+        set(state => ({ outbox: remove ? state.outbox.filter(item => item.id !== id) : state.outbox.map(item => item.id === id ? entry : item) }));
+        if (remove) { needsWorkspaceRefresh = true; await refreshWorkspace(); }
+        return true;
+      } catch (error) {
+        set({ error: `发送队列操作失败：${errorMessage(error)}` });
+        return false;
+      } finally {
+        outboxEpoch += 1;
+        set(state => ({ outboxPending: state.outboxPending.filter(item => item !== id) }));
+        void get().refresh();
+      }
+    }
     async function refreshWorkspace() {
       if (refreshingWorkspace) return;
       refreshingWorkspace = true;
@@ -73,7 +97,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       if (monitors && transport.available()) timer = setTimeout(() => { void get().refresh(); }, get().jobs.some(isSyncActive) || pollingFailed ? pollMs : idlePollMs);
     }
     return {
-      revision: -1, jobs: [], submitting: [], outbox: [], error: null,
+      revision: -1, jobs: [], submitting: [], outbox: [], outboxLoaded: false, outboxPending: [], error: null,
       async enqueue(ids) {
         if (!transport.available()) { set({ error: '请在桌面版中同步真实邮箱。' }); return; }
         const pending = new Set(get().submitting);
@@ -94,8 +118,9 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
             if (get().error?.startsWith('无法读取同步进度：')) set({ error: null });
             apply(snapshot);
             if (transport.outboxList) {
+              const epoch = outboxEpoch;
               const outbox = await transport.outboxList();
-              set({ outbox });
+              if (epoch === outboxEpoch && !get().outboxPending.length) set({ outbox, outboxLoaded: true });
             }
           }
           catch (error) { pollingFailed = true; set({ error: `无法读取同步进度：${errorMessage(error)}` }); }
@@ -109,21 +134,10 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         catch (error) { set({ error: errorMessage(error) }); }
         finally { schedule(); }
       },
-      async outboxCancel(id) {
-        if (!transport.cancelOutbox) return;
-        try { await transport.cancelOutbox(id); set({ error: null }); await get().refresh(); }
-        catch (error) { set({ error: errorMessage(error) }); }
-      },
-      async outboxResolve(id, action) {
-        if (!transport.resolveOutbox) return;
-        try { await transport.resolveOutbox(id, action); set({ error: null }); await get().refresh(); }
-        catch (error) { set({ error: errorMessage(error) }); }
-      },
-      async outboxRetry(id) {
-        if (!transport.retryOutbox) return;
-        try { await transport.retryOutbox(id); set({ error: null }); await get().refresh(); }
-        catch (error) { set({ error: errorMessage(error) }); }
-      },
+      outboxCancel: id => changeOutbox(id, transport.cancelOutbox, true),
+      outboxReturnDraft: id => changeOutbox(id, transport.returnOutboxDraft, true),
+      outboxResolve: (id, action) => changeOutbox(id, transport.resolveOutbox ? value => transport.resolveOutbox!(value, action) : undefined),
+      outboxRetry: id => changeOutbox(id, transport.retryOutbox),
       monitor() {
         monitors += 1;
         void get().refresh();
@@ -142,6 +156,7 @@ export const useSyncStore = createSyncStore({
   refreshWorkspace: () => useWorkspaceStore.getState().reload(),
   outboxList: desktopMail.outboxList,
   cancelOutbox: desktopMail.cancelOutbox,
+  returnOutboxDraft: desktopMail.returnOutboxDraft,
   resolveOutbox: desktopMail.resolveOutbox,
   retryOutbox: desktopMail.retryOutbox,
 });

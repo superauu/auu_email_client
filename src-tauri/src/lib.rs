@@ -117,6 +117,16 @@ fn mail_outbox_cancel(db: State<'_, Db>, id: String) -> Result<outbox::Entry, Ap
     outbox::cancel(&conn, &id)
 }
 
+#[tauri::command]
+fn mail_outbox_return_draft(db: State<'_, Db>, id: String) -> Result<outbox::Entry, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    outbox::return_to_draft(&conn, &id)
+}
+
 /// unknown 的两个用户出口：仅保留本机（failed）或确认重试（queued 并唤醒队列）。
 #[tauri::command]
 fn mail_outbox_resolve(
@@ -732,6 +742,7 @@ pub fn run() {
             mail_send_draft,
             mail_outbox_list,
             mail_outbox_cancel,
+            mail_outbox_return_draft,
             mail_outbox_resolve,
             mail_retry_outbox,
             open_external,
