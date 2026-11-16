@@ -26,6 +26,8 @@
 
 账号被删除时草稿按外键级联删除；仍打开的编辑器保存会失败并保留内容。已有 outbox 引用的草稿拒绝改写，为后续发送状态机保留边界。
 
+发送队列中 queued 可明确取消；明确 failed 可「返回草稿修改」（mail_outbox_return_draft），条件删除队列占用后原草稿恢复编辑。正文、收件人、附件、原账号及 revision 均不改，不另建副本、不提高版本绕过冲突。返回后定位本机草稿，关闭设置可继续编辑；已打开的其他撰写内容保留。unknown 与由其转来的 keep-local 不允许退回或普通重试，sent / sending 也不能退回。重试未修改内容复用原 Message-ID；退回编辑后的显式发送作为新提交生成新 Message-ID。详见 SENDING。
+
 浏览器演示具有版本核对，但 localStorage 不提供跨进程事务；严格多窗口并发保证由桌面 SQLite 提供。当前默认单主窗口。
 
 ## 关闭与恢复
@@ -52,6 +54,7 @@
 | mail_save_draft | draft、previousAccountId | 持久化后的 MailMessage，含新 revision |
 | mail_import_legacy_drafts | drafts | void，事务完成或完整回滚 |
 | mail_compose_pick_attachments | draftId、currentTotalBytes、currentCount | 新增附件元数据；取消为空数组；不接收路径 |
+| mail_outbox_return_draft | id | 仅明确 failed 的原发送条目；解除占用，草稿保持原样 |
 
 服务器时间用于新保存的 updatedAt；日期与 ID 不作为并发控制替代物。收件人 / 抄送 / 密送和主题上限各 1000 个 UTF-16 单位，正文 50000、HTML 200000。v12 追加 cc / bcc，旧草稿缺省为空。地址无效时可继续保存草稿，发送时另做语法校验。附件名称 ≤240 字符、id 为 `att-` 前缀、sha256 为 64 位十六进制。
 

@@ -1,6 +1,6 @@
 # 邮件、账号与 AI 接入约定
 
-状态：A3.8 已实现 IMAP TLS / STARTTLS、多目录 / 历史、持久调度、IDLE / CONDSTORE、附件缓存与 Google / Microsoft 公共客户端 OAuth 配置 / 刷新。真实服务器 / 授权未验收；真实发信、POP3、Graph / Gmail API、AI 和日历未实现。接入范围见 IMAP_COMPLETION，公共应用配置见 OAUTH_SETUP。
+状态：2026-11-16。已实现 IMAP TLS / STARTTLS、多目录 / 历史、持久调度、IDLE / CONDSTORE、HTML 沙箱与附件缓存、POP3S / UIDL、SMTP outbox 与撰写附件。真实 Gmail 授权、刷新、全目录同步、基础发送、自发自收附件下载与回复会话归组已验收；抄送密送独立收件、真实 POP3 与其他客户端兼容仍待验收。中文附件名严格 MIME 参数解析问题待修，见 STATUS / SENDING。Microsoft 卡片因应用未注册而禁用；Graph / Gmail API、AI 和日历未实现。接入范围见 IMAP_COMPLETION / SENDING，公共应用配置见 OAUTH_SETUP。
 
 ## 提供商与协议
 
@@ -49,7 +49,7 @@ Microsoft 的 POP / IMAP / SMTP OAuth 也适用于 Microsoft 365 和 Outlook.com
 
 ## 正文与附件
 
-当前只渲染 bodyText，React 正常转义。接入真实 HTML 需单独清洗、沙箱、禁脚本 / 表单 / IPC、阻断远程跟踪、限制导航；不要直接 dangerouslySetInnerHTML 到主应用。
+收到的邮件优先从验证过的原文缓存提取 HTML，经消毒和独立源 iframe 沙箱显示，远程图片默认阻断，缓存不可用时回退纯文本；链接通过系统应用打开。邮件不能获取主应用 IPC / 导航 / 表单权限，不把不可信 HTML 直接插入主应用。
 
 已有完整原文 / 附件元数据、显式另存为、原文重取与配额，详见 IMAP_LIMITS；附件预览 / 显式打开仍未实现。附件需继续保留 MIME / 大小 / 路径校验。不得自动执行附件。嵌入图片和链接不放宽主窗口 CSP。
 

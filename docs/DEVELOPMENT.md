@@ -32,6 +32,8 @@ Google OAuth secret 通过 Rust 构建进程环境变量 `AUUMAIL_GOOGLE_CLIENT_
 
 首次浏览器测试执行 `npx playwright install chromium`。测试结果保存在 test-results，不提交。自动测试采用干净浏览器上下文，不读取个人浏览器数据。
 
+原生 UI 测试可用忽略的 Tauri config 将 `app.appDirectoriesOverride` 指向独立验收目录，隔离 SQLite / 原文缓存与 WebView 数据；合成数据不得写进真实工作区。ESLint 排除 `artifacts/**`（WebView 会生成第三方 JS 缓存），不把本机验收输出视为源文件。完成后重新以默认配置构建 / 启动，确认恢复真实工作区，不能把隔离配置编入交付构建。
+
 CI 包含 Ubuntu 前端 / Chromium 与 Windows Rust 检查；工作流只是已配置，不代表远程运行已发生。需要真实 Windows WebView 验证时，不以 Chromium 测试代替。
 
 ## 编码规范

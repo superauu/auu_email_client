@@ -58,6 +58,10 @@ CONDSTORE 可用时保存每目录 generation / UIDVALIDITY / HIGHESTMODSEQ，�
 
 ## IPC 与 UI
 
+2026-11-16：POP3 与 IMAP 共用设置页单账号 / 同步全部入口、持久账号队列和自动同步间隔。POP3 设置只开放自动间隔，后端允许真实 POP3 保存并拒绝多目录 / IMAP 历史选项；读取时投影这两项为 false，兼容旧默认值，无迁移。POP3 按 UIDL 下载尚未见过的服务器邮件到单一收件箱，保留服务器副本；不提供服务器标记 / 文件夹同步。连接重配从 Rust 配置返回到向导均保留 provider=pop3，仅提供现有 POP3S TLS 能力，不把账号变成 IMAP。真实 POP3 服务端验收仍未执行。
+
+原生验收补充：手动 IPC 的 `validate_accounts` 必须按数据库 provider 分流。IMAP 使用 `prepare`，POP3 与 worker 共享纯配置校验；混合批次中的 POP3 不读取 IMAP 游标，不把 IMAP `prepare` 当成统一账号门控。只读校验不做网络 / keyring I/O，全部校验通过后才登记 durable request。原生独立资料已验证自动间隔保存 / 重开、POP3 单账号与混合同步全部确实进入后端；合成无凭据失败不等于真实服务器成功。
+
 mail_enqueue_sync / mail_sync_jobs / mail_cancel_sync 返回带 revision 的快照；mail_sync_account 兼容入口也经同一队列。Job 包含 cancelRequested、起止时间、outcome / error。outcome 的 hasMore、moreMail、listening、retryNeeded、refreshNeeded 区分续跑、通知、部分失败和是否需要刷新。
 
 syncStore 在 App 层活动每 750ms、空闲每 5 秒读进度，发现后台任务；旧 revision 不覆盖新状态。每个需要刷新的终态只刷新一次，失败 / 运行中停止也刷新已提交批次，排队取消和纯 IDLE 不刷新。任务运行中按默认 2 秒节流触发工作区刷新，使已提交批次的邮件逐步进入列表（终态仍立即刷新；节流间隔由 createSyncStore 的 runningRefreshMs 参数控制）。后台 reload 合并草稿 revision / 邮件 stateRevision，不丢期间编辑；刷新失败可重读本机结果，不重新发网络动作。
