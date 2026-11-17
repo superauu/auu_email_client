@@ -167,6 +167,10 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .move-menu button { display: block; width: 100%; text-align: start; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: var(--text); }
 .move-menu button:hover, .move-menu button:focus-visible { background: var(--surface-hover); }
 .list-footer { display: flex; justify-content: space-between; padding: 10px 20px; color: var(--text-subtle); font-size: 9px; border-top: 1px solid var(--border); }
+/* 视图懒加载：空列表加载态与页脚内的加载进度 / 失败重试。 */
+.list-loading { padding: 40px 20px; text-align: center; color: var(--text-subtle); font-size: 12px; }
+.list-footer .list-error { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); }
+.list-footer button { font-size: 9px; padding: 2px 6px; }
 .resize-handle { width: 5px; flex-shrink: 0; background: var(--border); cursor: col-resize; touch-action: none; border-inline: 2px solid var(--surface); }
 .resize-handle--sidebar { border-inline-start-color: var(--canvas); }
 .resize-handle:hover, .resize-handle:focus-visible, .resize-handle:active { background: var(--accent); outline-offset: -1px; }

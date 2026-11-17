@@ -1,4 +1,4 @@
-import type { MailAccount, MailFolder, MailMessage, MailQuery, MailboxKind } from './mail';
+import type { MailAccount, MailFolder, MailQuery, MailboxKind } from './mail';
 import { t } from '../i18n/core';
 
 export interface NavigationTarget {
@@ -32,6 +32,17 @@ export function defaultShortcuts(): DirectoryEntry[] {
 export function navigationKey(target: NavigationTarget): string {
   return JSON.stringify([target.accountId, target.mailbox, target.folderId ?? null, target.draftSource ?? null]);
 }
+/** 视图加载状态键：不含 unreadOnly（不改变服务端查询，客户端过滤即可），含 search（改变结果集）。 */
+export function viewKey(query: Pick<import('./mail').MailQuery, 'accountId' | 'mailbox' | 'folderId' | 'draftSource' | 'labelId' | 'search'>): string {
+  return JSON.stringify([query.accountId, query.mailbox, query.folderId ?? null, query.draftSource ?? null, query.labelId, query.search]);
+}
+/** 侧栏计数的稳定 id（与 Rust folder_counts 的 view 字段一致）。 */
+export function viewCountId(target: Pick<NavigationTarget, 'accountId' | 'mailbox' | 'folderId' | 'draftSource'>): string {
+  if (target.draftSource === 'local') return 'drafts-local';
+  if (target.folderId) return `folder:${target.folderId}`;
+  if (target.mailbox === 'starred') return 'starred';
+  return `kind:${target.mailbox}`;
+}
 export function isNavigationActive(query: MailQuery, target: NavigationTarget): boolean {
   return !query.labelId && navigationKey(query) === navigationKey(target);
 }
@@ -40,8 +51,14 @@ export function directoryLabel(folder: MailFolder, peers: MailFolder[]): string 
   return standard ? peers.filter(peer => peer.kind === folder.kind).length > 1 ? `${standard} · ${folder.name}` : standard : folder.name;
 }
 
+/** 目录入口的可见性旗标：懒加载后由视图计数提供，演示端由全量缓存计算。 */
+export interface DirectoryFlags {
+  /** 是否存在服务器草稿（无远端草稿目录时决定"服务器草稿"入口是否展示）。 */
+  serverDrafts: boolean;
+}
+
 /** Map standard folders once, preserve distinct physical IDs (even when names/kinds collide). */
-export function accountDirectories(account: MailAccount, folders: MailFolder[], messages: MailMessage[]): DirectoryEntry[] {
+export function accountDirectories(account: MailAccount, folders: MailFolder[], flags: DirectoryFlags): DirectoryEntry[] {
   const remote = account.status === 'demo' ? [] : folders.filter(folder => folder.accountId === account.id);
   const entries: DirectoryEntry[] = [];
   const logical = (mailbox: MailboxKind, label: string, draftSource?: 'local' | 'server') => entries.push({ target: { accountId: account.id, mailbox, draftSource }, label, kind: mailbox, available: true, description: draftSource === 'local' ? t('nav.localDraftsOnlyDesc') : draftSource === 'server' ? t('nav.serverDraftsDesc') : t('nav.cacheViewDesc') });
@@ -61,10 +78,12 @@ export function accountDirectories(account: MailAccount, folders: MailFolder[], 
     if (kind === 'archive' || kind === 'trash') { logical(kind, mailboxName(kind)); if (matching.length > 1) matching.forEach(physical); continue; }
     if (matching.length) matching.forEach(physical);
     else if (kind !== 'drafts') logical(kind, mailboxName(kind));
-    else if (messages.some(message => message.accountId === account.id && message.mailbox === 'drafts' && !message.draft)) logical(kind, t('nav.mailbox.serverDrafts'), 'server');
+    else if (flags.serverDrafts) logical(kind, t('nav.mailbox.serverDrafts'), 'server');
   }
   remote.filter(folder => !['inbox', 'starred', 'sent', 'drafts', 'archive', 'trash'].includes(folder.kind)).forEach(physical);
-  if (!remote.length || messages.some(message => message.accountId === account.id && message.mailbox === 'other' && !message.folderIds?.some(id => remote.some(folder => folder.id === id)))) logical('other', remote.length ? t('nav.otherCached') : t('nav.mailbox.other'));
+  // 「其他」兜底入口只在账号尚未列出任何远端目录时出现；列出的目录各自有物理入口，
+  // 缓存归属全部指向已列出目录（外键约束），因此不再需要按消息嗅探。
+  if (!remote.length) logical('other', t('nav.mailbox.other'));
   return entries;
 }
 

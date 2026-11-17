@@ -71,7 +71,55 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_seed_workspace': case 'mail_import_legacy_drafts': throw new Error('真实工作区禁止初始化或导入演示数据');
         case 'plugin:event|unlisten': return;
         case 'mail_load_workspace': return { accounts: workspace.accounts, labels: workspace.labels, events: workspace.events, folders: folderList, syncStates: [] };
-        case 'mail_page_messages': { const query = input.query as { accountId?: string | null }; workspaceCalls.push({ command, accountId: query.accountId }); return { items: workspace.messages, nextCursor: null }; }
+        // 分页镜像 Rust page_messages：意图投影已由 stub 的 mailbox 变更体现，这里按视图过滤 + 偏移游标分页。
+        case 'mail_page_messages': {
+          const query = input.query as { accountId?: string | null; mailbox?: string | null; folderId?: string | null; labelId?: string | null; search?: string | null; cursor?: string | null; limit?: number | null };
+          workspaceCalls.push({ command, accountId: query.accountId ?? null });
+          const realIds = new Set(workspace.accounts.filter(account => account.status !== 'demo').map(account => account.id));
+          let items = workspace.messages.filter(m => realIds.has(m.accountId) && (!query.accountId || m.accountId === query.accountId));
+          const folderId = query.folderId;
+          const labelId = query.labelId;
+          if (folderId) items = items.filter(m => (m.folderIds ?? []).includes(folderId));
+          else if (query.mailbox === 'starred') items = items.filter(m => m.starred && m.mailbox !== 'trash');
+          else if (query.mailbox) items = items.filter(m => m.mailbox === query.mailbox);
+          if (labelId) items = items.filter(m => (m.labelIds ?? []).includes(labelId) && m.mailbox !== 'trash');
+          if (query.search) { const needle = query.search.toLowerCase(); items = items.filter(m => [m.subject, m.from?.name, m.from?.email, m.bodyText].some(v => String(v ?? '').toLowerCase().includes(needle))); }
+          items.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+          const limit = query.limit ?? 100;
+          const start = query.cursor ? Number(query.cursor) : 0;
+          return { items: structuredClone(items.slice(start, start + limit)), nextCursor: start + limit < items.length ? String(start + limit) : null };
+        }
+        // 侧栏计数镜像 Rust folder_counts：kind 投影 + 星标（排除废纸篓）+ 本机草稿 + 物理目录成员。
+        case 'mail_folder_counts': {
+          const counts: Array<{ accountId: string; view: string; total: number; unread: number }> = [];
+          for (const account of workspace.accounts.filter(account => account.status !== 'demo')) {
+            const mine = workspace.messages.filter(m => m.accountId === account.id && !m.draft);
+            for (const kind of ['inbox', 'sent', 'drafts', 'archive', 'trash', 'other']) {
+              const rows = mine.filter(m => m.mailbox === kind);
+              if (rows.length) counts.push({ accountId: account.id, view: `kind:${kind}`, total: rows.length, unread: rows.filter(m => m.unread).length });
+            }
+            const starred = mine.filter(m => m.starred && m.mailbox !== 'trash');
+            if (starred.length) counts.push({ accountId: account.id, view: 'starred', total: starred.length, unread: starred.filter(m => m.unread).length });
+            const localDrafts = [...drafts.values()].filter(d => d.accountId === account.id);
+            if (localDrafts.length) counts.push({ accountId: account.id, view: 'drafts-local', total: localDrafts.length, unread: 0 });
+            for (const folder of folderList.filter(f => f.accountId === account.id)) {
+              const rows = workspace.messages.filter(m => m.accountId === account.id && (m.folderIds ?? []).includes(folder.id));
+              if (rows.length) counts.push({ accountId: account.id, view: `folder:${folder.id}`, total: rows.length, unread: rows.filter(m => m.unread).length });
+            }
+          }
+          return counts;
+        }
+        // 撰写收件人建议镜像 Rust contact_suggestions：最近邮件发件人 + 收件人去重。
+        case 'mail_contact_suggestions': {
+          const contacts = new Map<string, { name: string; email: string }>();
+          for (const m of workspace.messages.filter(m => m.accountId === input.accountId && !m.draft)) {
+            for (const contact of [m.from, ...(m.to ?? []).map((email: string) => ({ name: '', email })), ...((m.cc ?? m.replyTo ?? []) as string[]).map(email => ({ name: '', email }))]) {
+              const email = contact?.email;
+              if (email && email.includes('@') && !contacts.has(email.toLowerCase())) contacts.set(email.toLowerCase(), { name: contact.name ?? '', email });
+            }
+          }
+          return [...contacts.values()];
+        }
         case 'mail_list_drafts': return [...drafts.values()].map(project);
         case 'mail_request_recovery': {
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId)!;
@@ -481,8 +529,9 @@ test('desktop workspace isolates legacy demo accounts, mail, labels, events and 
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.locator('.settings-accounts > div')).toHaveCount(3);
   const reads = await page.evaluate(() => (window as unknown as { __syncTest: { workspaceCalls: () => Array<{ accountId?: string | null }> } }).__syncTest.workspaceCalls());
+  // 懒加载后消息按视图分页读取：读取范围只能是真实账号或全部账号视图（演示账号永不入内）。
   expect(reads.length).toBeGreaterThan(0);
-  expect(reads.every(read => read.accountId?.startsWith('real-'))).toBe(true);
+  expect(reads.every(read => read.accountId === null || read.accountId?.startsWith('real-'))).toBe(true);
   await page.screenshot({ path: info.outputPath('real-accounts-only.png') });
   await page.reload();
   await expect(page.getByRole('heading', { name: /^全部收件箱\s*1$/ })).toBeVisible();
@@ -843,25 +892,32 @@ test('reader toolbar deletes to trash and moves between folders', async ({ page 
 });
 
 
-test('large mailbox list renders only the virtual window and scrolls to the end', async ({ page }, info) => {
+test('large mailbox list renders only the virtual window and pages in as it scrolls', async ({ page }, info) => {
   await mockDesktop(page, true, undefined, true, true, true, { huge: 600 });
   await page.goto('/');
   const list = page.getByRole('region', { name: '邮件列表' });
   await expect(list).toBeVisible();
   const rendered = await list.locator('.mail-row').count();
-  // 601+ 封邮件中只渲染视口窗口（< 120 行）。
+  // 首页分页加载（200 封）中只渲染视口窗口（< 120 行）。
   expect(rendered).toBeGreaterThan(0);
   expect(rendered).toBeLessThan(120);
   const scroller = list.locator('.mail-list-scroll');
   const metrics = await scroller.evaluate(element => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }));
-  expect(metrics.scrollHeight).toBeGreaterThan(600 * 60);
-  // 滚动到底部：仍只渲染窗口，并能看到最早的一封。
-  await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  // 懒加载：初始滚动高度只覆盖已加载的首页，而不是全部 602 封。
+  expect(metrics.scrollHeight).toBeGreaterThan(100 * 60);
+  expect(metrics.scrollHeight).toBeLessThan(600 * 60);
+  // 滚动到底部逐页加载：仍只渲染窗口，最终能看到最早的一封。
+  await expect(async () => {
+    await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(list.locator('.list-footer')).toContainText('共 602 封邮件', { timeout: 2000 });
+  }).toPass({ timeout: 20000 });
   await expect(list.getByText('大数据量邮件 1', { exact: true })).toBeVisible();
   const after = await list.locator('.mail-row').count();
   expect(after).toBeLessThan(120);
-  // 虚拟列表下全选仍覆盖完整数据集。
+  const fullyLoaded = await scroller.evaluate(element => element.scrollHeight);
+  expect(fullyLoaded).toBeGreaterThan(600 * 60);
+  // 全部页加载完成后全选覆盖完整数据集。
   await list.getByRole('button', { name: '选择当前列表全部邮件' }).click();
-  await expect(page.getByText(/已选 [0-9]+ 封/)).toBeVisible();
+  await expect(page.getByText('已选 602 封', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('virtual-large-list.png') });
 });

@@ -44,7 +44,18 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const [confirmSend, setConfirmSend] = useState(false);
   const busy = sending || discarding || closing;
   const attachments = draft.attachments ?? [];
+  // 收件人建议：桌面端由 Rust 聚合最近邮件（大邮箱不再要求全量消息进内存）；失败回退到已缓存消息。
+  const contactSuggestions = useWorkspaceStore(s => s.contactSuggestions);
+  const [remoteContacts, setRemoteContacts] = useState<{ name: string; email: string }[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void contactSuggestions(draft.accountId)
+      .then(list => { if (alive) setRemoteContacts(list); })
+      .catch(() => { if (alive) setRemoteContacts(null); });
+    return () => { alive = false; };
+  }, [contactSuggestions, draft.accountId]);
   const suggestions = useMemo(() => {
+    if (remoteContacts) return remoteContacts;
     const contacts = new Map<string, { name: string; email: string }>();
     for (const message of messages.filter(item => item.accountId === draft.accountId && !item.draft)) {
       for (const contact of [message.from, ...message.to.map(email => ({ name: '', email })), ...(message.cc ?? message.replyTo ?? []).map(email => ({ name: '', email }))]) {
@@ -52,7 +63,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
       }
     }
     return [...contacts.values()];
-  }, [messages, draft.accountId]);
+  }, [remoteContacts, messages, draft.accountId]);
   const allowWindowClose = useRef(false);
   const account = accounts.find(a => a.id === draft.accountId);
   const canSend = isDesktop() && account?.capabilities.send === true;

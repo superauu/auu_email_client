@@ -32,6 +32,7 @@ export interface DesktopMessagePage {
 export interface DesktopMessageQuery {
   accountId?: string | null;
   mailbox?: string | null;
+  folderId?: string | null;
   labelId?: string | null;
   search?: string | null;
   cursor?: string | null;
@@ -91,6 +92,10 @@ export const desktopMail = {
   async seed(snapshot: WorkspaceSnapshot): Promise<void> { await invoke('mail_seed_workspace', { seed: snapshot }); },
   async workspace(): Promise<DesktopWorkspaceBase> { return invoke('mail_load_workspace'); },
   async page(query: DesktopMessageQuery): Promise<DesktopMessagePage> { return invoke('mail_page_messages', { query }); },
+  /** 侧栏视图计数：与 mailbox 投影一致的 total/unread 聚合，大邮箱无需加载全部邮件。 */
+  async folderCounts(): Promise<import('../domain/mail').ViewCountEntry[]> { return invoke('mail_folder_counts'); },
+  /** 撰写收件人建议：最近邮件的发件人与收件人（去重保序，Rust 侧限量）。 */
+  async contactSuggestions(accountId: string): Promise<import('../domain/mail').ContactSuggestion[]> { return invoke('mail_contact_suggestions', { accountId }); },
   /** Incremental IMAP sync for a real account; the credential never leaves Rust. */
   async sync(accountId: string): Promise<SyncOutcome> { return invoke('mail_sync_account', { id: accountId }); },
   async enqueueSync(ids: string[]): Promise<SyncQueueSnapshot> { return invoke('mail_enqueue_sync', { ids }); },

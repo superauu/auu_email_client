@@ -13,6 +13,19 @@ const FOLDER_KINDS: [&str; 6] = ["inbox", "sent", "drafts", "archive", "trash", 
 /// Deterministic projection when a message sits in several folders.
 const KIND_PRIORITY: &str = "CASE f.kind WHEN 'inbox' THEN 0 WHEN 'sent' THEN 1 WHEN 'drafts' THEN 2 WHEN 'archive' THEN 3 ELSE 4 END";
 
+/// The UI mailbox projection as one SQL CASE: delete intent → trash, archive intent → archive,
+/// move intent → target folder kind, else the priority-ordered membership kind. Both the paged
+/// query and the sidebar counts build on it so a view never disagrees with its badge.
+fn mailbox_projection_sql() -> String {
+    format!(
+        "CASE \
+         WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1) THEN 'trash' \
+         WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' \
+         WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='move') THEN COALESCE((SELECT f.kind FROM folders f WHERE f.id=(SELECT c.target_folder FROM message_changes c WHERE c.message_id=m.id AND c.field='move' LIMIT 1)),(SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1)) \
+         ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) END"
+    )
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SeedWorkspace {
@@ -233,14 +246,19 @@ fn preview_of(body: Option<&str>) -> String {
     body.unwrap_or("").chars().take(PREVIEW_CHARS).collect()
 }
 
-/// FTS5 phrase-quotes every whitespace term so caller input can never inject MATCH syntax.
-fn fts_expression(search: &str) -> String {
-    search
-        .split_whitespace()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" ")
+/// Substring search over the same fields the UI selector checks (subject / sender / body).
+/// LIKE keeps Chinese and mixed CJK queries working, which the FTS5 unicode61 tokenizer
+/// (CJK runs become single tokens) could never guarantee; hostile `%`, `_` and `\` are escaped.
+fn like_pattern(term: &str) -> String {
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
 }
+
+const LIKE_CLAUSE: &str = "(m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' \
+     OR m.sender_email LIKE ? ESCAPE '\\' OR m.body_text LIKE ? ESCAPE '\\')";
 
 fn cursor_encode(received_at: &str, id: &str) -> String {
     format!("{received_at}\u{1f}{id}")
@@ -645,8 +663,11 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         .map(str::trim)
         .filter(|text| !text.is_empty());
     if let Some(term) = search {
-        clauses.push("m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)");
-        args.push(Box::new(fts_expression(term)));
+        clauses.push(LIKE_CLAUSE);
+        let pattern = like_pattern(term);
+        for _ in 0..4 {
+            args.push(Box::new(pattern.clone()));
+        }
     }
     if let Some(cursor) = &query.cursor {
         let (received_at, id) = cursor_decode(cursor)?;
@@ -660,14 +681,10 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     } else {
         format!("WHERE {}", clauses.join(" AND "))
     };
+    let projection = mailbox_projection_sql();
     let sql = format!(
         "SELECT m.id, m.account_id, COALESCE(m.original_remote_id,m.remote_id), m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
-           CASE \
-             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1) THEN 'trash' \
-             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' \
-             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='move') THEN COALESCE((SELECT f.kind FROM folders f WHERE f.id=(SELECT c.target_folder FROM message_changes c WHERE c.message_id=m.id AND c.field='move' LIMIT 1)),(SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1)) \
-             ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) \
-           END AS mailbox, m.state_revision
+           {projection} AS mailbox, m.state_revision
          ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing,m.cc_json,m.reply_to_json FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
     );
     let mut stmt = conn
@@ -779,9 +796,174 @@ fn label_ids_for(conn: &Connection, message_id: &str) -> Result<Vec<String>, App
         .map_err(|e| AppError::storage(e.to_string()))
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderCount {
+    pub account_id: String,
+    /// Same ids the UI resolves counts by: `kind:<kind>`, `starred`, `drafts-local`, `folder:<id>`.
+    pub view: String,
+    pub total: i64,
+    pub unread: i64,
+}
+
+/// Sidebar view counts computed with the same mailbox projection as page_messages, so a badge
+/// always matches the list the user sees. Zero-count views are omitted; the UI treats missing
+/// entries as 0. Large mailboxes never need every message loaded for accurate badges.
+pub fn folder_counts(conn: &Connection) -> Result<Vec<FolderCount>, AppError> {
+    let projection = mailbox_projection_sql();
+    let mut counts = Vec::new();
+    let kind_sql = format!(
+        "SELECT m.account_id, ({projection}) AS mailbox, COUNT(*) AS total, COALESCE(SUM(m.unread),0) AS unread \
+         FROM messages m GROUP BY m.account_id, mailbox HAVING mailbox IS NOT NULL"
+    );
+    for (account, kind, total, unread) in query_rows(conn, &kind_sql, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })? {
+        counts.push(FolderCount {
+            account_id: account,
+            view: format!("kind:{kind}"),
+            total,
+            unread,
+        });
+    }
+    // Starred mirrors the selector: exclude the trash projection.
+    let starred_sql = format!(
+        "SELECT m.account_id, COUNT(*), COALESCE(SUM(m.unread),0) FROM messages m \
+         WHERE m.starred = 1 AND ({projection}) <> 'trash' GROUP BY m.account_id"
+    );
+    for (account, total, unread) in query_rows(conn, &starred_sql, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })? {
+        counts.push(FolderCount {
+            account_id: account,
+            view: "starred".into(),
+            total,
+            unread,
+        });
+    }
+    // Local drafts live in their own table and always count in full.
+    for (account, total) in query_rows(
+        conn,
+        "SELECT account_id, COUNT(*) FROM drafts GROUP BY account_id",
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    )? {
+        counts.push(FolderCount {
+            account_id: account,
+            view: "drafts-local".into(),
+            total,
+            unread: 0,
+        });
+    }
+    // Physical folders are membership evidence views: plain membership, except that standard
+    // kinds hide messages with a pending archive intent (mirrors the UI folder_id selector).
+    let folder_sql = "SELECT mf.account_id, mf.folder_id, COUNT(*), COALESCE(SUM(m.unread),0) \
+         FROM message_folders mf \
+         JOIN messages m ON m.account_id = mf.account_id AND m.id = mf.message_id \
+         JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id \
+         WHERE (f.kind NOT IN ('inbox','sent','drafts','trash') \
+           OR NOT EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1)) \
+         GROUP BY mf.account_id, mf.folder_id"
+        .to_string();
+    for (account, folder, total, unread) in query_rows(conn, &folder_sql, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })? {
+        counts.push(FolderCount {
+            account_id: account,
+            view: format!("folder:{folder}"),
+            total,
+            unread,
+        });
+    }
+    Ok(counts)
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactRow {
+    pub name: String,
+    pub email: String,
+}
+
+/// Recipient suggestions for the composer, from the account's most recent mail. Senders keep
+/// their display name; recipients arrive as bare addresses. Deduplicated by lowercase address,
+/// newest first, capped — never a full mailbox scan into the UI.
+pub fn contact_suggestions(
+    conn: &Connection,
+    account_id: &str,
+    limit: u32,
+) -> Result<Vec<ContactRow>, AppError> {
+    let cap = limit.clamp(1, 200) as usize;
+    let mut stmt = conn
+        .prepare(
+            "SELECT sender_name, sender_email, recipients_json, cc_json, reply_to_json FROM messages \
+             WHERE account_id = ?1 ORDER BY received_at DESC, id DESC LIMIT 300",
+        )
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![account_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| AppError::storage(e.to_string()))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut contacts: Vec<ContactRow> = Vec::new();
+    let push = |name: &str,
+                email: &str,
+                seen: &mut std::collections::HashSet<String>,
+                contacts: &mut Vec<ContactRow>| {
+        let email = email.trim();
+        if !email.contains('@') {
+            return;
+        }
+        if seen.insert(email.to_lowercase()) {
+            contacts.push(ContactRow {
+                name: name.trim().to_string(),
+                email: email.to_string(),
+            });
+        }
+    };
+    for row in rows {
+        let (name, email, recipients, cc, reply_to) =
+            row.map_err(|e| AppError::storage(e.to_string()))?;
+        push(&name, &email, &mut seen, &mut contacts);
+        for json in [recipients, cc, reply_to] {
+            if let Ok(list) = serde_json::from_str::<Vec<String>>(&json) {
+                for address in list {
+                    push("", &address, &mut seen, &mut contacts);
+                }
+            }
+        }
+        if contacts.len() >= cap {
+            break;
+        }
+    }
+    contacts.truncate(cap);
+    Ok(contacts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message_changes;
     use crate::storage;
 
     fn seed_fixture() -> SeedWorkspace {
@@ -1054,8 +1236,9 @@ mod tests {
                 ..MessageQuery::default()
             },
         );
-        assert_eq!(hits, vec!["m2"]); // FTS5 phrase match on body text
-                                      // Hostile input must never raise an FTS syntax error; separator-only phrases match nothing.
+        assert_eq!(hits, vec!["m2"]); // LIKE 子串匹配正文，中文词组可用
+                                      // Hostile input must be treated as a literal substring; it matches nothing here.
+                                      // `%`、`_`、`\` 均已转义，不会改变匹配范围。
         let hostile = all_ids(
             &conn,
             &MessageQuery {
@@ -1072,6 +1255,171 @@ mod tests {
             },
         );
         assert!(misses.is_empty());
+    }
+
+    #[test]
+    fn folder_counts_follow_mailbox_projection_and_intent_changes() {
+        let mut conn = setup();
+        let view = |counts: &[FolderCount], account: &str, view: &str| {
+            counts
+                .iter()
+                .find(|c| c.account_id == account && c.view == view)
+                .map(|c| (c.total, c.unread))
+        };
+        // 种子数据：a 账号 inbox 2 封（全未读）、sent 1 封、trash 1 封；b 账号 inbox 1 封。
+        let counts = folder_counts(&conn).unwrap();
+        assert_eq!(view(&counts, "a", "kind:inbox"), Some((2, 2)));
+        assert_eq!(view(&counts, "a", "kind:sent"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "kind:trash"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "starred"), None);
+        assert_eq!(view(&counts, "a", "drafts-local"), None);
+        assert_eq!(view(&counts, "b", "kind:inbox"), Some((1, 1)));
+        // 星标视图排除废纸篓投影。
+        message_changes::update(
+            &mut conn,
+            "a",
+            "m2",
+            &message_changes::Patch {
+                starred: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // 归档意图把 m1 投影出收件箱、进入归档视图。
+        message_changes::update(
+            &mut conn,
+            "a",
+            "m1",
+            &message_changes::Patch {
+                archive: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let counts = folder_counts(&conn).unwrap();
+        assert_eq!(view(&counts, "a", "kind:inbox"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "kind:archive"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "starred"), Some((1, 1)));
+        // 删除意图投影到废纸篓；需要恰好一个可用 trash 目录。
+        conn.execute(
+            "INSERT INTO imap_folder_state (account_id, remote_id, available) VALUES ('a','trash',1)",
+            [],
+        )
+        .unwrap();
+        message_changes::update(
+            &mut conn,
+            "a",
+            "m3",
+            &message_changes::Patch {
+                delete: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let counts = folder_counts(&conn).unwrap();
+        assert_eq!(view(&counts, "a", "kind:sent"), None);
+        assert_eq!(view(&counts, "a", "kind:trash"), Some((2, 2)));
+        // 移动意图投影到目标目录 kind。
+        conn.execute_batch(
+            "INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES ('a:proj','a','proj-remote','项目','other');
+             INSERT INTO imap_folder_state (account_id,remote_id,available) VALUES ('a','proj-remote',1)",
+        )
+        .unwrap();
+        message_changes::update(
+            &mut conn,
+            "a",
+            "m2",
+            &message_changes::Patch {
+                move_to: Some("a:proj".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let counts = folder_counts(&conn).unwrap();
+        assert_eq!(view(&counts, "a", "kind:inbox"), None);
+        assert_eq!(view(&counts, "a", "kind:other"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "starred"), Some((1, 1)));
+        // 物理目录是证据视图：标准 kind 排除归档意图，其余按实际成员统计。
+        assert_eq!(view(&counts, "a", "folder:a:inbox"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "folder:a:sent"), Some((1, 1)));
+        assert_eq!(view(&counts, "a", "folder:a:trash"), Some((1, 1)));
+        // 与分页查询一致：counts 声称的视图内容能在 page_messages 里取到。
+        let inbox = page_messages(
+            &conn,
+            &MessageQuery {
+                account_id: Some("a".into()),
+                mailbox: Some("inbox".into()),
+                ..MessageQuery::default()
+            },
+        )
+        .unwrap();
+        assert!(inbox.items.is_empty());
+        let other = page_messages(
+            &conn,
+            &MessageQuery {
+                account_id: Some("a".into()),
+                mailbox: Some("other".into()),
+                ..MessageQuery::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            other
+                .items
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m2"]
+        );
+    }
+
+    #[test]
+    fn local_drafts_count_as_drafts_local_view() {
+        let conn = setup();
+        conn.execute_batch(
+            "INSERT INTO drafts (id,account_id,recipients_json,subject,body_text,updated_at) VALUES ('d1','a','[]','草稿','正文','2026-01-05T00:00:00Z')",
+        )
+        .unwrap();
+        let counts = folder_counts(&conn).unwrap();
+        let drafts = counts
+            .iter()
+            .find(|c| c.account_id == "a" && c.view == "drafts-local")
+            .unwrap();
+        assert_eq!((drafts.total, drafts.unread), (1, 0));
+    }
+
+    #[test]
+    fn contact_suggestions_are_recent_deduped_addresses() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        storage::migrate(&mut conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts (id,provider,email,display_name,created_at) VALUES ('a','imap','a@example.test','A','2026-01-01T00:00:00Z');
+             INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,recipients_json,cc_json,reply_to_json,body_text,received_at) VALUES
+               ('m1','a','r1','t','旧邮件','旧发件人','older@example.test','[\"me@example.test\"]','[]','[]','正文','2026-01-01T00:00:00Z'),
+               ('m2','a','r2','t','新邮件','最新发件人','latest@example.test','[\"me@example.test\",\"older@example.test\"]','[\"copy@example.test\"]','[]','正文','2026-01-02T00:00:00Z')",
+        )
+        .unwrap();
+        let rows = contact_suggestions(&conn, "a", 10).unwrap();
+        let emails: Vec<&str> = rows.iter().map(|row| row.email.as_str()).collect();
+        // 最新邮件优先；重复地址保留最新出现；收件人无展示名。
+        assert_eq!(
+            emails,
+            vec![
+                "latest@example.test",
+                "me@example.test",
+                "older@example.test",
+                "copy@example.test"
+            ]
+        );
+        assert_eq!(rows[0].name, "最新发件人");
+        assert_eq!(rows[1].name, "");
+        assert_eq!(rows[0].email, "latest@example.test");
+        // 限量生效。
+        assert_eq!(contact_suggestions(&conn, "a", 2).unwrap().len(), 2);
+        // 空账号返回空列表。
+        assert!(contact_suggestions(&conn, "missing", 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

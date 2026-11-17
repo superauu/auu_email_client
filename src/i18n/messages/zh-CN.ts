@@ -175,7 +175,6 @@ export const zhCN = {
   'nav.serverDraftsDesc': '服务器草稿缓存，编辑时复制为本机草稿',
   'nav.cacheViewDesc': '此账号的本机缓存视图',
   'nav.unavailableSuffix': ' · 服务器目录不可用，仍可阅读本机缓存',
-  'nav.otherCached': '其他缓存邮件',
 
   // ── 邮件列表 ────────────────────────────────────────────────
   'mailList.listAria': '邮件列表',
@@ -199,8 +198,13 @@ export const zhCN = {
   'mailList.starAddAria': '添加星标：{subject}',
   'mailList.starRemoveAria': '取消星标：{subject}',
   'mailList.footerCount': '共 {count} 封邮件',
+  'mailList.footerPaged': '已加载 {loaded} / {total} 封',
   'mailList.footerCache': '本地缓存',
   'mailList.footerDemo': '仅本机演示',
+  'mailList.loadingView': '正在加载邮件…',
+  'mailList.loadingMore': '正在加载更多…',
+  'mailList.loadFailed': '邮件列表加载失败',
+  'mailList.retryLoad': '重试',
   'mailList.selectAria': '选择邮件：{subject}',
   'mailList.selectedCount': '已选 {count} 封',
   'mailList.batchRead': '标为已读',

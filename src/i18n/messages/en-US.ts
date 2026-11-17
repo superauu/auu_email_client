@@ -173,7 +173,6 @@ export const enUS: Record<MessageId, string> = {
   'nav.serverDraftsDesc': 'Cached server drafts; copying them creates local drafts',
   'nav.cacheViewDesc': 'Local cache view of this account',
   'nav.unavailableSuffix': ' · Server folder unavailable; local cache stays readable',
-  'nav.otherCached': 'Other cached mail',
 
   // ── Mail list ───────────────────────────────────────────────
   'mailList.listAria': 'Mail list',
@@ -197,8 +196,13 @@ export const enUS: Record<MessageId, string> = {
   'mailList.starAddAria': 'Star: {subject}',
   'mailList.starRemoveAria': 'Remove star: {subject}',
   'mailList.footerCount': '{count} messages',
+  'mailList.footerPaged': 'Loaded {loaded} of {total}',
   'mailList.footerCache': 'Local cache',
   'mailList.footerDemo': 'Local demo only',
+  'mailList.loadingView': 'Loading messages…',
+  'mailList.loadingMore': 'Loading more…',
+  'mailList.loadFailed': 'Failed to load the message list',
+  'mailList.retryLoad': 'Retry',
   'mailList.selectAria': 'Select message: {subject}',
   'mailList.selectedCount': '{count} selected',
   'mailList.batchRead': 'Mark read',

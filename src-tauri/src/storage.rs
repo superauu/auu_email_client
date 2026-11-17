@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i64 = 16;
+const LATEST_VERSION: i64 = 17;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_foundation.sql")),
     (2, include_str!("../migrations/002_mail_store.sql")),
@@ -30,6 +30,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         16,
         include_str!("../migrations/016_message_move_delete.sql"),
+    ),
+    (
+        17,
+        include_str!("../migrations/017_drop_message_search_fts.sql"),
     ),
 ];
 
@@ -164,20 +168,22 @@ mod tests {
     }
 
     #[test]
-    fn deleting_message_updates_search_and_preserves_local_event() {
+    fn search_fts_is_replaced_and_event_detach_survives_message_delete() {
         let mut db = Connection::open_in_memory().unwrap();
         migrate(&mut db).unwrap();
-        db.execute_batch("INSERT INTO accounts (id, provider, email, display_name, created_at) VALUES ('a','imap','a@example.test','A','2026-01-01T00:00:00Z');
-          INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,received_at) VALUES ('m','a','remote-m','t','Review','A','a@example.test','2026-01-01T00:00:00Z');
-          INSERT INTO mail_events VALUES ('e','a','m','Review','2026-01-02T00:00:00Z','UTC',0,'local');").unwrap();
-        let found: i64 = db
+        // v17 起 LIKE 子串搜索取代 FTS5（unicode61 无法匹配中文连续词组），
+        // 虚拟表与触发器一并移除，避免同步时每行 UPDATE 重索引正文。
+        let fts_objects: i64 = db
             .query_row(
-                "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'Review'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'messages_fts%'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(found, 1);
+        assert_eq!(fts_objects, 0);
+        db.execute_batch("INSERT INTO accounts (id, provider, email, display_name, created_at) VALUES ('a','imap','a@example.test','A','2026-01-01T00:00:00Z');
+          INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,received_at) VALUES ('m','a','remote-m','t','Review','A','a@example.test','2026-01-01T00:00:00Z');
+          INSERT INTO mail_events VALUES ('e','a','m','Review','2026-01-02T00:00:00Z','UTC',0,'local');").unwrap();
         db.execute("DELETE FROM messages WHERE id = 'm'", [])
             .unwrap();
         let link: Option<String> = db
@@ -188,13 +194,5 @@ mod tests {
             )
             .unwrap();
         assert_eq!(link, None);
-        let remaining: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'Review'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(remaining, 0);
     }
 }

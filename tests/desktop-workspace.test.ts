@@ -4,27 +4,45 @@ import { desktopMailGateway } from '../src/services/desktop/DesktopMailGateway';
 import { desktopMail } from '../src/platform/desktop';
 import { demoWorkspace } from '../src/services/demo/fixtures';
 
-test('desktop reads every page within real account scope and excludes legacy demo drafts', async t => {
+test('desktop workspace loads base plus drafts only and messages arrive per view (no startup drain)', async t => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'isTauri');
   Object.defineProperty(globalThis, 'isTauri', { value: true, configurable: true });
   t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'isTauri', descriptor); else Reflect.deleteProperty(globalThis, 'isTauri'); });
   const account = { ...demoWorkspace.accounts[0], id: 'real', status: 'offline' as const };
-  const message = { ...demoWorkspace.messages[0], id: 'cached', accountId: account.id };
-  const draft = { ...message, id: 'saved-draft', mailbox: 'drafts' as const, draft: { id: 'saved-draft', accountId: account.id, to: '', subject: '', bodyText: '保留正文', updatedAt: message.receivedAt } };
+  const draft = { ...demoWorkspace.messages[0], id: 'saved-draft', accountId: account.id, mailbox: 'drafts' as const, draft: { id: 'saved-draft', accountId: account.id, to: '', subject: '', bodyText: '保留正文', updatedAt: demoWorkspace.messages[0].receivedAt } };
   t.mock.method(desktopMail, 'seed', async () => { assert.fail('desktop must not seed demo data'); });
   t.mock.method(desktopMail, 'importLegacyDrafts', async () => { assert.fail('desktop must not import demo drafts'); });
   t.mock.method(desktopMail, 'workspace', async () => ({ ...demoWorkspace, accounts: [...demoWorkspace.accounts, account], folders: [], syncStates: [] }));
-  const calls: Array<{ accountId?: string | null; cursor?: string | null }> = [];
-  t.mock.method(desktopMail, 'page', async (query: Parameters<typeof desktopMail.page>[0]) => {
-    calls.push(query);
-    return query.cursor ? { items: [message], nextCursor: null } : { items: demoWorkspace.messages, nextCursor: 'page-2' };
-  });
+  // 启动不再全量分页灌入邮件：普通邮件一律按视图懒加载，这里调用 page 即为回归。
+  t.mock.method(desktopMail, 'page', async () => { assert.fail('workspace load must not drain message pages'); });
   t.mock.method(desktopMail, 'drafts', async () => [draft, { ...draft, id: 'legacy-demo-draft', accountId: 'personal' }]);
   const result = await desktopMailGateway.loadWorkspace();
-  assert.deepEqual(calls.map(({ accountId, cursor }) => [accountId, cursor]), [['real', null], ['real', 'page-2']]);
   assert.deepEqual(result.accounts.map(item => item.id), ['real']);
-  assert.deepEqual(result.messages.map(item => item.id), ['cached', 'saved-draft']);
-  assert.equal(result.messages[1].draft?.bodyText, '保留正文');
+  // 仅本机草稿进入内存；遗留演示账号草稿被过滤。
+  assert.deepEqual(result.messages.map(item => item.id), ['saved-draft']);
+  assert.equal(result.messages[0].draft?.bodyText, '保留正文');
+});
+
+test('desktop loadView maps the UI query onto the paged store query', async t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'isTauri');
+  Object.defineProperty(globalThis, 'isTauri', { value: true, configurable: true });
+  t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'isTauri', descriptor); else Reflect.deleteProperty(globalThis, 'isTauri'); });
+  const calls: unknown[] = [];
+  t.mock.method(desktopMail, 'page', async (query: Parameters<typeof desktopMail.page>[0]) => {
+    calls.push(query);
+    return { items: [], nextCursor: null };
+  });
+  await desktopMailGateway.loadView?.({ accountId: 'real', mailbox: 'inbox', labelId: null, search: '' });
+  await desktopMailGateway.loadView?.({ accountId: 'real', mailbox: 'starred', labelId: null, search: '发票', unreadOnly: true }, 'cursor-1');
+  await desktopMailGateway.loadView?.({ accountId: 'real', mailbox: 'drafts', draftSource: 'local', labelId: null, search: '' });
+  await desktopMailGateway.loadView?.({ accountId: null, mailbox: 'other', folderId: 'folder-1', labelId: null, search: '' });
+  assert.deepEqual(calls, [
+    { accountId: 'real', mailbox: 'inbox', folderId: null, labelId: null, search: null, cursor: null, limit: 200 },
+    // 星标视图与搜索词直达分页查询；unreadOnly 是客户端过滤，不进入服务端查询。
+    { accountId: 'real', mailbox: 'starred', folderId: null, labelId: null, search: '发票', cursor: 'cursor-1', limit: 200 },
+    // 本机草稿视图不触发服务端分页（草稿随工作区全量加载）。
+    { accountId: null, mailbox: 'other', folderId: 'folder-1', labelId: null, search: null, cursor: null, limit: 200 },
+  ]);
 });
 
 test('desktop without real accounts does not read demo mail or drafts', async t => {

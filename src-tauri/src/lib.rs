@@ -420,6 +420,31 @@ async fn mail_list_drafts(db: State<'_, Db>) -> Result<Vec<mail_store::MessageRo
 }
 
 #[tauri::command]
+async fn mail_folder_counts(db: State<'_, Db>) -> Result<Vec<mail_store::FolderCount>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_store::folder_counts(&conn)
+    })
+    .await
+    .map_err(|_| AppError::storage("视图计数读取任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_contact_suggestions(
+    db: State<'_, Db>,
+    account_id: String,
+) -> Result<Vec<mail_store::ContactRow>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_store::contact_suggestions(&conn, &account_id, 100)
+    })
+    .await
+    .map_err(|_| AppError::storage("联系人建议读取任务未完成"))?
+}
+
+#[tauri::command]
 async fn mail_save_draft(
     db: State<'_, Db>,
     staging: State<'_, compose_attach::ComposeStaging>,
@@ -761,6 +786,8 @@ pub fn run() {
             mail_seed_workspace,
             mail_load_workspace,
             mail_page_messages,
+            mail_folder_counts,
+            mail_contact_suggestions,
             mail_list_drafts,
             mail_save_draft,
             mail_delete_draft,

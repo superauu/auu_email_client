@@ -187,6 +187,13 @@ export interface MailQuery {
 }
 export interface MailFolder { id: string; accountId: string; name: string; kind: string; available: boolean }
 
+/** 侧栏视图计数：view 与 navigation 的 viewCountId 对齐（kind:<kind> / starred / drafts-local / folder:<id>）。 */
+export interface ViewCountEntry { accountId: string; view: string; total: number; unread: number }
+/** 按视图分页拉取的一页邮件（懒加载；cursor 为不透明游标）。 */
+export interface ViewPage { items: MailMessage[]; nextCursor: string | null }
+/** 撰写收件人建议（最近邮件的发件人 + 收件人，去重保序）。 */
+export interface ContactSuggestion { name: string; email: string }
+
 export interface MailGateway {
   requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
@@ -208,6 +215,15 @@ export interface MailGateway {
   /** 'demo': browser fixtures; 'desktop-local': SQLite cache with demo and synced accounts; 'live': direct provider gateway. */
   readonly mode: 'demo' | 'desktop-local' | 'live';
   loadWorkspace(signal?: AbortSignal): Promise<WorkspaceSnapshot>;
+  /**
+   * 按视图分页拉取邮件（桌面端懒加载；演示端全量快照不实现）。
+   * 本机草稿视图（draftSource 'local'）由 loadWorkspace 的草稿缓存覆盖，无需拉取。
+   */
+  loadView?(query: MailQuery, cursor?: string | null, limit?: number): Promise<ViewPage>;
+  /** 侧栏视图计数（桌面端 Rust 聚合；演示端由全量快照计算）。 */
+  viewCounts?(): Promise<ViewCountEntry[]>;
+  /** 撰写收件人建议：桌面端读取最近邮件聚合，演示端由快照计算。 */
+  contactSuggestions?(accountId: string): Promise<ContactSuggestion[]>;
   saveDraft(draft: MailDraft, options?: DraftSaveOptions): Promise<MailMessage>;
   updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage>;
   keepMessageLocal(accountId: string, messageId: string): Promise<MailMessage>;

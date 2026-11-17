@@ -5,6 +5,8 @@ import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { useThemeStore } from '../../stores/themeStore';
 import { mailboxName, selectMessages } from './selectors';
+import { countForView } from './viewCounts';
+import { viewKey } from '../../domain/navigation';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { cn } from '../../lib/cn';
@@ -24,9 +26,10 @@ function readRowHeight(_skinId: string): number {
 
 export function MailList({ onSelect }: { onSelect: () => void }) {
   const t = useI18n();
-  const { messages, accounts, labels, query, selectedId, savingIds, folders, selectMessage, toggleStar, setQuery, applyMessagePatch } = useWorkspaceStore(useShallow(s => ({
+  const { messages, accounts, labels, query, selectedId, savingIds, folders, viewStates, viewCounts, loadMore, retryView, selectMessage, toggleStar, setQuery, applyMessagePatch } = useWorkspaceStore(useShallow(s => ({
     messages: s.messages, accounts: s.accounts, labels: s.labels, query: s.query, selectedId: s.selectedId,
-    savingIds: s.savingIds, folders: s.folders, selectMessage: s.selectMessage, toggleStar: s.toggleStar, setQuery: s.setQuery,
+    savingIds: s.savingIds, folders: s.folders, viewStates: s.viewStates, viewCounts: s.viewCounts, loadMore: s.loadMore, retryView: s.retryView,
+    selectMessage: s.selectMessage, toggleStar: s.toggleStar, setQuery: s.setQuery,
     applyMessagePatch: s.applyMessagePatch,
   })));
   const { jobs, submitting, enqueue } = useSyncStore(useShallow(s => ({ jobs: s.jobs, submitting: s.submitting, enqueue: s.enqueue })));
@@ -58,6 +61,14 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
   const jobsByAccount = new Map(jobs.map(job => [job.accountId, job]));
   const visible = selectMessages(messages, query);
   const window_ = virtualWindow({ count: visible.length, rowHeight, scrollTop, viewportHeight });
+  // ── 视图懒加载：桌面端按视图分页拉取；滚动到已加载末尾附近时追加下一页 ──
+  const state = viewStates[viewKey(query)];
+  const viewTotal = query.unreadOnly || query.search ? null : countForView(viewCounts, query)?.total ?? null;
+  useEffect(() => {
+    if (!state || state.done || state.loading || state.error || !viewportHeight) return;
+    // 渲染窗口逼近已加载末尾（剩余不足一屏 + 12 行）即取下一页；空首页即 done，不会空转。
+    if (window_.bottomPad < viewportHeight + rowHeight * 12) void loadMore();
+  }, [state, window_.bottomPad, rowHeight, viewportHeight, loadMore]);
   // 视图切换 / 搜索变化时清空选择，避免跨视图误操作。
   useEffect(() => { setSelected([]); setMoveOpen(false); }, [query.accountId, query.mailbox, query.folderId, query.draftSource, query.labelId, query.search, query.unreadOnly]);
   const queriedAccount = query.accountId ? accounts.find(a => a.id === query.accountId) : null;
@@ -130,7 +141,8 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
       <div className="list-actions"><span className="list-order" title={t('mailList.orderByDateTitle')}>{t('mailList.orderByDate')}<ArrowDown size={12} /></span><Button variant="ghost" aria-label={t('mailList.selectAllAria')} title={t('mailList.selectAll')} disabled={!visible.length} onClick={() => setSelected(visible.map(message => message.id))}><ListChecks size={14} /></Button><Button variant="ghost" className="account-sync" aria-label={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} title={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? accountSyncing : syncingAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? t('settings.queuing') : jobsByAccount.get(syncTarget.id)?.status === 'queued' ? t('settings.queued') : jobsByAccount.get(syncTarget.id)?.status === 'running' ? t('settings.syncing') : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? t('settings.retry') : t('settings.sync') : syncingAll ? t('settings.syncing') : t('settings.sync')}</Button></div>
     </header>}
     <div className="mail-list-scroll" ref={scrollRef}>
-      {visible.length === 0 ? (query.unreadOnly ? <EmptyState title={t('mailList.emptyUnreadTitle')} description={t('mailList.emptyUnreadBody')} /> : query.search ? <EmptyState title={t('mailList.emptySearchTitle')} description={t('mailList.emptySearchBody')} /> : realAccount ? <EmptyState title={t('mailList.emptyAccountTitle', { name: realAccount.name })} description={t('mailList.emptyAccountBody')} /> : <EmptyState title={t('mailList.emptyTitle')} description={t('mailList.emptyBody')} />) : <>
+      {visible.length === 0 && state?.loading ? <div className="list-loading" role="status">{t('mailList.loadingView')}</div>
+        : visible.length === 0 ? (query.unreadOnly ? <EmptyState title={t('mailList.emptyUnreadTitle')} description={t('mailList.emptyUnreadBody')} /> : query.search ? <EmptyState title={t('mailList.emptySearchTitle')} description={t('mailList.emptySearchBody')} /> : realAccount ? <EmptyState title={t('mailList.emptyAccountTitle', { name: realAccount.name })} description={t('mailList.emptyAccountBody')} /> : <EmptyState title={t('mailList.emptyTitle')} description={t('mailList.emptyBody')} />) : <>
         {window_.topPad > 0 && <div style={{ height: window_.topPad }} aria-hidden />}
         {visible.slice(window_.start, window_.end).map((message, offset) => {
         const account = accounts.find(a => a.id === message.accountId);
@@ -149,6 +161,14 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         {window_.bottomPad > 0 && <div style={{ height: window_.bottomPad }} aria-hidden />}
       </>}
     </div>
-    <footer className="list-footer">{t('mailList.footerCount', { count: visible.length })}<span>{isDesktop() ? t('mailList.footerCache') : t('mailList.footerDemo')}</span></footer>
+    <footer className="list-footer">
+      {/* 总数来自视图计数（桌面端 Rust 聚合）；还有未加载页时如实展示已加载进度。 */}
+      {viewTotal != null && viewTotal !== visible.length
+        ? t('mailList.footerPaged', { loaded: visible.length, total: viewTotal })
+        : t('mailList.footerCount', { count: visible.length })}
+      <span>{isDesktop() ? t('mailList.footerCache') : t('mailList.footerDemo')}</span>
+      {state?.loading && visible.length > 0 && <span role="status">{t('mailList.loadingMore')}</span>}
+      {state?.error && <span className="list-error" role="alert">{t('mailList.loadFailed')}<Button variant="ghost" onClick={retryView}>{t('mailList.retryLoad')}</Button></span>}
+    </footer>
   </section>;
 }
