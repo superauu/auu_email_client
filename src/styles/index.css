@@ -152,6 +152,20 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .row-account { position: absolute; top: 28px; right: 14px; max-width: 58px; color: var(--tone); font-size: 9px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .row-star { position: absolute; right: 10px; bottom: 5px; padding: 4px; color: var(--text-subtle); }
 .row-star.is-starred { color: var(--warning); }
+/* 多选：行首选择框默认收起，悬停或选中态展开；整行选中高亮沿用 surface-selected。 */
+.row-select { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; border: 1px solid var(--border); color: transparent; background: var(--surface); opacity: 0; }
+.mail-row:hover .row-select, .row-select:focus-visible, .row-select.is-on { opacity: 1; }
+.row-select.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
+.mail-row.is-checked { background: var(--surface-selected); }
+@media (prefers-reduced-motion: reduce) { .row-select { transition: none; } }
+/* 批量操作栏与移动目标菜单（阅读区与列表共用）。 */
+.batch-bar { gap: 8px; }
+.batch-count { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.batch-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.move-menu-wrap { position: relative; display: inline-flex; }
+.move-menu { position: absolute; top: calc(100% + 4px); inset-inline-end: 0; z-index: 30; min-width: 180px; max-height: 260px; overflow: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); padding: 4px; display: flex; flex-direction: column; }
+.move-menu button { display: block; width: 100%; text-align: start; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: var(--text); }
+.move-menu button:hover, .move-menu button:focus-visible { background: var(--surface-hover); }
 .list-footer { display: flex; justify-content: space-between; padding: 10px 20px; color: var(--text-subtle); font-size: 9px; border-top: 1px solid var(--border); }
 .resize-handle { width: 5px; flex-shrink: 0; background: var(--border); cursor: col-resize; touch-action: none; border-inline: 2px solid var(--surface); }
 .resize-handle--sidebar { border-inline-start-color: var(--canvas); }

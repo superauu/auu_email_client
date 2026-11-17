@@ -2,6 +2,7 @@ import type { MailAccount, MailDraft, MailMessage, DraftSaveOptions } from '../.
 import { demoWorkspace } from './fixtures';
 import { readPreference, writePreference } from '../../lib/preferences';
 import { validateDraft, draftAsMessage } from '../../domain/drafts';
+import { t } from '../../i18n/core';
 export { draftAsMessage } from '../../domain/drafts';
 
 const KEY = 'auumail.demo.drafts.v1';
@@ -29,16 +30,16 @@ export function persistDraft(draft: MailDraft, options?: DraftSaveOptions): Mail
   const current = existing.find(item => item.id === draft.id);
   const expectedRevision = draft.revision ?? 0;
   if (current ? (current.revision ?? 0) !== expectedRevision || current.accountId !== (options?.previousAccountId ?? draft.accountId) : expectedRevision !== 0) {
-    throw { code: 'conflict', message: '草稿已在其他窗口修改，请保留当前内容并重新打开草稿。', retryable: false };
+    throw { code: 'conflict', message: t('demo.draftConflict'), retryable: false };
   }
   const saved = validateDraft({ ...draft, revision: expectedRevision + 1, updatedAt: new Date().toISOString() });
   const next = validateDemoDrafts([saved, ...existing.filter(item => item.id !== draft.id)]);
-  if (!writePreference(KEY, next)) throw new Error('草稿未能保存，请保留窗口中的内容后重试。');
+  if (!writePreference(KEY, next)) throw new Error(t('demo.draftSaveFailed'));
   return saved;
 }
 
 /** Browser demo only: explicit discard removes the draft from the local overlay. */
 export function deletePersistedDraft(id: string): void {
   const existing = readPreference(KEY, validateDemoDrafts) ?? [];
-  if (!writePreference(KEY, existing.filter(item => item.id !== id))) throw new Error('草稿未能删除，请保留当前内容后重试。');
+  if (!writePreference(KEY, existing.filter(item => item.id !== id))) throw new Error(t('demo.draftDeleteFailed'));
 }

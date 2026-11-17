@@ -12,7 +12,14 @@ pub struct Patch {
     pub unread: Option<bool>,
     pub starred: Option<bool>,
     pub archive: Option<bool>,
+    /// 删除到废纸篓（UID MOVE 到唯一 trash 目录；POP3 / 演示仅本机投影）。
+    pub delete: Option<bool>,
+    /// 移动到指定文件夹（folders.id）。
+    pub move_to: Option<String>,
 }
+
+/// 移动族字段：彼此互斥（同一条邮件同时只允许一个待处理移动意图），标记字段不受影响。
+pub const MOVE_FAMILY: [&str; 3] = ["archive", "delete", "move"];
 #[derive(Debug, Serialize)]
 pub struct ChangeStatus {
     pub field: String,
@@ -30,6 +37,8 @@ pub struct Intent {
     pub folder: String,
     pub validity: u32,
     pub uid: u32,
+    /// 移动族意图的目标 folders.id（archive 在回写时解析，delete / move 在入队时落库）。
+    pub target: Option<String>,
 }
 
 pub fn statuses(conn: &Connection, id: &str) -> Result<Vec<ChangeStatus>, AppError> {
@@ -54,7 +63,7 @@ pub fn recover(conn: &mut Connection) -> Result<(), AppError> {
         .transaction()
         .map_err(|_| AppError::storage("无法恢复邮件回写"))?;
     tx.execute("UPDATE messages SET state_revision=state_revision+1 WHERE id IN (SELECT message_id FROM message_changes WHERE state='applying')",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
-    tx.execute("UPDATE message_changes SET state=CASE WHEN field='archive' THEN 'unknown' ELSE 'queued' END,error=CASE WHEN field='archive' THEN '上次归档中断，结果待核对；不会自动再次移动。' ELSE NULL END WHERE state='applying'",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
+    tx.execute("UPDATE message_changes SET state=CASE WHEN field IN ('archive','delete','move') THEN 'unknown' ELSE 'queued' END,error=CASE WHEN field IN ('archive','delete','move') THEN '上次移动中断，结果待核对；不会自动再次移动。' ELSE NULL END WHERE state='applying'",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
     tx.commit()
         .map_err(|_| AppError::storage("邮件回写恢复未完成"))
 }
@@ -64,10 +73,27 @@ pub fn update(
     id: &str,
     patch: &Patch,
 ) -> Result<MessageRow, AppError> {
-    if patch.unread.is_none() && patch.starred.is_none() && patch.archive.is_none()
+    let move_to = patch
+        .move_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if (patch.unread.is_none()
+        && patch.starred.is_none()
+        && patch.archive.is_none()
+        && patch.delete.is_none()
+        && move_to.is_none())
         || patch.archive == Some(false)
+        || patch.delete == Some(false)
     {
         return Err(AppError::invalid("请选择有效的邮件状态修改"));
+    }
+    // 移动族字段一次只允许一个；家族意图彼此互斥。
+    let family_count = usize::from(patch.archive.is_some())
+        + usize::from(patch.delete.is_some())
+        + usize::from(move_to.is_some());
+    if family_count > 1 {
+        return Err(AppError::invalid("归档、删除与移动一次只能执行一个"));
     }
     let tx = conn
         .transaction()
@@ -94,22 +120,77 @@ pub fn update(
         && validity.is_some_and(|uid| uid > 0)
         && uid.is_some_and(|uid| uid > 0)
         && origin.as_deref() == Some(&generation);
-    for (field, value) in [
-        ("unread", patch.unread),
-        ("starred", patch.starred),
-        ("archive", patch.archive),
+    // 家族互斥：任一移动族意图仍在 applying / unknown 时禁止新移动（防止重复 MOVE）。
+    let pending_family: Option<String> = tx
+        .query_row(
+            "SELECT field FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field IN ('archive','delete','move') AND state IN ('applying','unknown') LIMIT 1",
+            params![account, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| AppError::storage("无法检查移动状态"))?;
+    // delete / move 的目标文件夹在入队时落库；archive 维持回写时解析唯一归档目录的既有约定。
+    // 可用性在 imap_folder_state（按 remote_id 关联），不在 folders 表。
+    let family_target: Option<String> = if patch.delete.is_some() {
+        let mut trash: Vec<String> = tx
+            .prepare("SELECT f.id FROM folders f JOIN imap_folder_state s ON s.account_id=f.account_id AND s.remote_id=f.remote_id WHERE f.account_id=?1 AND f.kind='trash' AND s.available=1 ORDER BY f.id")
+            .map_err(|_| AppError::storage("无法读取废纸篓文件夹"))?
+            .query_map(params![account], |row| row.get(0))
+            .map_err(|_| AppError::storage("无法读取废纸篓文件夹"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::storage("文件夹数据损坏"))?;
+        match trash.len() {
+            1 => Some(trash.pop().expect("checked len")),
+            0 => {
+                return Err(AppError::invalid(
+                    "未找到可用的废纸篓文件夹，无法删除到服务器",
+                ))
+            }
+            _ => return Err(AppError::invalid("存在多个废纸篓文件夹，无法确定删除目标")),
+        }
+    } else if let Some(target) = move_to {
+        let (remote_name, available): (String, bool) = tx
+            .query_row(
+                "SELECT f.remote_id,s.available FROM folders f JOIN imap_folder_state s ON s.account_id=f.account_id AND s.remote_id=f.remote_id WHERE f.id=?1 AND f.account_id=?2",
+                params![target, account],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| AppError::storage("无法读取目标文件夹"))?
+            .ok_or_else(|| AppError::invalid("目标文件夹不存在"))?;
+        if !available {
+            return Err(AppError::invalid("目标文件夹当前不可用"));
+        }
+        if Some(remote_name.as_str()) == folder.as_deref() {
+            return Err(AppError::invalid("邮件已在该文件夹"));
+        }
+        Some(target.to_string())
+    } else {
+        None
+    };
+    if pending_family.is_some()
+        && (patch.archive.is_some() || patch.delete.is_some() || move_to.is_some())
+    {
+        return Err(AppError::conflict(
+            "上一次移动结果待核对，请勿重复移动；可选择仅保留本机。",
+        ));
+    }
+    for (field, value, target) in [
+        ("unread", patch.unread, None),
+        ("starred", patch.starred, None),
+        ("archive", patch.archive, None),
+        ("delete", patch.delete, family_target.clone()),
+        ("move", move_to.map(|_| true), family_target.clone()),
     ] {
         let Some(value) = value else { continue };
-        if field == "archive" {
-            let prior:Option<String>=tx.query_row("SELECT state FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field='archive'",params![account,id],|r|r.get(0)).optional().map_err(|_|AppError::storage("无法检查归档状态"))?;
-            if prior
-                .as_deref()
-                .is_some_and(|s| matches!(s, "applying" | "unknown"))
-            {
-                return Err(AppError::conflict(
-                    "归档结果待核对，请勿重复移动；可选择仅保留本机。",
-                ));
-            }
+        if MOVE_FAMILY.contains(&field) {
+            // 新家族意图取代旧的 queued / failed / conflict / local 家族意图；
+            // applying / unknown 已被上方守卫拦截，不能覆盖。
+            tx.execute(
+                "DELETE FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field IN ('archive','delete','move') AND field!=?3 AND state NOT IN ('applying','unknown')",
+                params![account, id, field],
+            )
+            .map_err(|_| AppError::storage("无法清理旧移动意图"))?;
         } else {
             let sql = if field == "unread" {
                 "UPDATE messages SET unread=?1 WHERE id=?2 AND account_id=?3"
@@ -131,11 +212,11 @@ pub fn update(
         } else {
             None
         };
-        tx.execute("INSERT INTO message_changes (account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,error,updated_at)
-          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+        tx.execute("INSERT INTO message_changes (account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,error,target_folder,updated_at)
+          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
           ON CONFLICT(account_id,message_id,field) DO UPDATE SET value=excluded.value,revision=excluded.revision,state=excluded.state,generation=excluded.generation,
-          source_folder=excluded.source_folder,source_validity=excluded.source_validity,source_uid=excluded.source_uid,error=excluded.error,target_folder=NULL,updated_at=excluded.updated_at",
-          params![account,id,field,value,revision+1,state,generation,folder,validity,uid,error,crate::now_utc()]).map_err(|_|AppError::storage("邮件修改未能排队"))?;
+          source_folder=excluded.source_folder,source_validity=excluded.source_validity,source_uid=excluded.source_uid,error=excluded.error,target_folder=excluded.target_folder,updated_at=excluded.updated_at",
+          params![account,id,field,value,revision+1,state,generation,folder,validity,uid,error,target,crate::now_utc()]).map_err(|_|AppError::storage("邮件修改未能排队"))?;
     }
     tx.execute(
         "UPDATE messages SET state_revision=state_revision+1 WHERE id=?1 AND account_id=?2",
@@ -175,7 +256,7 @@ pub fn keep_local(conn: &mut Connection, account: &str, id: &str) -> Result<Mess
 }
 
 pub fn pending(conn: &Connection, account: &str) -> Result<Vec<Intent>, AppError> {
-    let mut stmt=conn.prepare("SELECT account_id,message_id,field,value,revision,generation,source_folder,source_validity,source_uid FROM message_changes WHERE account_id=?1 AND state IN ('queued','failed') AND NOT EXISTS(SELECT 1 FROM message_recovery r WHERE r.message_id=message_changes.message_id AND r.state NOT IN ('restored','local')) ORDER BY CASE field WHEN 'archive' THEN 1 ELSE 0 END,message_id,field LIMIT 200").map_err(|_|AppError::storage("无法读取待回写修改"))?;
+    let mut stmt=conn.prepare("SELECT account_id,message_id,field,value,revision,generation,source_folder,source_validity,source_uid,target_folder FROM message_changes WHERE account_id=?1 AND state IN ('queued','failed') AND NOT EXISTS(SELECT 1 FROM message_recovery r WHERE r.message_id=message_changes.message_id AND r.state NOT IN ('restored','local')) ORDER BY CASE field WHEN 'archive' THEN 1 WHEN 'delete' THEN 1 WHEN 'move' THEN 1 ELSE 0 END,message_id,field LIMIT 200").map_err(|_|AppError::storage("无法读取待回写修改"))?;
     let result = stmt
         .query_map([account], |r| {
             Ok(Intent {
@@ -188,6 +269,7 @@ pub fn pending(conn: &Connection, account: &str) -> Result<Vec<Intent>, AppError
                 folder: r.get(6)?,
                 validity: r.get(7)?,
                 uid: r.get(8)?,
+                target: r.get(9)?,
             })
         })
         .map_err(|_| AppError::storage("无法读取待回写修改"))?
@@ -293,6 +375,8 @@ pub(crate) mod tests {
                     unread: Some(false),
                     starred: Some(true),
                     archive: Some(true),
+                    delete: None,
+                    move_to: None,
                 },
             )
             .unwrap();
@@ -520,5 +604,206 @@ pub(crate) mod tests {
         assert!(!saved.starred);
         assert_eq!(saved.state_revision, 0);
         assert!(saved.changes.is_empty());
+    }
+
+    fn add_folder(conn: &Connection, id: &str, remote: &str, name: &str, kind: &str) {
+        conn.execute(
+            "INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES (?1,'acc',?2,?3,?4)",
+            params![id, remote, name, kind],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO imap_folder_state (account_id,remote_id,available) VALUES ('acc',?1,1)",
+            params![remote],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_requires_one_available_trash_folder_and_persists_target() {
+        let mut conn = fixture();
+        // 无废纸篓：拒绝删除，不产生意图。
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                delete: Some(true),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        add_folder(&conn, "acc:folder:Trash", "Trash", "Trash", "trash");
+        let saved = update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                delete: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.mailbox, "trash");
+        let intent = &pending(&conn, "acc").unwrap()[0];
+        assert_eq!(intent.field, "delete");
+        assert_eq!(intent.target.as_deref(), Some("acc:folder:Trash"));
+        // 两个废纸篓：拒绝并说明，不猜目标。
+        add_folder(&conn, "acc:folder:Bin", "Bin", "Bin", "trash");
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                unread: Some(false),
+                ..Default::default()
+            }
+        )
+        .is_ok());
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                delete: Some(true),
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn move_validates_target_and_supersedes_previous_family_intent() {
+        let mut conn = fixture();
+        add_folder(&conn, "acc:folder:Work", "Work", "Work", "other");
+        // 目标不存在 / 与源相同：拒绝。
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                move_to: Some("missing".into()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        let inbox: String = conn
+            .query_row("SELECT id FROM folders WHERE kind='inbox'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                move_to: Some(inbox.clone()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        // 合法移动：目标落库， mailbox 投影为目标 kind。
+        let saved = update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                move_to: Some("acc:folder:Work".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.mailbox, "other");
+        // 旧的 queued 移动意图被新归档意图取代（同族互斥，非 applying/unknown 可替换）。
+        let saved = update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                archive: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.mailbox, "archive");
+        let intents = pending(&conn, "acc").unwrap();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].field, "archive");
+        assert!(intents[0].target.is_none());
+    }
+
+    #[test]
+    fn applying_or_unknown_family_intent_blocks_new_moves_but_not_flags() {
+        let mut conn = fixture();
+        add_folder(&conn, "acc:folder:Trash", "Trash", "Trash", "trash");
+        update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                delete: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn.execute("UPDATE message_changes SET state='unknown'", [])
+            .unwrap();
+        // 家族意图 unknown：新移动被拒，标记仍可修改。
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                archive: Some(true),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                move_to: Some("acc:folder:Trash".into()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        let saved = update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                starred: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(saved.starred);
+        // 恢复为 queued 后，新家族意图可替换旧的 queued 意图。
+        conn.execute(
+            "UPDATE message_changes SET state='queued' WHERE field='delete'",
+            [],
+        )
+        .unwrap();
+        let saved = update(
+            &mut conn,
+            "acc",
+            "m",
+            &Patch {
+                archive: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.mailbox, "archive");
+        // 标记意图排序在前，取家族意图断言。
+        let family = pending(&conn, "acc")
+            .unwrap()
+            .into_iter()
+            .find(|intent| MOVE_FAMILY.contains(&intent.field.as_str()))
+            .expect("family intent");
+        assert_eq!(family.field, "archive");
+        assert!(family.target.is_none());
     }
 }

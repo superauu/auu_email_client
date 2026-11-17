@@ -3,13 +3,14 @@ import { demoWorkspace } from './fixtures';
 import { draftAsMessage, loadDraftMessages, persistDraft, deletePersistedDraft } from './drafts';
 import { loadDemoMessageChanges, persistDemoMessage } from './messageChanges';
 import { loadDemoEvents, persistDemoEvent } from './events';
+import { t } from '../../i18n/core';
 
 export const demoMailGateway: MailGateway = {
   mode: 'demo',
-  async requestBody() { throw new Error('演示邮件没有可下载的远端原文。'); },
-  async exportAttachment() { throw new Error('演示邮件没有真实附件，请在桌面版同步 IMAP 邮件。'); },
-  async pickAttachments() { throw new Error('浏览器演示不能读取本机文件；撰写附件请在桌面版使用。'); },
-  async requestRecovery() { throw new Error('演示邮件不提供远端定位核对，请在桌面版使用真实 IMAP 缓存。'); },
+  async requestBody() { throw new Error(t('demo.noRemoteBody')); },
+  async exportAttachment() { throw new Error(t('demo.noAttachment')); },
+  async pickAttachments() { throw new Error(t('demo.noPickAttachments')); },
+  async requestRecovery() { throw new Error(t('demo.noRecovery')); },
   async loadWorkspace(signal) {
     signal?.throwIfAborted();
     const snapshot = structuredClone(demoWorkspace);

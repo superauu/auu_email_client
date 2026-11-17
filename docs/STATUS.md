@@ -1,8 +1,32 @@
 # 当前状态
 
-更新时间：2026-11-17。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。抄送 / 密送独立收件、真实 POP3、Outlook 会话归组仍待验收；本轮另发现中文附件名的严格 MIME 参数解析兼容问题，尚未修复。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-17。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**本轮完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化**。抄送 / 密送独立收件、真实 POP3、Outlook 会话归组、真实服务器删除 / 移动仍待验收；修复后的中文附件名需在 Gmail 真实投递复验。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
 
-## 最新增量：应用图标更换（2026-11-17）
+## 最新增量：大邮箱列表虚拟化（2026-11-17）
+
+- **虚拟化**：`MailList` 只渲染视口窗口 + 前后 8 行 overscan，上下以留白维持滚动条高度（`features/mail/virtual.ts` 纯函数窗口计算）。行高读取皮肤 token（`--list-row-height`，Paper 76 / Graphite 72 / Linen 80）并随皮肤切换重算；滚动更新经 `requestAnimationFrame` 节流；行上标注 `aria-posinset` / `aria-setsize` 保持完整列表语义。600+ 封时实际渲染 < 120 行；全选与批量操作仍覆盖完整数据集。
+- **加载**：桌面 gateway 各账号分页改为并行读取、页大小 100 → 200，缩短大邮箱等待；数据模型与跨视图计数仍基于完整快照。
+- **验证**：`npm run check`（72 个 TS 测试，新增 3 个 virtualWindow 边界——窗口 / 滚动尾部 / 空列表与未测量）、完整 UI 回归 **73 个 Chromium 用例**（新增 602 封虚拟列表用例：渲染行数上限、滚动到底可见最早邮件、全选覆盖全量）。602 封全选截图已人工查看。`npm run check:native` 239 个 Rust 测试不变。
+- **边界（按视图懒加载未做，原因记录）**：前端仍一次性把全部分页读入快照。改按视图加载需同时解决侧栏 / 常用入口计数、跨账号聚合、联系人建议与同步刷新合并依赖全量集合的问题，并新增 Rust 计数查询（`COUNT(*)` 按 kind），属独立增量；当前内存代价约为每封纯文本消息数 KB，虚拟化已消除滚动与渲染瓶颈。大邮箱真实吞吐（5 万封级）仍待授权账号验收。
+
+## 最新增量：邮件管理——删除 / 移动 / 多选批量（2026-11-17）
+
+- **范围**：删除到废纸篓（`delete: true`，UID MOVE 到唯一 trash 目录）与移动到指定文件夹（`moveTo: folderId`），与归档同属「移动族」；列表多选后批量已读 / 未读 / 星标 / 归档 / 删除 / 移动到…（前端逐封复用单封串行语义，不新增批量 IPC）；阅读区工具栏新增删除与移动到…菜单。演示账号仅本机投影；POP3 沿用 `local` 仅本机状态。
+- **数据（v16 追加迁移）**：SQLite 无法修改 CHECK，按约定重建 `message_changes` 表扩展 `field` 允许 delete / move，既有意图原样迁移；`target_folder` 在入队时落库（archive 仍回写时解析唯一归档目录）。家族互斥：一次只允许一个移动族字段；任一移动族意图 applying / unknown 时拒绝新的移动（防重复 MOVE）；新家族意图取代旧的 queued / failed / conflict / local 家族意图。
+- **目标规则**：delete 要求恰好一个可用 trash 目录（0 / 多个均拒绝说明）；`\Trash` special-use 优先（Gmail `[Gmail]/Bin`），名称启发式补「已删除」（QQ / 163）。moveTo 要求目录存在、可用、非当前目录；目录消失按 conflict 保留本机。回写复用归档 MOVE 路径（CAPABILITY MOVE + COPYUID 确认），remote_id kind 取目标目录 kind；unknown 不自动重试。
+- **UI**：行首选择框（悬停展开、选中高亮、视图切换清空）、批量操作栏（计数 / 操作 / 取消）、移动到…菜单（仅同账号时可用）；导航侧废纸篓与归档一致提供意图入口（唯一远端目录不重复展示物理副本）。中文文案全部经消息字典（新增约 25 键）。
+- **验证**：`npm run check`（lint / schema / 类型 / 构建、**69 个 TS 测试**：新增导航意图投影与 demo 删除 / 移动本地投影）、`npm run check:native`（fmt / **239 个 Rust 测试** / Clippy：新增 3 个意图层——trash 唯一性 / 目标校验 / 家族互斥与替换，2 个回写层——delete 解析 trash 并 ack trash kind、目标消失 conflict 不发命令）、完整 UI 回归 **72 个 Chromium 用例**（新增批量多选删除到废纸篓、阅读区移动与删除）。批量栏与废纸篓视图截图已人工查看。
+- **边界与未验证**：不做永久删除（EXPUNGE）与跨账号移动；Gmail 多标签仍按归档语义处理；批量移动仅支持同一账号；**真实服务器删除 / 移动（Gmail Bin、QQ / 163 已删除）待授权账号验收**，浏览器 IPC harness 不等于 Rust 或服务器端到端。
+
+## 最新增量：附件名 MIME 修复 + 中英文界面切换（2026-11-17）
+
+- **中文附件名 MIME 参数修复**：非 ASCII 附件名此前以未加引号的 RFC2047 encoded-word 作参数值，Python `email`（policy.default）实测丢失 `filename` / `name` 参数（返回 None）。现改为：Content-Disposition 用 RFC 2231 扩展参数 `filename*0*=utf-8''…`（percent 编码按 21 个完整转义分段续行，分段不切断 %XX；超长名多段均在 998 字节行限内），Content-Type 的 `name=` 用引号内 RFC2047 作为宽松客户端回退。两类参数分置两个头是刻意约束：mail-parser 会把同头内的 `filename*` 续行合并进已有 `filename` 属性（实测误拼接）。ASCII 安全名输出与旧格式逐字节一致。实现前先以 Python 实证五种编码形式的解析行为，实现后把真实 Rust 组装输出喂给 Python 3.13 严格解析器复核：短 / 长中文名与字节内容全部还原。新增 4 个 Rust 回归（ASCII 不变、中文名双形式、长名折行分段、空名 / 注入回退），`npm run check:native` 234 个测试通过。
+- **中英文界面切换**：新增 `src/i18n`——`messages/zh-CN.ts` 源字典 + `messages/en-US.ts`（类型强制覆盖全部键与插值参数）、纯内核 `core.ts`（`t` / 语言状态 / 订阅，无 React / DOM / 存储依赖，domain 与 stores 可安全导入）、应用绑定 `index.ts`（localStorage `auumail.ui.lang.v1` 持久化、首次按 `navigator.language` 检测、同步 `html lang`）、React 桥 `react.ts`（`useI18n` / `useLanguage`，`useSyncExternalStore`）。设置 → 外观与皮肤新增「界面语言」按钮组，即时生效、重启保留。全量替换约 30 个文件的 UI 文案（顶栏 / 侧栏 / 列表 / 阅读 / 撰写 / 向导 / OAuth / 同步设置 / 发送队列 / 事件 / AI / stores / domain 校验 / 皮肤校验 / 演示服务）；转发引用头进入邮件正文，随界面语言生成（与主流客户端一致）。日期与数字格式化改用当前 locale。邮件正文、演示邮件内容、皮肤 JSON 的 name / description 属数据不翻译；Rust 返回的原始错误详情（服务器 / OS 文本）保留原文。导航目录标签、常用快捷入口、同步摘要等此前在 domain 层固化的中文改为每次调用取当前语言（`defaultShortcuts` 由常量改为函数，持久化仅存结构化 target 不受影响）。
+- **验证**：`npm run check`（lint / 皮肤 schema / 类型 / 构建、**67 个 TS 测试**，新增 4 个 i18n 单测：字典键一一对应与插值参数一致、参数替换与缺参占位、切换通知与退订、语言工具函数）；完整 UI 回归 **70 个 Chromium 用例通过**（新增语言切换即时生效 + 持久化 + html lang 恢复、英文工作区列表 / 阅读窗格用例；Playwright 配置固定 `locale: 'zh-CN'` 使既有中文用例与自动检测共存）。英文与中文界面、皮肤明暗截图已人工查看，布局无破版。`npm run check:native` 234 个 Rust 测试通过（MIME 修复回归含于其中）。
+- **边界**：Rust 侧错误文案暂不随语言切换（原始详情保留，后续可经 code 前缀语义补充或 IPC 传 locale，属独立增量）；仅提供 zh-CN / en-US 两种语言；转发 / 回复主题前缀识别同时兼容中英文历史格式（`^(fwd|转发)`、`/^转发[:：]/`）。
+- **待真实验收**：修复后中文附件名经 Gmail 真实投递 / 网页下载需重新自发自收核对；抄送 / 密送独立收件、真实 POP3、Outlook 会话归组仍保留待验收。
+
+## 历史增量：应用图标更换（2026-11-17）
 
 - **范围**：以 `docs/auu-mail/auu-mail-512.png` 为源执行 `npx tauri icon`，重新生成 `src-tauri/icons` 全套图像（icon.ico / icns / PNG、Windows Square 与 Store logo、android / ios），共 50 个图像文件更新；两个 XML 配置（自适应图标背景色）本就不含图像内容、保持不变。`tauri.conf.json` 的 `bundle.icon` 指向不变。应用内品牌图三处同步更换：顶栏（App.tsx）与关于页（SettingsDialog.tsx）改用 `public/logo.png`（auu-mail-256 拷贝）；OAuth 回调等待页（oauth_flow.rs）改为 `include_bytes!` + base64 内嵌 data URI，页面保持无脚本、无外部资源；旧 `public/logo.svg` 已删除。
 - **验证**：源图核对为 512×512、四角透明；`npm run check` 通过（lint / skins / build / 63 TS 测试）；`npm run check:native` 通过（fmt / cargo test / clippy -D warnings，230 Rust 测试），并为回调页新增断言"品牌图必须以内嵌 data URI 提供"。浏览器实际查看顶栏 28px 与关于页 48px，新图标显示正常。

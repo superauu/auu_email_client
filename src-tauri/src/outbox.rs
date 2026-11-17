@@ -299,8 +299,58 @@ struct MimeInput<'a> {
     attachments: &'a [AttachmentPayload],
 }
 
-/// 附件头部值消毒：media_type 仅保留 token 字符，非法回退 octet-stream；
-/// 文件名中和 CR/LF 后，ASCII 安全字符用引号串，否则用 RFC2047 encoded-word。
+/// RFC 2231 扩展参数值转义：attribute-char 安全集合之外的字节全部百分号编码。
+fn percent_encode_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 3);
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+const FILENAME_SAFE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .()-_";
+
+fn is_ascii_safe_filename(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| FILENAME_SAFE.contains(c)) && name.len() <= 60
+}
+
+/// RFC 2231 扩展参数（仅编码路径）：`base*0*=utf-8''首段; base*1*=次段…`，
+/// 百分号编码值按 63 字符（21 个完整 %XX 转义）分段续行——分段不得切断转义序列，
+/// mail-parser 等实现按段独立解码；单行不超过约 80 字节；仅首段携带 charset 前缀。
+fn rfc2231_parameters(base: &str, name: &str) -> String {
+    let percent = percent_encode_value(name);
+    let segments: Vec<&str> = percent
+        .as_bytes()
+        .chunks(63)
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+    segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            let charset = if index == 0 { "utf-8''" } else { "" };
+            format!("{base}*{index}*={charset}{segment}")
+        })
+        .collect::<Vec<_>>()
+        .join(";\r\n ")
+}
+
+/// 附件头部值消毒：media_type 仅保留 token 字符，非法回退 octet-stream。
+/// 文件名中和 CR/LF 后：
+/// - ASCII 安全名保持引号串（与既有格式逐字节一致）；
+/// - 非 ASCII 名在 Content-Disposition 使用 RFC 2231 扩展参数（严格解析器如
+///   Python email policy.default 的标准形式），Content-Type 的 name 使用引号内
+///   RFC2047（Gmail 等宽松客户端回退）。两类参数分置两个头：同一头内裸
+///   `filename` 与 `filename*` 并存会被 mail-parser 的续行合并误拼接为原名+重复段。
+///
+/// 修复背景：裸 RFC2047 参数值不符合 MIME 参数语法，Python email policy.default
+/// 直接丢失该参数（STATUS 2026-11-16 记录的兼容问题）。
 fn attachment_headers(name: &str, media_type: &str, content: &[u8]) -> String {
     let type_token: String = media_type
         .bytes()
@@ -317,22 +367,26 @@ fn attachment_headers(name: &str, media_type: &str, content: &[u8]) -> String {
         .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
         .collect();
     let cleaned = cleaned.trim().trim_matches('"');
-    const FILENAME_SAFE: &str =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .()-_";
-    let filename = if !cleaned.is_empty()
-        && cleaned.chars().all(|c| FILENAME_SAFE.contains(c))
-        && cleaned.len() <= 60
-    {
-        format!("\"{cleaned}\"")
+    let fallback;
+    let cleaned = if cleaned.is_empty() {
+        fallback = "attachment.bin".to_string();
+        fallback.as_str()
     } else {
-        encode_rfc2047(if cleaned.is_empty() {
-            "attachment.bin"
-        } else {
-            cleaned
-        })
+        cleaned
+    };
+    let (type_name_param, disposition_param) = if is_ascii_safe_filename(cleaned) {
+        (
+            format!("name=\"{cleaned}\""),
+            format!("filename=\"{cleaned}\""),
+        )
+    } else {
+        (
+            format!("name=\"{}\"", encode_rfc2047(cleaned)),
+            rfc2231_parameters("filename", cleaned),
+        )
     };
     format!(
-        "Content-Type: {safe_type}; name={filename}\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename={filename}\r\n\r\n{}",
+        "Content-Type: {safe_type}; {type_name_param}\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; {disposition_param}\r\n\r\n{}",
         fold_base64(&BASE64.encode(content))
     )
 }
@@ -1673,6 +1727,98 @@ mod tests {
         assert_eq!(parsed.attachments[1].1, b"b");
         // 非法 media_type 被中和为合法 token；头部无裸 CR/LF。
         assert!(!raw.contains("not a valid type!"));
+    }
+
+    #[test]
+    fn ascii_attachment_filenames_keep_plain_quoted_params() {
+        // ASCII 安全名与既有格式逐字节一致：不引入 RFC2231，也不改变引号形式。
+        let headers = attachment_headers("notes.txt", "text/plain", b"x");
+        assert!(
+            headers.starts_with("Content-Type: text/plain; name=\"notes.txt\"\r\n"),
+            "Content-Type 参数形式改变: {headers}"
+        );
+        assert!(
+            headers.contains("Content-Disposition: attachment; filename=\"notes.txt\"\r\n"),
+            "Content-Disposition 参数形式改变: {headers}"
+        );
+        assert!(!headers.contains("*="));
+    }
+
+    #[test]
+    fn cjk_attachment_filenames_use_rfc2231_disposition_and_quoted_2047_type() {
+        // 修复回归：非 ASCII 名此前是裸 RFC2047 参数值，Python email policy.default 丢失参数。
+        let name = "中文附件.txt";
+        let headers = attachment_headers(name, "text/plain", b"x");
+        let expected_pct = percent_encode_value(name);
+        // Content-Disposition：RFC 2231 扩展参数（严格解析器标准形式，单段也带位置 0）。
+        assert!(headers.contains(&format!("filename*0*=utf-8''{expected_pct}")));
+        // Content-Type：引号内 RFC2047（Gmail 等宽松客户端兼容路径）。
+        assert!(headers.contains("name=\"=?utf-8?B?"));
+        // 同一头内不得再同时出现裸 filename 与 filename*（mail-parser 续行合并会误拼接），
+        // 也不得出现裸（未加引号）encoded-word 参数值。
+        assert!(!headers.contains("filename=\""));
+        assert!(!headers.contains(" filename=?utf-8"));
+        assert!(!headers.contains("name*=utf-8"));
+        let parsed = parse_back(&assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "params",
+            body_text: "body",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[attachment(name, "text/plain", b"cjk-bytes")],
+        }));
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].0, name, "mail_parser 须取回中文原名");
+        assert_eq!(parsed.attachments[0].1, b"cjk-bytes");
+    }
+
+    #[test]
+    fn long_cjk_filenames_fold_and_segment_within_line_limits() {
+        // >75 字节触发 RFC2047 折行、percent 值 >64 触发 RFC2231 分段续行。
+        let name = "这是一个相当长的中文文件名用来测试多段编码续行行为是否正确保存原名.txt";
+        assert!(name.len() > 75);
+        let headers = attachment_headers(name, "application/octet-stream", b"long");
+        assert!(headers.contains("name=\"=?utf-8?B?"));
+        assert!(headers.contains("filename*0*=utf-8''"));
+        assert!(headers.contains("filename*1*="));
+        assert!(!headers.contains("filename=\""));
+        // 折行后每一行都不得超过 RFC 5322 单行 998 字节上限。
+        for line in headers.split("\r\n") {
+            assert!(line.len() <= 998, "单行超限 {} 字节: {}", line.len(), line);
+        }
+        let parsed = parse_back(&assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "long",
+            body_text: "body",
+            body_html: None,
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[attachment(name, "application/octet-stream", b"long-bytes")],
+        }));
+        assert_eq!(parsed.attachments[0].0, name, "折行 + 分段后须逐字取回原名");
+        assert_eq!(parsed.attachments[0].1, b"long-bytes");
+    }
+
+    #[test]
+    fn empty_or_injected_filenames_fall_back_safely() {
+        let headers = attachment_headers("   ", "text/plain", b"x");
+        assert!(headers.contains("name=\"attachment.bin\""));
+        assert!(headers.contains("filename=\"attachment.bin\""));
+        // 含引号 / 分号的注入形名字走编码路径，不能破坏参数结构。
+        let headers = attachment_headers("evil\";.txt", "text/plain", b"x");
+        assert!(headers.contains("filename*0*=utf-8''evil%22%3B.txt"));
+        assert!(!headers.contains("evil\";"));
     }
 
     #[test]

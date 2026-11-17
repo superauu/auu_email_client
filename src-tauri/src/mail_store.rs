@@ -615,7 +615,15 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         clauses.push("EXISTS(SELECT 1 FROM message_folders mf WHERE mf.account_id=m.account_id AND mf.message_id=m.id AND mf.folder_id=?)");
         args.push(Box::new(folder.clone()));
     } else if let Some(kind) = &folder_kind {
-        clauses.push("(CASE WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN ?='archive' ELSE EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = ?) END)");
+        // 移动族意图（archive / delete / move）覆盖真实目录归属：删除投影为废纸篓，
+        // 移动投影为目标目录的 kind；其余按既有 membership 判断。
+        clauses.push("(CASE \
+          WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1) THEN ?='trash' \
+          WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN ?='archive' \
+          WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='move') THEN (SELECT f.kind FROM folders f WHERE f.id=(SELECT c.target_folder FROM message_changes c WHERE c.message_id=m.id AND c.field='move' LIMIT 1))=? \
+          ELSE EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = ?) END)");
+        args.push(Box::new(kind.clone()));
+        args.push(Box::new(kind.clone()));
         args.push(Box::new(kind.clone()));
         args.push(Box::new(kind.clone()));
     }
@@ -625,7 +633,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         clauses.push("m.starred = 1");
     }
     if exclude_trash {
-        clauses.push("(EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) OR NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash'))");
+        clauses.push("(EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) OR (NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash') AND NOT EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1)))");
     }
     if let Some(label) = &query.label_id {
         clauses.push("EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?)");
@@ -654,7 +662,12 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     };
     let sql = format!(
         "SELECT m.id, m.account_id, COALESCE(m.original_remote_id,m.remote_id), m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
-           CASE WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) END AS mailbox, m.state_revision
+           CASE \
+             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1) THEN 'trash' \
+             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' \
+             WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='move') THEN COALESCE((SELECT f.kind FROM folders f WHERE f.id=(SELECT c.target_folder FROM message_changes c WHERE c.message_id=m.id AND c.field='move' LIMIT 1)),(SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1)) \
+             ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) \
+           END AS mailbox, m.state_revision
          ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing,m.cc_json,m.reply_to_json FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
     );
     let mut stmt = conn
@@ -875,6 +888,8 @@ mod tests {
                 unread: Some(false),
                 starred: Some(true),
                 archive: Some(true),
+                delete: None,
+                move_to: None,
             },
         )
         .unwrap();

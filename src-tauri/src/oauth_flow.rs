@@ -421,7 +421,10 @@ mod tests {
         assert!(page.contains("授权成功"));
         assert!(page.contains("text/html") || page.contains("<!DOCTYPE html>"));
         assert!(page.contains("AuuMail"));
-        assert!(page.contains("src=\"data:image/png;base64,"), "品牌图必须以内嵌 data URI 提供，不得引用外部资源");
+        assert!(
+            page.contains("src=\"data:image/png;base64,"),
+            "品牌图必须以内嵌 data URI 提供，不得引用外部资源"
+        );
         let lowered = page.to_ascii_lowercase();
         for forbidden in ["<script", "<link", "@import", "url(http", "<iframe"] {
             assert!(!lowered.contains(forbidden), "回调页不得包含 {forbidden}");

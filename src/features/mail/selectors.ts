@@ -1,4 +1,5 @@
-import type { MailMessage, MailQuery } from '../../domain/mail';
+import { t } from '../../i18n/core';
+import type { MailMessage, MailQuery, MailboxKind } from '../../domain/mail';
 
 export function selectMessages(messages: MailMessage[], query: MailQuery): MailMessage[] {
   const needle = query.search.trim().toLocaleLowerCase();
@@ -19,6 +20,10 @@ export function selectMessages(messages: MailMessage[], query: MailQuery): MailM
   }).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
 }
 
-export const mailboxNames = {
-  inbox: '收件箱', starred: '星标邮件', sent: '已发送', drafts: '草稿箱', archive: '归档', trash: '废纸篓', other: '其他邮件',
-} as const;
+/** 邮箱类型的本地化显示名（每次调用取当前语言）。 */
+export function mailboxName(kind: MailboxKind): string {
+  const known: Record<MailboxKind, Parameters<typeof t>[0]> = {
+    inbox: 'nav.mailbox.inbox', starred: 'nav.mailbox.starred', sent: 'nav.mailbox.sent', drafts: 'nav.mailbox.drafts', archive: 'nav.mailbox.archive', trash: 'nav.mailbox.trash', other: 'nav.mailbox.other',
+  };
+  return t(known[kind]);
+}

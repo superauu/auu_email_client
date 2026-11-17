@@ -1,6 +1,6 @@
 # 发送与 outbox 设计（SMTP）
 
-状态：2026-11-16 已实现；真实 Gmail 自发自收附件下载与回复会话归组已验收，抄送 / 密送独立收件与其他客户端兼容仍待验收，中文附件名严格 MIME 参数解析存在待修问题（见下）。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
+状态：2026-11-16 已实现；2026-11-17 修复中文附件名严格 MIME 参数兼容（见「附件文件名参数编码」）。真实 Gmail 自发自收附件下载与回复会话归组已验收；抄送 / 密送独立收件、修复后附件名在 Gmail 与严格解析器的复验仍待验收。核心铁律继承 AGENTS / STATUS：**发送结果不明时不重复发送，不把任何中间状态伪装成成功**。
 
 ## 目标
 
@@ -110,7 +110,18 @@ failed --[返回草稿修改]--> 本机草稿             (原子解除占用，
 
 本轮 Gmail 网页原会话内实际显示原邮件与回复两封，下载的回复原文中 In-Reply-To / References 正确引用原邮件。Cc / Bcc 留空，因此不覆盖独立抄送密送收件或隐私；接近 16 MiB 的附件、其他提供商及上列故障场景不因本轮通过而视为已验收。详细记录见 STATUS。
 
-**已发现待修的兼容性问题**：非 ASCII 文件名当前以未加引号的 RFC2047 编码参数输出，Gmail / mail_parser 可识别，但 Python `email` 的 `policy.default` 丢失该原文中的中文 filename / name 参数。需修正标准参数编码并补严格解析器回归；此次通过只证明 Gmail 中所测文件的显示与字节往返。
+**已发现待修的兼容性问题**：~~非 ASCII 文件名当前以未加引号的 RFC2047 编码参数输出~~（2026-11-17 已修复，见下）。
+
+## 附件文件名参数编码（2026-11-17 修复）
+
+- **原问题**：非 ASCII 文件名以未加引号的 RFC2047 encoded-word 直接作 `name=` / `filename=` 参数值，不符合 MIME 参数语法；Gmail 与 mail-parser 宽松识别，但 Python `email` 的 `policy.default` 丢失该参数（实测 `get_filename()` 返回 None）。
+- **修复形式**（`outbox.rs::attachment_headers`）：
+  - ASCII 安全名保持 `filename="name"` 引号串，输出与既有格式逐字节一致；
+  - 非 ASCII 名在 **Content-Disposition** 输出 RFC 2231 扩展参数 `filename*0*=utf-8''…`（percent 编码按 63 字符 / 21 个完整转义分段续行，分段不得切断 %XX）；
+  - **Content-Type** 的 `name=` 使用引号内 RFC2047 encoded-word 作为宽松客户端（Gmail 等）回退；
+  - 两类参数分置两个头：同一头内裸 `filename` 与 `filename*` 并存会被 mail-parser 的续行合并误拼接为「原名 + 重复段」。
+- **验证**：真实组装输出经 Python 3.13 `email.parser` + `policy.default` 解码，短 / 长中文名与字节内容全部还原（`get_filename()` 正确）；mail-parser 回读回归覆盖 ASCII 不变、中文名双形式、长名折行 + 分段 + 998 字节行限、空名回退与注入形名字。Rust 全套 234 测试通过。
+- **仍待真实验收**：修复后的中文名附件在 Gmail 网页实际投递 / 下载、以及与其他客户端（Outlook 等）的显示兼容需重新自发自收核对；此前 Gmail 通过只证明旧编码在 Gmail 中所测文件的显示与字节往返。
 
 ## 明确不做
 

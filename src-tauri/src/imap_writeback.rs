@@ -4,7 +4,7 @@ use crate::{
     mail_sync::SharedDb,
     message_changes::{self, Intent},
 };
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::{
     io::{Read, Write},
     sync::{Arc, Mutex},
@@ -238,15 +238,53 @@ pub fn flush<S: Read + Write>(
                 continue;
             }
         }
-        if intent.field == "archive" && (!can_move || archive.is_none() || trace.is_none()) {
+        // 移动族目标：archive 由调用方解析唯一归档目录；delete / move 按入队时落库的
+        // folders.id 解析远端名称，目录消失按 conflict 保留本机，不猜测新目录。
+        let is_move_family = matches!(intent.field.as_str(), "archive" | "delete" | "move");
+        let target_name: Option<String> = if !is_move_family {
+            None
+        } else if intent.field == "archive" {
+            archive.map(Into::into)
+        } else {
+            let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+            let name: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM folders WHERE id=?1 AND account_id=?2",
+                    params![intent.target.as_deref().unwrap_or(""), &intent.account_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|_| AppError::storage("无法读取目标文件夹"))?;
+            drop(conn);
+            match name {
+                Some(name) => Some(name),
+                None => {
+                    state(
+                        db,
+                        &intent,
+                        "conflict",
+                        Some("目标文件夹已不存在或不可用；已保留本机移动。"),
+                        None,
+                    )?;
+                    warnings.push("移动未回写：目标文件夹无法确认。".into());
+                    continue;
+                }
+            }
+        };
+        if is_move_family && (!can_move || target_name.is_none() || trace.is_none()) {
+            let label = if intent.field == "archive" {
+                "归档"
+            } else {
+                "移动"
+            };
             state(
                 db,
                 &intent,
                 "conflict",
-                Some("服务器未提供 MOVE 或唯一归档文件夹；已保留本机归档。"),
+                Some("服务器未提供 MOVE 或目标文件夹无法确认；已保留本机修改。"),
                 None,
             )?;
-            warnings.push("归档未回写：服务器能力或目标文件夹无法确认。".into());
+            warnings.push(format!("{label}未回写：服务器能力或目标文件夹无法确认。"));
             continue;
         }
         let selected = match session.select(&intent.folder) {
@@ -294,11 +332,18 @@ pub fn flush<S: Read + Write>(
             if !message_changes::current(&conn, &intent)? {
                 continue;
             }
-            if !message_changes::transition(&mut conn, &intent, "applying", None, archive)? {
+            // archive 在 applying 时记录解析出的归档目录；delete / move 的目标已在入队时落库。
+            let applying_target = if intent.field == "archive" {
+                archive
+            } else {
+                None
+            };
+            if !message_changes::transition(&mut conn, &intent, "applying", None, applying_target)?
+            {
                 continue;
             }
         }
-        if intent.field != "archive" {
+        if !is_move_family {
             let (flag, add) = if intent.field == "unread" {
                 ("\\Seen", !intent.value)
             } else {
@@ -366,28 +411,28 @@ pub fn flush<S: Read + Write>(
                     return Err(AppError::network("邮件标记回写未确认；本机修改已保存"));
                 }
             }
-        } else {
-            let target = archive.expect("checked archive");
+        } else if is_move_family {
+            let target = target_name.as_deref().expect("checked target");
             let trace = trace.expect("checked trace");
             if target == intent.folder {
                 state(
                     db,
                     &intent,
                     "conflict",
-                    Some("邮件已在目标文件夹，请核对本机归档。"),
+                    Some("邮件已在目标文件夹，请核对本机移动。"),
                     None,
                 )?;
                 continue;
             }
             trace
                 .lock()
-                .map_err(|_| AppError::storage("归档响应不可用"))?
+                .map_err(|_| AppError::storage("移动响应不可用"))?
                 .arm(intent.uid);
             let result = session.uid_mv(intent.uid.to_string(), target);
             let mapping = {
                 let mut capture = trace
                     .lock()
-                    .map_err(|_| AppError::storage("归档响应不可用"))?;
+                    .map_err(|_| AppError::storage("移动响应不可用"))?;
                 capture.armed = false;
                 if capture.invalid {
                     None
@@ -413,16 +458,18 @@ pub fn flush<S: Read + Write>(
                         db,
                         &intent,
                         "unknown",
-                        Some("归档命令已发出，结果或目标 UID 未确认；不会自动重试，请核对服务器。"),
+                        Some("移动命令已发出，结果或目标 UID 未确认；不会自动重试，请核对服务器。"),
                         Some(target),
                     )?;
-                    warnings.push("归档结果待核对，已停止自动重试。".into());
+                    warnings.push("移动结果待核对，已停止自动重试。".into());
                     // A failed command can mean a broken stream; do not issue more commands on it.
                     if result.is_err() {
-                        return Err(AppError::network("归档结果未确认；本机归档仍保留"));
+                        return Err(AppError::network("移动结果未确认；本机修改仍保留"));
                     }
                 }
             }
+        } else {
+            unreachable!("intent fields are flags or the move family")
         }
     }
     Ok(warnings)
@@ -438,25 +485,35 @@ fn acknowledge_move(
     let mut conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
     let tx = conn
         .transaction()
-        .map_err(|_| AppError::storage("无法保存归档结果"))?;
+        .map_err(|_| AppError::storage("无法保存移动结果"))?;
     if !message_changes::current(&tx, intent)? {
-        return Err(AppError::conflict("账号或归档修改已改变，归档结果需核对。"));
+        return Err(AppError::conflict("账号或移动修改已改变，移动结果需核对。"));
     }
+    // 目标 kind 与 folders 表保持一致；表记录缺失时保守使用 archive（移动族仍要求目录存在）。
+    let kind: String = tx
+        .query_row(
+            "SELECT kind FROM folders WHERE account_id=?1 AND remote_id=?2",
+            params![&intent.account_id, target],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| AppError::storage("无法读取目标文件夹类型"))?
+        .unwrap_or_else(|| "archive".into());
     let folder = format!("{}:folder:{target}", intent.account_id);
     // Preserve the stable local message id and event references; only the verified remote locator changes.
     tx.execute("UPDATE messages SET remote_id=?1,remote_folder=?2,remote_uid_validity=?3,remote_uid=?4,remote_generation=?5,state_revision=state_revision+1 WHERE id=?6 AND account_id=?7",
-      params![format!("imap:archive:{validity}:{uid}"),target,validity,uid,intent.generation,intent.message_id,intent.account_id]).map_err(|_|AppError::storage("归档定位未能保存，请核对服务器"))?;
+      params![format!("imap:{kind}:{validity}:{uid}"),target,validity,uid,intent.generation,intent.message_id,intent.account_id]).map_err(|_|AppError::storage("移动定位未能保存，请核对服务器"))?;
     tx.execute(
         "DELETE FROM message_folders WHERE account_id=?1 AND message_id=?2",
         params![intent.account_id, intent.message_id],
     )
-    .map_err(|_| AppError::storage("无法更新归档文件夹"))?;
+    .map_err(|_| AppError::storage("无法更新文件夹归属"))?;
     tx.execute(
         "INSERT INTO message_folders VALUES (?1,?2,?3)",
         params![intent.account_id, intent.message_id, folder],
     )
-    .map_err(|_| AppError::storage("无法保存归档文件夹"))?;
-    tx.execute("DELETE FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field='archive' AND revision=?3",params![intent.account_id,intent.message_id,intent.revision]).map_err(|_|AppError::storage("无法确认归档"))?;
+    .map_err(|_| AppError::storage("无法保存文件夹归属"))?;
+    tx.execute("DELETE FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field=?3 AND revision=?4",params![intent.account_id,intent.message_id,intent.field,intent.revision]).map_err(|_|AppError::storage("无法确认移动"))?;
     tx.execute("UPDATE message_changes SET source_folder=?1,source_validity=?2,source_uid=?3 WHERE account_id=?4 AND message_id=?5 AND state IN ('queued','failed')",params![target,validity,uid,intent.account_id,intent.message_id]).map_err(|_|AppError::storage("无法更新待回写定位"))?;
     tx.commit()
         .map_err(|_| AppError::storage("归档结果提交失败"))
@@ -830,6 +887,80 @@ pub(crate) mod tests {
             .iter()
             .any(|line| line.contains("EXPUNGE") || line.contains("COPY ")));
     }
+    #[test]
+    fn delete_resolves_trash_folder_and_acknowledges_with_target_kind() {
+        let db = db();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute("INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES ('acc:folder:Trash','acc','Trash','Trash','trash')", []).unwrap();
+            conn.execute("INSERT INTO imap_folder_state (account_id,remote_id,available) VALUES ('acc','Trash',1)", []).unwrap();
+        }
+        edit(
+            &db,
+            message_changes::Patch {
+                delete: Some(true),
+                ..Default::default()
+            },
+        );
+        let (mut s, t, log) = session(
+            vec![
+                capability(),
+                select(),
+                fetch(""),
+                step(
+                    "UID MOVE 1 \"Trash\"",
+                    "{tag} OK [COPYUID 30 1 9] moved\r\n",
+                ),
+            ],
+            None,
+        );
+        // archive 参数为 None：delete 不依赖调用方解析的归档目录。
+        flush(&db, "acc", &mut s, None, Some(&t)).unwrap();
+        let conn = db.lock().unwrap();
+        let saved = crate::mail_store::message_by_id(&conn, "acc", "m").unwrap();
+        assert_eq!(saved.mailbox, "trash");
+        assert_eq!(saved.remote_id.as_deref(), Some("imap:trash:30:9"));
+        assert_eq!(saved.id, "m");
+        assert!(saved.changes.is_empty());
+        assert!(log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("UID MOVE 1 \"Trash\"")));
+        assert!(!log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("EXPUNGE")));
+    }
+
+    #[test]
+    fn move_with_missing_target_folder_conflicts_without_sending_any_move() {
+        let db = db();
+        // 先入队合法目标，再在回写前删除目录：flush 时按 conflict 保留本机，不发任何移动命令。
+        {
+            let conn = db.lock().unwrap();
+            conn.execute("INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES ('acc:folder:Gone','acc','Gone','Gone','other')", []).unwrap();
+            conn.execute("INSERT INTO imap_folder_state (account_id,remote_id,available) VALUES ('acc','Gone',1)", []).unwrap();
+        }
+        edit(
+            &db,
+            message_changes::Patch {
+                move_to: Some("acc:folder:Gone".into()),
+                ..Default::default()
+            },
+        );
+        db.lock()
+            .unwrap()
+            .execute("DELETE FROM folders WHERE id='acc:folder:Gone'", [])
+            .unwrap();
+        // flush 有意图时总会读取服务器能力，脚本需提供 CAPABILITY 应答。
+        let (mut s, t, log) = session(vec![capability()], None);
+        flush(&db, "acc", &mut s, None, Some(&t)).unwrap();
+        assert_eq!(statuses(&db)[0].state, "conflict");
+        assert!(!log.lock().unwrap().iter().any(|line| line.contains("MOVE")));
+    }
+
     #[test]
     fn ambiguous_move_is_never_retried_even_after_restart_recovery() {
         for response in [

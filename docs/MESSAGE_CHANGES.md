@@ -1,6 +1,6 @@
-# 已读、星标与归档
+# 已读、星标、归档、删除与移动
 
-状态：2026-11-11，A3.3 邮件状态基础与 A3.4 主动恢复均已实现并用脚本会话验证；恢复细节见 REMOTE_RECOVERY。尚未用真实服务器验收。浏览器演示只保存演示数据，不连接 IMAP。
+状态：2026-11-11，A3.3 邮件状态基础与 A3.4 主动恢复均已实现并用脚本会话验证；2026-11-17 追加删除到废纸篓与移动到文件夹（见「删除与移动」）。恢复细节见 REMOTE_RECOVERY。尚未用真实服务器验收删除 / 移动。浏览器演示只保存演示数据，不连接 IMAP。
 
 ## 用户行为与保存边界
 
@@ -31,6 +31,14 @@
 | mail_keep_message_local | accountId、messageId | 停止这些修改的远端回写，返回本机投影 |
 
 patch 必须非空，archive 只接受 true，未知字段拒绝；核对账号所有权，不操作草稿。归档通过 intent 覆盖 UI 的 mailbox 与分页文件夹筛选，确认 MOVE 后才改变真实 folder membership；保留数据库多文件夹结构。
+
+## 删除与移动（2026-11-17）
+
+- **意图字段**：`delete: true`（删除到废纸篓）与 `moveTo: folderId`（移动到指定目录）与 archive 同属「移动族」，v16 迁移扩展 `message_changes.field` 的 CHECK 并重建表（SQLite 无法改 CHECK；既有意图原样迁移）。移动族一次只允许一个；新家族意图取代旧的 queued / failed / conflict / local 家族意图，但任一族意图处于 applying / unknown 时拒绝新移动（防重复 MOVE，与归档守卫一致）。
+- **目标解析**：delete 要求该账号恰有一个可用的 `trash` 目录（multi/0 均拒绝并说明；\Trash special-use 优先于名称启发式，Gmail `[Gmail]/Bin`、QQ / 163「已删除」均能识别）；moveTo 要求目录存在、可用、且不是邮件当前目录。目标在入队时写入 `target_folder`，回写时按目录名执行 UID MOVE；目录在入队后消失按 conflict 保留本机，不猜新目录。
+- **本机投影**：delete 意图把邮件投影到废纸篓（星标 / 标签视图同样排除），move 意图投影为目标目录的 kind；导航侧与归档一致提供「废纸篓」意图入口（唯一远端目录不重复展示物理副本）。POP3 / 演示账号为 `local` 仅本机状态，不回写服务器。
+- **回写**：复用归档的 MOVE 路径——CAPABILITY 含 MOVE、单 UID COPYUID 确认、确认后更新定位 / 目录归属并清除对应意图；结果不明为 unknown、禁止自动重试；remote_id kind 取目标目录 kind（`imap:trash:` / `imap:other:` 等）。
+- **已知边界**：不做永久删除（EXPUNGE）、不做跨账号移动；Gmail 多标签 / 原生归档仍在归档语义内处理；真实服务器删除 / 移动待授权账号验收。
 
 ## 状态与冲突规则
 

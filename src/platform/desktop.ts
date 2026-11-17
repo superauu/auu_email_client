@@ -4,6 +4,7 @@ import type { SkinCatalog } from '../themes/contract';
 import type { SyncQueueSnapshot, SyncOutcome } from '../domain/sync';
 export type { SyncOutcome } from '../domain/sync';
 import type { MailAccount, MailDraft, DraftSaveOptions, MailEvent, MailLabel, MailMessage, MessagePatch, RecoveryAction, ProviderKind, WorkspaceSnapshot } from '../domain/mail';
+import { t } from '../i18n/core';
 
 export interface AppInfo {
   version: string;
@@ -44,12 +45,12 @@ export const desktop = {
     return isDesktop() ? invoke('list_user_skins') : { skins: [], warnings: [] };
   },
   async openSkinDirectory(): Promise<void> {
-    if (!isDesktop()) throw new Error('请在桌面版中打开皮肤目录。');
+    if (!isDesktop()) throw new Error(t('app.openSkinDirDesktopOnly'));
     await invoke('open_skin_directory');
   },
   /** Open a mail link in the system browser / mail app; Rust enforces the scheme allowlist. */
   async openExternal(url: string): Promise<void> {
-    if (!isDesktop()) throw new Error('请在桌面版中打开外部链接。');
+    if (!isDesktop()) throw new Error(t('app.openExternalDesktopOnly'));
     await invoke('open_external', { url });
   },
   async windowAction(action: 'minimize' | 'maximize' | 'close' | 'drag'): Promise<void> {

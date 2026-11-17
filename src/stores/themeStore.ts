@@ -4,6 +4,7 @@ import { mergeCatalog, resolveSkin, type SkinPack, type ThemeMode } from '../the
 import { desktop } from '../platform/desktop';
 import { readPreference, writePreference } from '../lib/preferences';
 import { errorMessage } from '../domain/errors';
+import { t } from '../i18n/core';
 
 const KEY = 'auumail.ui.theme.v1';
 const saved = readPreference(KEY, (raw) => {
@@ -26,7 +27,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   skins: builtinSkins, warnings: [], loading: false,
   setAppearance(skinId, mode) {
     const persisted = writePreference(KEY, { skinId, mode });
-    set({ skinId, mode, ...(!persisted ? { warnings: [...get().warnings, '外观设置暂时无法保存，当前会话仍可使用。'] } : {}) });
+    set({ skinId, mode, ...(!persisted ? { warnings: [...get().warnings, t('theme.prefNotSaved')] } : {}) });
   },
   async rescan() {
     if (get().loading) return;

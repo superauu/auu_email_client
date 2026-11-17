@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { isRecipientAddress, splitRecipients } from '../../domain/recipients';
+import { useI18n } from '../../i18n/react';
 
 export interface RecipientSuggestion { name: string; email: string }
 
@@ -8,6 +9,7 @@ export function RecipientField({ label, value, onChange, suggestions, disabled, 
   label: string; value: string; onChange: (value: string) => void;
   suggestions: RecipientSuggestion[]; disabled?: boolean; autoFocus?: boolean; children?: React.ReactNode;
 }) {
+  const t = useI18n();
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
   const [tokens, setTokens] = useState(() => splitRecipients(value));
@@ -41,11 +43,11 @@ export function RecipientField({ label, value, onChange, suggestions, disabled, 
     <div className="recipient-field">
       <div className="recipient-input-wrap">
         {tokens.map((token, index) => <span className={`recipient-chip${isRecipientAddress(token) ? '' : ' is-invalid'}`} key={`${index}-${token}`}>
-          <button type="button" className="recipient-chip-edit" disabled={disabled} onClick={() => edit(index)} title={`${token} · 点击编辑`}>{token}</button>
-          <button type="button" disabled={disabled} aria-label={`从${label}移除 ${token}`} onClick={() => { publish(tokens.filter((_, i) => i !== index), pending); input.current?.focus(); }}><X size={12} /></button>
+          <button type="button" className="recipient-chip-edit" disabled={disabled} onClick={() => edit(index)} title={t('recipients.chipEditTitle', { address: token })}>{token}</button>
+          <button type="button" disabled={disabled} aria-label={t('recipients.removeAria', { field: label, address: token })} onClick={() => { publish(tokens.filter((_, i) => i !== index), pending); input.current?.focus(); }}><X size={12} /></button>
         </span>)}
         <input ref={input} id={id} value={pending} role="combobox" aria-autocomplete="list" aria-expanded={matches.length > 0} aria-controls={matches.length ? `${id}-list` : undefined} aria-activedescendant={highlight >= 0 && matches[highlight] ? `${id}-${highlight}` : undefined} aria-invalid={invalid} aria-describedby={invalid ? `${id}-error` : undefined}
-          placeholder={tokens.length ? '' : '输入邮件地址'} autoFocus={autoFocus} autoComplete="off" disabled={disabled}
+          placeholder={tokens.length ? '' : t('recipients.placeholder')} autoFocus={autoFocus} autoComplete="off" disabled={disabled}
           maxLength={Math.max(0, 1000 - tokens.join(', ').length - (tokens.length ? 2 : 0))}
           onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); commit(); }}
           onChange={event => { setFocused(true); const text = event.target.value; if (/[,;；，\n]/.test(text) && !text.includes('"')) commit(text); else publish(tokens, text); }}
@@ -60,9 +62,9 @@ export function RecipientField({ label, value, onChange, suggestions, disabled, 
             else if (event.key === 'Backspace' && !pending && tokens.length) { event.preventDefault(); edit(tokens.length - 1); }
           }} />
       </div>
-      {invalid && <span className="recipient-error" id={`${id}-error`}>邮件地址格式无效，点击地址可修改。</span>}
-      {limitError && <span className="recipient-error" role="alert">地址总长度超过 1000 字符，请分批减少收件人后重试。</span>}
-      {matches.length > 0 && <div className="recipient-suggestions" id={`${id}-list`} role="listbox" aria-label={`${label}建议`}>
+      {invalid && <span className="recipient-error" id={`${id}-error`}>{t('recipients.invalidFormat')}</span>}
+      {limitError && <span className="recipient-error" role="alert">{t('recipients.limitExceeded')}</span>}
+      {matches.length > 0 && <div className="recipient-suggestions" id={`${id}-list`} role="listbox" aria-label={t('recipients.suggestionsAria', { field: label })}>
         {matches.map((item, index) => <button type="button" key={item.email} role="option" id={`${id}-${index}`} aria-selected={index === highlight} onMouseDown={event => event.preventDefault()} onClick={() => { commit(item.email); input.current?.focus(); }}><span>{item.name || item.email}</span><small>{item.email}</small></button>)}
       </div>}
     </div>

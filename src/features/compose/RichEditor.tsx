@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, Undo2, Redo2, RemoveFormatting, Link2, AlignLeft, AlignCenter, AlignRight, AlignJustify, Minus, Type, X } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 const SAFE_LINK = /^(https?:\/\/|mailto:)[^\s<>"']+$/i;
 const COMMANDS = ['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList', 'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'];
@@ -68,6 +69,7 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
   initialHtml: string; initialText: string; quoteHtml?: string | null;
   onChange: (html: string, text: string) => void; disabled?: boolean; formatting?: boolean;
 }) {
+  const t = useI18n();
   const editorRef = useRef<HTMLDivElement>(null);
   const selection = useRef<Range | null>(null);
   const [active, setActive] = useState<Record<string, boolean>>({});
@@ -144,39 +146,39 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
 
   return <div className="compose-rich">
     <div className="compose-format-panel" hidden={!formatting}>
-      <div className="compose-toolbar" role="toolbar" aria-label="格式工具栏">
-        <select aria-label="段落样式" value={block} disabled={disabled} onChange={event => exec('formatBlock', event.target.value)}><option value="p">正文</option><option value="h1">标题 1</option><option value="h2">标题 2</option><option value="h3">标题 3</option><option value="blockquote">引用</option></select>
-        <select aria-label="字号" value={fontSize} disabled={disabled} onChange={event => exec('fontSize', event.target.value)}><option value="2">10</option><option value="3">12</option><option value="4">14</option><option value="5">18</option><option value="6">24</option></select>
+      <div className="compose-toolbar" role="toolbar" aria-label={t('editor.toolbarAria')}>
+        <select aria-label={t('editor.paragraphAria')} value={block} disabled={disabled} onChange={event => exec('formatBlock', event.target.value)}><option value="p">{t('editor.blockP')}</option><option value="h1">{t('editor.blockH1')}</option><option value="h2">{t('editor.blockH2')}</option><option value="h3">{t('editor.blockH3')}</option><option value="blockquote">{t('editor.blockQuote')}</option></select>
+        <select aria-label={t('editor.fontSizeAria')} value={fontSize} disabled={disabled} onChange={event => exec('fontSize', event.target.value)}><option value="2">10</option><option value="3">12</option><option value="4">14</option><option value="5">18</option><option value="6">24</option></select>
         <span className="toolbar-divider" />
-        {tool('bold', Bold, '加粗 (Ctrl+B)', true)}{tool('italic', Italic, '斜体 (Ctrl+I)', true)}{tool('underline', Underline, '下划线 (Ctrl+U)', true)}{tool('strikeThrough', Strikethrough, '删除线', true)}
-        <label className="toolbar-color" title="文字颜色"><Type size={16} /><input type="color" aria-label="文字颜色" disabled={disabled} onFocus={event => { const color = document.queryCommandValue('foreColor'); if (/^#[a-f\d]{6}$/i.test(color)) event.target.value = color; }} onChange={event => exec('foreColor', event.target.value)} /></label>
+        {tool('bold', Bold, t('editor.bold'), true)}{tool('italic', Italic, t('editor.italic'), true)}{tool('underline', Underline, t('editor.underline'), true)}{tool('strikeThrough', Strikethrough, t('editor.strike'), true)}
+        <label className="toolbar-color" title={t('editor.color')}><Type size={16} /><input type="color" aria-label={t('editor.color')} disabled={disabled} onFocus={event => { const color = document.queryCommandValue('foreColor'); if (/^#[a-f\d]{6}$/i.test(color)) event.target.value = color; }} onChange={event => exec('foreColor', event.target.value)} /></label>
         <span className="toolbar-divider" />
-        {tool('insertUnorderedList', List, '项目符号列表', true)}{tool('insertOrderedList', ListOrdered, '编号列表', true)}
-        {tool('justifyLeft', AlignLeft, '左对齐', true)}{tool('justifyCenter', AlignCenter, '居中', true)}{tool('justifyRight', AlignRight, '右对齐', true)}{tool('justifyFull', AlignJustify, '两端对齐', true)}
-        <button type="button" title="引用" aria-label="引用" disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => exec('formatBlock', 'blockquote')}><Quote size={16} /></button>
-        <button type="button" title="插入链接" aria-label="插入链接" aria-expanded={linkOpen} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => { setLinkText(window.getSelection()?.toString() ?? ''); setLinkOpen(value => !value); }}><Link2 size={16} /></button>
-        {tool('insertHorizontalRule', Minus, '插入分割线')}{tool('removeFormat', RemoveFormatting, '清除格式')}
-        <span className="toolbar-divider" />{tool('undo', Undo2, '撤销')}{tool('redo', Redo2, '重做')}
+        {tool('insertUnorderedList', List, t('editor.bulletList'), true)}{tool('insertOrderedList', ListOrdered, t('editor.orderedList'), true)}
+        {tool('justifyLeft', AlignLeft, t('editor.alignLeft'), true)}{tool('justifyCenter', AlignCenter, t('editor.alignCenter'), true)}{tool('justifyRight', AlignRight, t('editor.alignRight'), true)}{tool('justifyFull', AlignJustify, t('editor.alignJustify'), true)}
+        <button type="button" title={t('editor.quote')} aria-label={t('editor.quote')} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => exec('formatBlock', 'blockquote')}><Quote size={16} /></button>
+        <button type="button" title={t('editor.insertLink')} aria-label={t('editor.insertLink')} aria-expanded={linkOpen} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => { setLinkText(window.getSelection()?.toString() ?? ''); setLinkOpen(value => !value); }}><Link2 size={16} /></button>
+        {tool('insertHorizontalRule', Minus, t('editor.insertHr'))}{tool('removeFormat', RemoveFormatting, t('editor.clearFormat'))}
+        <span className="toolbar-divider" />{tool('undo', Undo2, t('editor.undo'))}{tool('redo', Redo2, t('editor.redo'))}
       </div>
-      {linkOpen && <div className="toolbar-link" role="group" aria-label="插入链接" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setLinkOpen(false); restoreSelection(); } else if (event.key === 'Enter') { event.preventDefault(); insertLink(); } }}>
-        <label>显示文字<input aria-label="链接显示文字" value={linkText} onChange={event => setLinkText(event.target.value)} /></label>
-        <label>链接地址<input aria-label="链接地址" value={linkUrl} placeholder="https://example.com" onChange={event => setLinkUrl(event.target.value)} autoFocus /></label>
-        <div><button type="button" onClick={() => { setLinkOpen(false); restoreSelection(); }}>取消</button><button type="button" onClick={insertLink} disabled={!SAFE_LINK.test(linkUrl.trim())}>插入</button></div>
+      {linkOpen && <div className="toolbar-link" role="group" aria-label={t('editor.insertLink')} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setLinkOpen(false); restoreSelection(); } else if (event.key === 'Enter') { event.preventDefault(); insertLink(); } }}>
+        <label>{t('editor.linkTextLabel')}<input aria-label={t('editor.linkTextAria')} value={linkText} onChange={event => setLinkText(event.target.value)} /></label>
+        <label>{t('editor.linkUrlLabel')}<input aria-label={t('editor.linkUrlLabel')} value={linkUrl} placeholder="https://example.com" onChange={event => setLinkUrl(event.target.value)} autoFocus /></label>
+        <div><button type="button" onClick={() => { setLinkOpen(false); restoreSelection(); }}>{t('editor.cancel')}</button><button type="button" onClick={insertLink} disabled={!SAFE_LINK.test(linkUrl.trim())}>{t('editor.insert')}</button></div>
       </div>}
     </div>
     <div className="compose-editor-frame">
-      {empty && <div className="compose-placeholder" aria-hidden>在这里写下邮件正文…</div>}
-      <div ref={editorRef} className="compose-editor" contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline aria-label="邮件正文" spellCheck onInput={emit} onFocus={syncStates}
+      {empty && <div className="compose-placeholder" aria-hidden>{t('editor.placeholder')}</div>}
+      <div ref={editorRef} className="compose-editor" contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline aria-label={t('editor.bodyAria')} spellCheck onInput={emit} onFocus={syncStates}
         onPaste={event => {
           event.preventDefault();
           const html = event.clipboardData.getData('text/html');
           const text = event.clipboardData.getData('text/plain');
-          if ([...event.clipboardData.items].some(item => item.kind === 'file') || /<img\b/i.test(html)) setPasteNotice('图片未插入：目前仅支持文字与格式粘贴。');
+          if ([...event.clipboardData.items].some(item => item.kind === 'file') || /<img\b/i.test(html)) setPasteNotice(t('editor.pasteImageBlocked'));
           if (html) exec('insertHTML', cleanHtml(html));
           else if (text) exec('insertHTML', escapeHtml(text).replace(/\r?\n/g, '<br>'));
         }} />
     </div>
-    {pasteNotice && <div className="compose-editor-notice" role="status">{pasteNotice}<button type="button" aria-label="关闭粘贴提示" onClick={() => setPasteNotice('')}><X size={14} /></button></div>}
+    {pasteNotice && <div className="compose-editor-notice" role="status">{pasteNotice}<button type="button" aria-label={t('editor.pasteNoticeClose')} onClick={() => setPasteNotice('')}><X size={14} /></button></div>}
 
   </div>;
 }

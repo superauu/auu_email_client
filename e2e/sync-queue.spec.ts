@@ -5,12 +5,18 @@ import type { SyncJob } from '../src/domain/sync';
 import type { OutboxEntry } from '../src/domain/outbox';
 
 /** Test-only IPC harness. Validates UI behavior, not a real server or the Rust queue. */
-async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[] } = {}) {
+async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[]; huge?: number } = {}) {
   const accounts: MailAccount[] = (realAccounts ? [1, 2, 3] : []).map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
   if (options.pop3) accounts[2] = { ...accounts[2], provider: 'pop3' };
   await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion, navigation, options }) => {
     const workspace = { ...fixture, accounts: [...fixture.accounts, ...accounts] };
     if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', labelIds: [], unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }], cc: ['copy@mail.example'], replyTo: ['replies@mail.example'] });
+    if (options.huge) {
+      const base = workspace.messages[0];
+      for (let index = 0; index < options.huge; index++) {
+        workspace.messages.push({ ...base, id: `huge-${index}`, accountId: 'real-1', labelIds: [], unread: index % 7 === 0, subject: `大数据量邮件 ${index + 1}`, bodyText: `批量测试正文 ${index + 1}`, receivedAt: new Date(Date.UTC(2026, 0, 1) + index * 60000).toISOString(), changes: [], attachments: [] });
+      }
+    }
     if (recoveryMode) { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery = { state: recoveryMode === 'queued' ? 'queued' : 'available', detail: '旧缓存或未知归档需要远端核对。', location: null, evidence: null }; if (recoveryMode === 'unknown') { message.mailbox = 'archive'; message.changes = [{ field: 'archive', state: 'unknown', error: '归档结果待核对，不会自动重试。' }]; } }
     if (recoveryMode === 'fingerprint' || recoveryMode === 'unanchored') { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery!.fingerprint = { eligible: recoveryMode === 'fingerprint', reason: recoveryMode === 'fingerprint' ? '可信原定位仍在，可安全核对原文。' : '缺少可信原定位，不能升级为历史原文指纹。' }; }
     if (completion) {
@@ -80,8 +86,10 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           if (patch.unread !== undefined) message.unread = patch.unread;
           if (patch.starred !== undefined) message.starred = patch.starred;
           if (patch.archive) message.mailbox = 'archive';
+          if (patch.delete) message.mailbox = 'trash';
+          if (patch.moveTo) { const target = folderList.find(folder => folder.id === patch.moveTo); if (target) message.mailbox = target.kind as typeof message.mailbox; }
           if (message.accountId.startsWith('real-')) {
-            for (const field of ['unread', 'starred', 'archive'] as const) if (patch[field] !== undefined) message.changes = [...(message.changes ?? []).filter(change => change.field !== field), { field, state: 'queued', error: null }];
+            for (const field of ['unread', 'starred', 'archive', 'delete', 'move'] as const) if ((patch as Record<string, unknown>)[field] !== undefined) message.changes = [...(message.changes ?? []).filter(change => change.field !== field), { field, state: 'queued', error: null }];
           }
           message.stateRevision = (message.stateRevision ?? 0) + 1;
           return structuredClone(message);
@@ -794,4 +802,66 @@ test('sync lives in the workspace chrome with header sync-all, toolbar per-accou
   // 完成后 toast 反馈（设置关闭也可见）。
   await page.evaluate(() => (window as unknown as { __syncTest: { finish: (id: string, failure: boolean) => void } }).__syncTest.finish('real-1', false));
   await expect(page.locator('.toast')).toContainText('同步完成');
+});
+
+
+test('list multi-select batches mark-read and delete into trash', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  await expect(list).toBeVisible();
+  const rows = list.locator('.mail-row');
+  // 选择两封邮件进入批量模式。
+  await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
+  await rows.nth(1).getByRole('button', { name: /选择邮件/ }).click();
+  await expect(page.getByText('已选 2 封')).toBeVisible();
+  await list.getByRole('button', { name: '标为已读' }).click();
+  await expect(page.getByText('已选 2 封')).toHaveCount(0);
+  // 批量删除：全部收件箱移除，废纸篓出现两封。
+  await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
+  await rows.nth(1).getByRole('button', { name: /选择邮件/ }).click();
+  await list.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.getByText('已选 2 封')).toHaveCount(0);
+  await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
+  await expect(list.getByRole('article')).toHaveCount(2);
+  await page.screenshot({ path: info.outputPath('mail-management-trash.png') });
+});
+
+test('reader toolbar deletes to trash and moves between folders', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  await list.locator('.mail-row').nth(0).getByRole('button', { name: /阅读邮件/ }).click();
+  const reader = page.getByRole('region', { name: '邮件阅读区' });
+  await expect(reader).toBeVisible();
+  await reader.getByRole('button', { name: '移动当前邮件到其他文件夹' }).click();
+  await reader.getByRole('menuitem', { name: '移动到 项目邮件' }).click();
+  await reader.getByRole('button', { name: '删除当前邮件到废纸篓' }).click();
+  await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
+  await expect(list.getByRole('article')).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('mail-management-reader.png') });
+});
+
+
+test('large mailbox list renders only the virtual window and scrolls to the end', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true, true, { huge: 600 });
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  await expect(list).toBeVisible();
+  const rendered = await list.locator('.mail-row').count();
+  // 601+ 封邮件中只渲染视口窗口（< 120 行）。
+  expect(rendered).toBeGreaterThan(0);
+  expect(rendered).toBeLessThan(120);
+  const scroller = list.locator('.mail-list-scroll');
+  const metrics = await scroller.evaluate(element => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }));
+  expect(metrics.scrollHeight).toBeGreaterThan(600 * 60);
+  // 滚动到底部：仍只渲染窗口，并能看到最早的一封。
+  await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect(list.getByText('大数据量邮件 1', { exact: true })).toBeVisible();
+  const after = await list.locator('.mail-row').count();
+  expect(after).toBeLessThan(120);
+  // 虚拟列表下全选仍覆盖完整数据集。
+  await list.getByRole('button', { name: '选择当前列表全部邮件' }).click();
+  await expect(page.getByText(/已选 [0-9]+ 封/)).toBeVisible();
+  await page.screenshot({ path: info.outputPath('virtual-large-list.png') });
 });

@@ -1,6 +1,7 @@
 import type { DraftSaveOptions, MailDraft } from '../../domain/mail';
 import { errorMessage } from '../../domain/errors';
 import { validateDraft } from '../../domain/drafts';
+import { t } from '../../i18n/core';
 
 export interface DraftSessionState {
   draft: MailDraft;
@@ -73,7 +74,7 @@ export class DraftSession {
         const version = this.editVersion;
         const input = { ...this.state.draft, revision: this.revision, updatedAt: new Date().toISOString() };
         const saved = validateDraft(await this.write(input, { previousAccountId: this.owner }));
-        if (saved.id !== input.id || saved.accountId !== input.accountId || (saved.revision ?? 0) !== this.revision + 1) throw new Error('草稿保存结果无效，请保留当前内容。');
+        if (saved.id !== input.id || saved.accountId !== input.accountId || (saved.revision ?? 0) !== this.revision + 1) throw new Error(t('draft.invalidSaveResult'));
         this.revision = saved.revision!;
         this.owner = saved.accountId;
         const dirty = this.editVersion !== version;

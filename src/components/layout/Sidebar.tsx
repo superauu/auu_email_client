@@ -8,6 +8,7 @@ import { selectMessages } from '../../features/mail/selectors';
 import { accountDirectories, defaultShortcuts, isNavigationActive, navigationKey, type DirectoryEntry, type NavigationTarget } from '../../domain/navigation';
 import type { MailAccount, MailFolder, MailMessage, MailboxKind } from '../../domain/mail';
 import { isDesktop } from '../../platform/desktop';
+import { useI18n } from '../../i18n/react';
 
 const icons: Record<MailboxKind, typeof Inbox> = { inbox: Inbox, starred: Star, sent: Send, drafts: FilePenLine, archive: Archive, trash: Trash2, other: Folder };
 const emptyFolders: MailFolder[] = [];
@@ -16,22 +17,24 @@ function NavigationRow({ entry, active, messages, onSelect, secondary, pin }: {
   entry: DirectoryEntry; active: boolean; messages: MailMessage[]; onSelect: () => void; secondary?: string;
   pin?: { pinned: boolean; onToggle: () => void; accountName: string };
 }) {
+  const t = useI18n();
   const Icon = icons[entry.kind];
   const items = selectMessages(messages, { ...entry.target, labelId: null, search: '' });
   const total = entry.kind === 'drafts' || entry.kind === 'starred';
   const count = total ? items.length : items.filter(message => message.unread).length;
-  const metric = entry.kind === 'drafts' ? `${count} 份草稿` : entry.kind === 'starred' ? `${count} 封星标邮件` : `${count} 封未读`;
+  const metric = entry.kind === 'drafts' ? t('sidebar.draftCount', { count }) : entry.kind === 'starred' ? t('sidebar.starredCount', { count }) : t('sidebar.unreadCount', { count });
   const name = secondary ? `${entry.label} · ${secondary}` : entry.label;
   return <div className={`navigation-row${active ? ' is-active' : ''}`}>
     <button type="button" className="navigation-link" aria-label={name} aria-current={active ? 'page' : undefined} title={`${entry.description} · ${metric}`} onClick={onSelect}>
       <Icon size={16} /><span className="navigation-label"><span>{entry.label}</span>{secondary && <small>{secondary}</small>}</span>
-      {!entry.available ? <small className="navigation-unavailable">不可用</small> : count > 0 && <small className="navigation-count" title={metric} aria-hidden>{count}</small>}
+      {!entry.available ? <small className="navigation-unavailable">{t('sidebar.unavailable')}</small> : count > 0 && <small className="navigation-count" title={metric} aria-hidden>{count}</small>}
     </button>
-    {pin && <button type="button" className={`navigation-pin${pin.pinned ? ' is-pinned' : ''}`} aria-label={`${pin.pinned ? '取消固定' : '固定'} ${pin.accountName} / ${entry.label}`} aria-pressed={pin.pinned} title={pin.pinned ? '从常用移除' : '固定到常用'} onClick={pin.onToggle}>{pin.pinned ? <PinOff size={13} /> : <Pin size={13} />}</button>}
+    {pin && <button type="button" className={`navigation-pin${pin.pinned ? ' is-pinned' : ''}`} aria-label={pin.pinned ? t('sidebar.unpinAria', { account: pin.accountName, folder: entry.label }) : t('sidebar.pinAria', { account: pin.accountName, folder: entry.label })} aria-pressed={pin.pinned} title={pin.pinned ? t('sidebar.unpinTitle') : t('sidebar.pinTitle')} onClick={pin.onToggle}>{pin.pinned ? <PinOff size={13} /> : <Pin size={13} />}</button>}
   </div>;
 }
 
 export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () => void; onAccounts: () => void; onNavigate?: () => void }) {
+  const t = useI18n();
   const { accounts, messages, folders, labels, query, setQuery, view } = useWorkspaceStore(useShallow(s => ({ accounts: s.accounts, messages: s.messages, folders: s.folders ?? emptyFolders, labels: s.labels, query: s.query, setQuery: s.setQuery, view: s.view })));
   const { pinned, expanded, setExpanded, togglePinned, error } = useNavigationStore(useShallow(s => ({ pinned: s.pinned, expanded: s.expanded, setExpanded: s.setExpanded, togglePinned: s.togglePinned, error: s.error })));
   const openIds = expanded ?? (accounts[0] ? [accounts[0].id] : []);
@@ -54,38 +57,38 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
     const toggle = () => setExpanded(opened ? openIds.filter(id => id !== account.id) : [...openIds, account.id]);
     return <li className="account-branch" key={account.id}>
       <div className={`account-heading${query.accountId === account.id ? ' is-current' : ''}`}>
-        <button className="account-disclosure" type="button" aria-label={`${opened ? '折叠' : '展开'}${account.name}文件夹`} aria-expanded={opened} aria-controls={controls} onClick={toggle}>{opened ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
-        <button className="account-select" type="button" aria-label={account.name} aria-pressed={query.accountId === account.id} title={`${account.name} · ${account.email}${account.status === 'demo' ? ' · 演示账号' : ''}`} onClick={() => navigate(inbox.target)}>
-          <Avatar text={account.avatar} color={account.color} small /><span>{account.name}</span>{account.status === 'demo' && <small className="account-demo-badge" aria-hidden>演示</small>}{unread > 0 && <small className="navigation-count" aria-hidden title={`${unread} 封收件箱未读`}>{unread}</small>}
+        <button className="account-disclosure" type="button" aria-label={opened ? t('sidebar.collapseFolderAria', { account: account.name }) : t('sidebar.expandFolderAria', { account: account.name })} aria-expanded={opened} aria-controls={controls} onClick={toggle}>{opened ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+        <button className="account-select" type="button" aria-label={account.name} aria-pressed={query.accountId === account.id} title={`${account.name} · ${account.email}${account.status === 'demo' ? t('sidebar.demoAccountSuffix') : ''}`} onClick={() => navigate(inbox.target)}>
+          <Avatar text={account.avatar} color={account.color} small /><span>{account.name}</span>{account.status === 'demo' && <small className="account-demo-badge" aria-hidden>{t('sidebar.demoBadge')}</small>}{unread > 0 && <small className="navigation-count" aria-hidden title={t('sidebar.inboxUnreadTitle', { unread })}>{unread}</small>}
         </button>
       </div>
-      <nav id={controls} className="account-folders" aria-label={`${account.name}的文件夹`} hidden={!opened}>
+      <nav id={controls} className="account-folders" aria-label={t('sidebar.folderNavAria', { account: account.name })} hidden={!opened}>
         {entries.map(entry => <NavigationRow key={navigationKey(entry.target)} entry={entry} active={view === 'mail' && isNavigationActive(query, entry.target)} messages={messages} onSelect={() => navigate(entry.target)} pin={{ pinned: pinnedKeys.has(navigationKey(entry.target)), onToggle: () => togglePinned(entry.target), accountName: account.name }} />)}
       </nav>
     </li>;
   }
-  return <aside className="sidebar" aria-label="邮箱导航">
-    <div className="workspace-name"><span>我的工作区</span><span className="label">本机</span></div>
-    <Button variant="primary" className="compose-button" disabled={!accounts.length} title={accounts.length ? undefined : '请先添加邮箱'} onClick={onCompose}><Plus size={18} />写邮件<span>N</span></Button>
+  return <aside className="sidebar" aria-label={t('sidebar.mailNavAria')}>
+    <div className="workspace-name"><span>{t('sidebar.workspaceName')}</span><span className="label">{t('sidebar.workspaceLocal')}</span></div>
+    <Button variant="primary" className="compose-button" disabled={!accounts.length} title={accounts.length ? undefined : t('sidebar.composeNeedAccount')} onClick={onCompose}><Plus size={18} />{t('sidebar.compose')}<span>N</span></Button>
     <div className="sidebar-scroll">
-      <div className="sidebar-section-title"><span>常用</span><span className="local-hint" title="在账号文件夹右侧点击图钉，可固定到这里">快捷入口</span></div>
-      <nav className="shortcut-list" aria-label="常用入口">
-        {defaultShortcuts.map(entry => <NavigationRow key={navigationKey(entry.target)} entry={entry} active={view === 'mail' && isNavigationActive(query, entry.target)} messages={messages} onSelect={() => navigate(entry.target)} />)}
+      <div className="sidebar-section-title"><span>{t('sidebar.quickSection')}</span><span className="local-hint" title={t('sidebar.quickHintTitle')}>{t('sidebar.quickHint')}</span></div>
+      <nav className="shortcut-list" aria-label={t('sidebar.quickNavAria')}>
+        {defaultShortcuts().map(entry => <NavigationRow key={navigationKey(entry.target)} entry={entry} active={view === 'mail' && isNavigationActive(query, entry.target)} messages={messages} onSelect={() => navigate(entry.target)} />)}
         {pinned.map(target => {
           const account = accounts.find(item => item.id === target.accountId);
           if (!account) return null;
           const entry = allEntries.get(navigationKey(target));
           return entry && account ? <NavigationRow key={navigationKey(target)} entry={entry} secondary={account.name} active={view === 'mail' && isNavigationActive(query, target)} messages={messages} onSelect={() => navigate(target)} pin={{ pinned: true, onToggle: () => togglePinned(target), accountName: account.name }} />
-            : <div className="navigation-row stale-shortcut" key={navigationKey(target)}><span>已失效的常用入口</span><button type="button" className="navigation-pin is-pinned" aria-label="移除失效的常用入口" onClick={() => togglePinned(target)}><PinOff size={14} /></button></div>;
+            : <div className="navigation-row stale-shortcut" key={navigationKey(target)}><span>{t('sidebar.staleShortcut')}</span><button type="button" className="navigation-pin is-pinned" aria-label={t('sidebar.removeStaleAria')} onClick={() => togglePinned(target)}><PinOff size={14} /></button></div>;
         })}
       </nav>
       <div className="sidebar-divider" />
-      <div className="sidebar-section-title"><span>邮箱账号</span><button title="管理账号" aria-label="管理邮箱账号" onClick={onAccounts}><Plus size={14} /></button></div>
-      {!accounts.length && <p className="navigation-empty">还没有邮箱账号，可点击上方加号添加。</p>}
+      <div className="sidebar-section-title"><span>{t('sidebar.accountsSection')}</span><button title={t('sidebar.manageAccounts')} aria-label={t('sidebar.manageAccountsAria')} onClick={onAccounts}><Plus size={14} /></button></div>
+      {!accounts.length && <p className="navigation-empty">{t('sidebar.noAccounts')}</p>}
       <ul className="account-tree">{accounts.map(accountTree)}</ul>
-      {labels.length > 0 && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>本地标签</span></div><nav className="folder-list" aria-label="邮件标签">{labels.map(label => <button key={label.id} title={label.name} className={query.labelId === label.id && view === 'mail' ? 'is-active' : ''} aria-current={query.labelId === label.id && view === 'mail' ? 'page' : undefined} onClick={() => { setQuery({ accountId: label.accountId ?? null, folderId: null, draftSource: null, labelId: label.id, search: '' }); onNavigate?.(); }}><span className={`label-dot tone-${label.color}`} /><span>{label.name}</span></button>)}</nav></>}
+      {labels.length > 0 && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>{t('sidebar.labelsSection')}</span></div><nav className="folder-list" aria-label={t('sidebar.labelsNavAria')}>{labels.map(label => <button key={label.id} title={label.name} className={query.labelId === label.id && view === 'mail' ? 'is-active' : ''} aria-current={query.labelId === label.id && view === 'mail' ? 'page' : undefined} onClick={() => { setQuery({ accountId: label.accountId ?? null, folderId: null, draftSource: null, labelId: label.id, search: '' }); onNavigate?.(); }}><span className={`label-dot tone-${label.color}`} /><span>{label.name}</span></button>)}</nav></>}
       {error && <p className="navigation-error" role="status">{error}</p>}
     </div>
-    <div className="sidebar-note"><span className="status-dot" /><div><strong>本地优先</strong><p>{isDesktop() ? accounts.length ? `${accounts.length} 个邮箱` : '尚未添加邮箱' : '演示工作区 · 未连接真实邮箱'}</p></div></div>
+    <div className="sidebar-note"><span className="status-dot" /><div><strong>{t('sidebar.localFirst')}</strong><p>{isDesktop() ? accounts.length ? t('sidebar.mailboxCount', { count: accounts.length }) : t('sidebar.noMailbox') : t('sidebar.demoNote')}</p></div></div>
   </aside>;
 }

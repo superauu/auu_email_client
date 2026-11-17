@@ -4,6 +4,7 @@ import { isSyncActive, type SyncJob, type SyncQueueSnapshot } from '../domain/sy
 import type { OutboxEntry } from '../domain/outbox';
 import { errorMessage } from '../domain/errors';
 import { useWorkspaceStore } from './workspaceStore';
+import { t } from '../i18n/core';
 
 interface SyncTransport {
   available: () => boolean;
@@ -59,7 +60,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         if (remove) { needsWorkspaceRefresh = true; await refreshWorkspace(); }
         return true;
       } catch (error) {
-        set({ error: `发送队列操作失败：${errorMessage(error)}` });
+        set({ error: t('sync.errOutboxAction', { error: errorMessage(error) }) });
         return false;
       } finally {
         outboxEpoch += 1;
@@ -72,8 +73,8 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       refreshingWorkspace = true;
       try {
         while (needsWorkspaceRefresh) { needsWorkspaceRefresh = false; await transport.refreshWorkspace(); lastWorkspaceRefresh = Date.now(); }
-        if (get().error?.startsWith('同步结果已保存，但工作区刷新失败：')) set({ error: null });
-      } catch (error) { needsWorkspaceRefresh = true; set({ error: `同步结果已保存，但工作区刷新失败：${errorMessage(error)}` }); }
+        if (get().error?.startsWith(t('sync.errRefreshFailedPrefix'))) set({ error: null });
+      } catch (error) { needsWorkspaceRefresh = true; set({ error: `${t('sync.errRefreshFailedPrefix')}${errorMessage(error)}` }); }
       finally { refreshingWorkspace = false; }
     }
     function apply(snapshot: SyncQueueSnapshot) {
@@ -99,7 +100,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
     return {
       revision: -1, jobs: [], submitting: [], outbox: [], outboxLoaded: false, outboxPending: [], error: null,
       async enqueue(ids) {
-        if (!transport.available()) { set({ error: '请在桌面版中同步真实邮箱。' }); return; }
+        if (!transport.available()) { set({ error: t('sync.desktopOnly') }); return; }
         const pending = new Set(get().submitting);
         const unique = [...new Set(ids)].filter(id => !pending.has(id));
         if (!unique.length) return;
@@ -115,7 +116,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
           try {
             const snapshot = await transport.read();
             pollingFailed = false;
-            if (get().error?.startsWith('无法读取同步进度：')) set({ error: null });
+            if (get().error?.startsWith(t('sync.errProgressPrefix'))) set({ error: null });
             apply(snapshot);
             if (transport.outboxList) {
               const epoch = outboxEpoch;
@@ -123,7 +124,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
               if (epoch === outboxEpoch && !get().outboxPending.length) set({ outbox, outboxLoaded: true });
             }
           }
-          catch (error) { pollingFailed = true; set({ error: `无法读取同步进度：${errorMessage(error)}` }); }
+          catch (error) { pollingFailed = true; set({ error: `${t('sync.errProgressPrefix')}${errorMessage(error)}` }); }
           finally { reading = null; schedule(); }
         })();
         return reading;

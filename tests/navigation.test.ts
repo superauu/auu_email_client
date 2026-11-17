@@ -11,12 +11,16 @@ const folder = (id: string, name: string, kind: string, accountId = 'real'): Mai
 test('account directories map standard names once and retain every physical folder ID', () => {
   const remote = [folder('in', 'INBOX', 'inbox'), folder('drafts', 'Drafts', 'drafts'), folder('trash', 'Deleted Messages', 'trash'), folder('project', 'Projects/2026', 'other'), folder('wrong', 'INBOX', 'inbox', 'other-account')];
   const entries = accountDirectories(account, remote, []);
-  assert.deepEqual(entries.filter(entry => entry.target.folderId).map(entry => [entry.label, entry.target.folderId]), [['收件箱', 'in'], ['服务器草稿', 'drafts'], ['废纸篓', 'trash'], ['Projects/2026', 'project']]);
+  // 废纸篓与归档同为本机意图视图：唯一远端目录不单独展示物理副本。
+  assert.deepEqual(entries.filter(entry => entry.target.folderId).map(entry => [entry.label, entry.target.folderId]), [['收件箱', 'in'], ['服务器草稿', 'drafts'], ['Projects/2026', 'project']]);
+  const trashView = entries.filter(entry => entry.kind === 'trash');
+  assert.deepEqual(trashView.map(entry => [entry.label, entry.target.folderId ?? null]), [['废纸篓', null]]);
   assert.equal(entries.filter(entry => entry.kind === 'inbox').length, 1);
   assert.equal(entries.filter(entry => entry.label === '本机草稿').length, 1);
   assert.ok(entries.every(entry => entry.target.accountId === 'real'));
   const two = accountDirectories(account, [...remote, folder('other-trash', 'Trash', 'trash')], []);
-  assert.deepEqual(two.filter(entry => entry.kind === 'trash').map(entry => entry.label), ['废纸篓 · Deleted Messages', '废纸篓 · Trash']);
+  // 与归档一致：意图视图 + 每个物理目录各一条（标签带目录名区分）。
+  assert.deepEqual(two.filter(entry => entry.kind === 'trash').map(entry => entry.label), ['废纸篓', '废纸篓 · Deleted Messages', '废纸篓 · Trash']);
 });
 
 test('local and server drafts remain separate and folder queries do not rely on mailbox projection', () => {
@@ -53,4 +57,16 @@ test('navigation preferences reject malformed or excessive pins and keep collaps
   const target = { accountId: 'real', mailbox: 'drafts', draftSource: 'local' };
   assert.deepEqual(validateNavigationPreferences({ pinned: [target, target], expanded: [] }), { pinned: [{ ...target, folderId: undefined }], expanded: [] });
   for (const raw of [null, { pinned: [], expanded: 'all' }, { pinned: Array(31).fill(target), expanded: null }, { pinned: [{ ...target, mailbox: 'constructor' }], expanded: null }, { pinned: [{ ...target, folderId: 'server-id' }], expanded: null }, { pinned: [{ ...target, accountId: null }], expanded: null }]) assert.throws(() => validateNavigationPreferences(raw));
+});
+
+
+test('delete and move intents project to trash and target folder kinds', () => {
+  const base: MailMessage = { ...demoWorkspace.messages[0], id: 'm1', accountId: 'real', mailbox: 'inbox', folderIds: ['in'], changes: [] };
+  const deleted: MailMessage = { ...base, mailbox: 'trash', changes: [{ field: 'delete', state: 'queued', error: null }] };
+  const moved: MailMessage = { ...base, mailbox: 'other', changes: [{ field: 'move', state: 'queued', error: null }] };
+  assert.deepEqual(selectMessages([deleted], { accountId: 'real', mailbox: 'trash', labelId: null, search: '' }).map(item => item.id), ['m1']);
+  assert.deepEqual(selectMessages([deleted], { accountId: 'real', mailbox: 'inbox', labelId: null, search: '' }), []);
+  assert.deepEqual(selectMessages([moved], { accountId: 'real', mailbox: 'other', labelId: null, search: '' }).map(item => item.id), ['m1']);
+  // 删除意图的邮件不再出现在星标（与归档意图一致的排除规则由 Rust 投影保证；此处验证 mailbox 投影可筛选）。
+  assert.deepEqual(selectMessages([moved], { accountId: 'real', mailbox: 'trash', labelId: null, search: '' }), []);
 });

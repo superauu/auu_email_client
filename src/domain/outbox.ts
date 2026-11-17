@@ -1,4 +1,5 @@
 // Outbox 发送队列（docs/SENDING.md）：状态机与出口语义以该文档为准。
+import { t } from '../i18n/core';
 export type OutboxState = 'queued' | 'sending' | 'sent' | 'failed' | 'unknown';
 
 export interface OutboxEntry {
@@ -16,10 +17,10 @@ export interface OutboxEntry {
 
 export function outboxSummary(entry: OutboxEntry): string {
   switch (entry.state) {
-    case 'queued': return '发送排队中';
-    case 'sending': return '正在发送…';
-    case 'sent': return entry.resolvedBy === 'sent-folder' ? '已发送（经 Sent 目录确认）' : '已发送';
-    case 'unknown': return `结果不明（已尝试 ${entry.attempts} 次），不会自动重发`;
-    case 'failed': return entry.resolvedBy === 'keep-local' ? '仅保留本机（投递结果未确认，不会再次发送）' : `发送失败：${entry.lastError ?? '请重试'}`;
+    case 'queued': return t('outbox.stateQueued');
+    case 'sending': return t('outbox.stateSending');
+    case 'sent': return entry.resolvedBy === 'sent-folder' ? t('outbox.stateSentConfirmed') : t('outbox.stateSent');
+    case 'unknown': return t('outbox.stateUnknown', { attempts: entry.attempts });
+    case 'failed': return entry.resolvedBy === 'keep-local' ? t('outbox.stateKeepLocal') : t('outbox.stateFailed', { error: entry.lastError ?? t('outbox.retryHint') });
   }
 }

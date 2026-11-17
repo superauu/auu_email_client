@@ -3,16 +3,16 @@ import { useOAuthStore } from '../../stores/oauthStore';
 import type { OAuthConfig, OAuthFlow } from '../../domain/oauth';
 import type { RealAccountInput } from '../../platform/desktop';
 import { errorMessage } from '../../domain/errors';
+import { t } from '../../i18n/core';
 
-export const oauthPhaseText: Record<OAuthFlow['state'], string> = {
-  waiting: '等待系统浏览器授权…',
-  exchanging: '正在取得授权…',
-  verifying: '正在验证 IMAP 登录和文件夹…',
-  committing: '正在安全保存账号…',
-  saved: '授权和 IMAP 验证通过，账号已保存。',
-  failed: '授权未完成。',
-  cancelled: '授权已取消，账号未保存。',
-};
+/** OAuth 阶段文案（每次调用取当前语言，避免模块加载期固化）。 */
+export function oauthPhaseText(state: OAuthFlow['state']): string {
+  const phases: Record<OAuthFlow['state'], Parameters<typeof t>[0]> = {
+    waiting: 'oauth.phaseWaiting', exchanging: 'oauth.phaseExchanging', verifying: 'oauth.phaseVerifying',
+    committing: 'oauth.phaseCommitting', saved: 'oauth.phaseSaved', failed: 'oauth.phaseFailed', cancelled: 'oauth.phaseCancelled',
+  };
+  return t(phases[state]);
+}
 
 /** 共享的授权会话：发起、轮询、取消与完成后的收尾，供向导内嵌进度与重新授权对话框复用。 */
 export function useOAuthFlow() {

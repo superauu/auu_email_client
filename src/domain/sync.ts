@@ -1,4 +1,5 @@
 import type { AppError } from './errors';
+import { t } from '../i18n/core';
 
 export interface SyncOutcome {
   refreshNeeded?: boolean;
@@ -30,12 +31,12 @@ export function syncableAccounts(accounts: { id: string; status: string; provide
   return accounts.filter(account => account.status !== 'demo').map(account => ({ id: account.id, provider: account.provider }));
 }
 export function syncJobSummary(job: SyncJob): string {
-  if (job.status === 'queued') return '排队中';
-  if (job.status === 'running') return job.cancelRequested ? '正在停止同步…' : '同步中…';
-  if (job.status === 'cancelled') return job.startedAt ? '同步已停止，已保存批次保留' : '已取消排队';
-  if (job.status === 'failed') return `同步失败：${job.error?.message ?? '请重试'}`;
+  if (job.status === 'queued') return t('settings.queued');
+  if (job.status === 'running') return job.cancelRequested ? t('syncSummary.stopping') : t('settings.syncing');
+  if (job.status === 'cancelled') return job.startedAt ? t('syncSummary.stopped') : t('syncSummary.cancelledQueued');
+  if (job.status === 'failed') return t('syncSummary.failed', { error: job.error?.message ?? t('outbox.retryHint') });
   const outcome = job.outcome;
-  if (outcome?.retryNeeded) return `部分文件夹未完成，已提交邮件保留；${outcome.warnings.join('；')}`;
-  if (outcome?.listening) return `已同步 · 新邮件通知已启用${outcome.fetchedMessages ? `，拉取 ${outcome.fetchedMessages} 封邮件` : ''}`;
-  return outcome ? `同步完成：${outcome.folders} 个文件夹，拉取 ${outcome.fetchedMessages} 封邮件${outcome.warnings.length ? `；${outcome.warnings.join('；')}` : ''}` : '同步完成';
+  if (outcome?.retryNeeded) return t('syncSummary.retryNeeded', { warnings: outcome.warnings.join(t('syncSummary.listSeparator')) });
+  if (outcome?.listening) return t('syncSummary.listening', { extra: outcome.fetchedMessages ? t('syncSummary.listeningFetched', { count: outcome.fetchedMessages }) : '' });
+  return outcome ? t('syncSummary.done', { folders: outcome.folders, count: outcome.fetchedMessages, warnings: outcome.warnings.length ? `${t('syncSummary.listSeparator')}${outcome.warnings.join(t('syncSummary.listSeparator'))}` : '' }) : t('syncSummary.donePlain');
 }

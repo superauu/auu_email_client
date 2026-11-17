@@ -1,4 +1,5 @@
 import type { MailAccount, MailFolder, MailMessage, MailQuery, MailboxKind } from './mail';
+import { t } from '../i18n/core';
 
 export interface NavigationTarget {
   accountId: string | null;
@@ -13,12 +14,21 @@ export interface DirectoryEntry {
   available: boolean;
   description: string;
 }
-const names: Record<string, string> = { inbox: '收件箱', sent: '已发送', drafts: '服务器草稿', archive: '归档', trash: '废纸篓' };
-export const defaultShortcuts: DirectoryEntry[] = [
-  { target: { accountId: null, mailbox: 'inbox' }, label: '全部收件箱', kind: 'inbox', available: true, description: '所有账号的收件箱' },
-  { target: { accountId: null, mailbox: 'starred' }, label: '星标邮件', kind: 'starred', available: true, description: '所有账号的星标邮件' },
-  { target: { accountId: null, mailbox: 'drafts', draftSource: 'local' }, label: '本机草稿', kind: 'drafts', available: true, description: '所有账号保存在本机的可编辑草稿' },
-];
+/** 标准远端目录的本地化显示名（每次调用取当前语言）。 */
+export function mailboxName(kind: string): string {
+  const known: Record<string, Parameters<typeof t>[0]> = {
+    inbox: 'nav.mailbox.inbox', sent: 'nav.mailbox.sent', drafts: 'nav.mailbox.serverDrafts', archive: 'nav.mailbox.archive', trash: 'nav.mailbox.trash',
+  };
+  return Object.hasOwn(known, kind) ? t(known[kind]) : kind;
+}
+/** 常用快捷入口（每次调用取当前语言；持久化仅保存结构化 target，不保存文案）。 */
+export function defaultShortcuts(): DirectoryEntry[] {
+  return [
+    { target: { accountId: null, mailbox: 'inbox' }, label: t('nav.allInbox'), kind: 'inbox', available: true, description: t('nav.allInboxDesc') },
+    { target: { accountId: null, mailbox: 'starred' }, label: t('nav.mailbox.starred'), kind: 'starred', available: true, description: t('nav.allStarredDesc') },
+    { target: { accountId: null, mailbox: 'drafts', draftSource: 'local' }, label: t('nav.allLocalDrafts'), kind: 'drafts', available: true, description: t('nav.allLocalDraftsDesc') },
+  ];
+}
 export function navigationKey(target: NavigationTarget): string {
   return JSON.stringify([target.accountId, target.mailbox, target.folderId ?? null, target.draftSource ?? null]);
 }
@@ -26,7 +36,7 @@ export function isNavigationActive(query: MailQuery, target: NavigationTarget): 
   return !query.labelId && navigationKey(query) === navigationKey(target);
 }
 export function directoryLabel(folder: MailFolder, peers: MailFolder[]): string {
-  const standard = Object.hasOwn(names, folder.kind) ? names[folder.kind] : undefined;
+  const standard = ['inbox', 'sent', 'drafts', 'archive', 'trash'].includes(folder.kind) ? mailboxName(folder.kind) : undefined;
   return standard ? peers.filter(peer => peer.kind === folder.kind).length > 1 ? `${standard} · ${folder.name}` : standard : folder.name;
 }
 
@@ -34,25 +44,27 @@ export function directoryLabel(folder: MailFolder, peers: MailFolder[]): string 
 export function accountDirectories(account: MailAccount, folders: MailFolder[], messages: MailMessage[]): DirectoryEntry[] {
   const remote = account.status === 'demo' ? [] : folders.filter(folder => folder.accountId === account.id);
   const entries: DirectoryEntry[] = [];
-  const logical = (mailbox: MailboxKind, label: string, draftSource?: 'local' | 'server') => entries.push({ target: { accountId: account.id, mailbox, draftSource }, label, kind: mailbox, available: true, description: draftSource === 'local' ? '仅保存在这台设备，可离线编辑' : draftSource === 'server' ? '服务器草稿缓存，编辑时复制为本机草稿' : '此账号的本机缓存视图' });
+  const logical = (mailbox: MailboxKind, label: string, draftSource?: 'local' | 'server') => entries.push({ target: { accountId: account.id, mailbox, draftSource }, label, kind: mailbox, available: true, description: draftSource === 'local' ? t('nav.localDraftsOnlyDesc') : draftSource === 'server' ? t('nav.serverDraftsDesc') : t('nav.cacheViewDesc') });
   const physical = (folder: MailFolder) => entries.push({
-    target: { accountId: account.id, mailbox: Object.hasOwn(names, folder.kind) ? folder.kind as MailboxKind : 'other', folderId: folder.id, ...(folder.kind === 'drafts' ? { draftSource: 'server' as const } : {}) },
-    label: directoryLabel(folder, remote), kind: Object.hasOwn(names, folder.kind) ? folder.kind as MailboxKind : 'other', available: folder.available,
-    description: `${folder.name}${folder.available ? '' : ' · 服务器目录不可用，仍可阅读本机缓存'}`,
+    target: { accountId: account.id, mailbox: ['inbox', 'starred', 'sent', 'drafts', 'archive', 'trash'].includes(folder.kind) ? folder.kind as MailboxKind : 'other', folderId: folder.id, ...(folder.kind === 'drafts' ? { draftSource: 'server' as const } : {}) },
+    label: directoryLabel(folder, remote), kind: ['inbox', 'starred', 'sent', 'drafts', 'archive', 'trash'].includes(folder.kind) ? folder.kind as MailboxKind : 'other', available: folder.available,
+    description: `${folder.name}${folder.available ? '' : t('nav.unavailableSuffix')}`,
   });
   for (const kind of ['inbox', 'starred', 'sent', 'drafts', 'archive', 'trash'] as const) {
-    if (kind === 'starred') { logical(kind, '星标邮件'); continue; }
-    if (kind === 'drafts') logical(kind, '本机草稿', 'local');
+    if (kind === 'starred') { logical(kind, t('nav.mailbox.starred')); continue; }
+    if (kind === 'drafts') logical(kind, t('nav.allLocalDrafts'), 'local');
     const matching = remote.filter(folder => folder.kind === kind);
     // Archive is also a local intent view: a pending MOVE must remain visible here
     // before physical folder membership changes. Distinct remote archives remain accessible.
-    if (kind === 'archive') { logical(kind, names[kind]); if (matching.length > 1) matching.forEach(physical); continue; }
+    // 归档与删除到废纸篓都是本机意图视图：待回写的移动仍在入口可见，
+    // 多个同名远端目录才各自展示物理副本（与 Rust 端 mailbox 投影一致）。
+    if (kind === 'archive' || kind === 'trash') { logical(kind, mailboxName(kind)); if (matching.length > 1) matching.forEach(physical); continue; }
     if (matching.length) matching.forEach(physical);
-    else if (kind !== 'drafts') logical(kind, names[kind]);
-    else if (messages.some(message => message.accountId === account.id && message.mailbox === 'drafts' && !message.draft)) logical(kind, '服务器草稿', 'server');
+    else if (kind !== 'drafts') logical(kind, mailboxName(kind));
+    else if (messages.some(message => message.accountId === account.id && message.mailbox === 'drafts' && !message.draft)) logical(kind, t('nav.mailbox.serverDrafts'), 'server');
   }
-  remote.filter(folder => !(Object.hasOwn(names, folder.kind))).forEach(physical);
-  if (!remote.length || messages.some(message => message.accountId === account.id && message.mailbox === 'other' && !message.folderIds?.some(id => remote.some(folder => folder.id === id)))) logical('other', remote.length ? '其他缓存邮件' : '其他邮件');
+  remote.filter(folder => !['inbox', 'starred', 'sent', 'drafts', 'archive', 'trash'].includes(folder.kind)).forEach(physical);
+  if (!remote.length || messages.some(message => message.accountId === account.id && message.mailbox === 'other' && !message.folderIds?.some(id => remote.some(folder => folder.id === id)))) logical('other', remote.length ? t('nav.otherCached') : t('nav.mailbox.other'));
   return entries;
 }
 

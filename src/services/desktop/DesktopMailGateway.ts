@@ -1,8 +1,9 @@
 import type { MailGateway, MailMessage } from '../../domain/mail';
 import { desktopMail, isDesktop } from '../../platform/desktop';
 import { realWorkspace } from '../../domain/workspace';
+import { t } from '../../i18n/core';
 
-const PAGE_LIMIT = 100;
+const PAGE_LIMIT = 200;
 /** Single write path into the OS-backed store; all reads flow through the paged query. */
 export const desktopMailGateway: MailGateway = {
   mode: 'desktop-local',
@@ -15,20 +16,23 @@ export const desktopMailGateway: MailGateway = {
   async exportAttachment(accountId, messageId, index) { return desktopMail.exportAttachment(accountId, messageId, index); },
   async requestRecovery(accountId, messageId, revision, action) { return desktopMail.requestRecovery(accountId, messageId, revision, action); },
   async loadWorkspace(signal) {
-    if (!isDesktop()) throw new Error('本机邮件存储仅在桌面版可用。');
+    if (!isDesktop()) throw new Error(t('store.localMailDesktopOnly'));
     signal?.throwIfAborted();
     const base = await desktopMail.workspace();
     const accounts = base.accounts.filter(account => account.status !== 'demo');
-    const messages: MailMessage[] = [];
-    for (const account of accounts) {
+    // 各账号分页并行读取（页大小 200），缩短大邮箱首屏等待；结果按账号顺序拼接。
+    const perAccount = await Promise.all(accounts.map(async account => {
+      const items: MailMessage[] = [];
       let cursor: string | null = null;
       do {
         signal?.throwIfAborted();
         const page = await desktopMail.page({ accountId: account.id, cursor, limit: PAGE_LIMIT });
-        messages.push(...page.items.filter(message => message.accountId === account.id));
+        items.push(...page.items.filter(message => message.accountId === account.id));
         cursor = page.nextCursor;
       } while (cursor);
-    }
+      return items;
+    }));
+    const messages: MailMessage[] = perAccount.flat();
     signal?.throwIfAborted();
     if (accounts.length) messages.push(...await desktopMail.drafts());
     const syncStates: Record<string, string> = {};

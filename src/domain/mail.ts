@@ -80,7 +80,7 @@ export interface RecoveryStatus {
 }
 
 export interface MessageChange {
-  field: 'unread' | 'starred' | 'archive';
+  field: 'unread' | 'starred' | 'archive' | 'delete' | 'move';
   state: 'queued' | 'applying' | 'failed' | 'conflict' | 'unknown' | 'local';
   error: string | null;
 }
@@ -88,6 +88,10 @@ export interface MessagePatch {
   unread?: boolean;
   starred?: boolean;
   archive?: true;
+  /** 删除到废纸篓（IMAP UID MOVE；POP3 / 演示仅本机投影）。 */
+  delete?: true;
+  /** 移动到指定文件夹（folders.id）。 */
+  moveTo?: string;
 }
 
 export interface MailDraft {

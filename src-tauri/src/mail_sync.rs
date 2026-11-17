@@ -108,7 +108,11 @@ fn folder_kind(name: &str) -> &'static str {
         "drafts"
     } else if name.contains("archive") || name.contains("归档") {
         "archive"
-    } else if name.contains("trash") || name.contains("deleted") || name.contains("废纸") {
+    } else if name.contains("trash")
+        || name.contains("deleted")
+        || name.contains("废纸")
+        || name.contains("已删除")
+    {
         "trash"
     } else {
         "other"
@@ -379,6 +383,8 @@ fn sync_session_mode<S: Read + Write>(
             .any(|a| matches!(a, imap::types::NameAttribute::NoSelect))
     };
     let special:Vec<String> = listed.iter().filter(selectable).filter(|name| name.attributes().iter().any(|a| matches!(a,imap::types::NameAttribute::Custom(value) if value.eq_ignore_ascii_case("\\Archive")))).map(|name|name.name().to_owned()).collect();
+    // \Trash special-use 优先于名称启发式（Gmail 的 [Gmail]/Bin 名称不含 trash 字样）。
+    let trash_special:Vec<String> = listed.iter().filter(selectable).filter(|name| name.attributes().iter().any(|a| matches!(a,imap::types::NameAttribute::Custom(value) if value.eq_ignore_ascii_case("\\Trash")))).map(|name|name.name().to_owned()).collect();
     let candidates: Vec<String> = if special.is_empty() {
         listed
             .iter()
@@ -410,7 +416,7 @@ fn sync_session_mode<S: Read + Write>(
         for name in &names {
             tx.execute("INSERT INTO folders (id,account_id,remote_id,name,kind) VALUES (?1,?2,?3,?5,?4)
               ON CONFLICT(account_id,remote_id) DO UPDATE SET name=excluded.name,kind=excluded.kind",
-              params![format!("{}:folder:{name}", plan.account_id), plan.account_id, name, if archive.as_ref()==Some(name){"archive"}else{folder_kind(name)},crate::imap_settings::display_name(name)])
+              params![format!("{}:folder:{name}", plan.account_id), plan.account_id, name, if archive.as_ref()==Some(name){"archive"}else if trash_special.contains(name){"trash"}else{folder_kind(name)},crate::imap_settings::display_name(name)])
               .map_err(|_| AppError::storage("无法保存文件夹"))?;
             tx.execute("INSERT INTO imap_folder_state(account_id,remote_id,available) VALUES (?1,?2,1) ON CONFLICT(account_id,remote_id) DO UPDATE SET available=1",params![plan.account_id,name]).map_err(|_|AppError::storage("无法更新文件夹状态"))?;
         }

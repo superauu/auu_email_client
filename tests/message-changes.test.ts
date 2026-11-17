@@ -144,3 +144,21 @@ test('fingerprint confirmation forwards its own operation without changing cache
     assert.equal(useWorkspaceStore.getState().messages[0].recovery?.operation, 'fingerprint');
   } finally { demoMailGateway.requestRecovery = original; }
 });
+
+
+test('demo delete and move patches stay local and project trash or target folder', async () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  const original = demoWorkspace.messages[0];
+  try {
+    const deleted = await demoMailGateway.updateMessage(original.accountId, original.id, { delete: true });
+    assert.equal(deleted.mailbox, 'trash');
+    assert.ok(deleted.changes?.some(change => change.field === 'delete' && change.state === 'local'));
+    const moved = await demoMailGateway.updateMessage(original.accountId, original.id, { moveTo: 'demo-folder-x' });
+    // 演示没有真实远端目录：移动意图只在 changes 中体现，未知目录不改变投影。
+    assert.ok(moved.changes?.some(change => change.field === 'move' && change.state === 'local'));
+    const reloaded = (await demoMailGateway.loadWorkspace()).messages.find(message => message.id === original.id)!;
+    assert.ok(reloaded.changes?.some(change => change.field === 'delete' || change.field === 'move'));
+  } finally { Reflect.deleteProperty(globalThis, 'localStorage'); }
+});

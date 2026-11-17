@@ -12,7 +12,7 @@ test('provider presets stay complete and honest about availability', () => {
       assert.equal(preset.endpoints.imapPort, 993);
       assert.equal(preset.endpoints.imapSecurity, 'tls');
       assert.ok(preset.endpoints.smtpPort, `${preset.id} 必须预填 SMTP`);
-      assert.ok(preset.authHint, `${preset.id} 必须说明授权码获取方式`);
+      assert.ok(preset.authHintKey, `${preset.id} 必须说明授权码获取方式`);
     }
     if (!preset.available) {
       assert.ok(!preset.endpoints, `${preset.id} 未开放时不应携带可保存的服务器预设`);

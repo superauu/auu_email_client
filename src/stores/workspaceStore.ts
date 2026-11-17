@@ -5,6 +5,7 @@ import { isDesktop } from '../platform/desktop';
 import { demoMailGateway } from '../services/demo/DemoMailGateway';
 import { desktopMailGateway } from '../services/desktop/DesktopMailGateway';
 import { selectMessages } from '../features/mail/selectors';
+import { t } from '../i18n/core';
 
 interface WorkspaceState extends WorkspaceSnapshot {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -25,6 +26,10 @@ interface WorkspaceState extends WorkspaceSnapshot {
   requestRecovery: (id: string, action: RecoveryAction) => Promise<boolean>;
   requestBody: (id: string) => Promise<boolean>;
   archiveMessage: (id: string) => void;
+  deleteMessage: (id: string) => void;
+  moveMessage: (id: string, folderId: string) => void;
+  /** 批量操作入口：与单封修改共用串行 / 冲突语义。 */
+  applyMessagePatch: (id: string, patch: MessagePatch) => Promise<void>;
   exportAttachment: (id: string, index: number) => Promise<boolean>;
   /** Sanitized sandbox srcdoc for rich rendering; rejects when the environment has no verified raw cache. */
   messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark') => Promise<string>;
@@ -85,20 +90,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     catch (error) { set({ error: errorMessage(error) }); return false; }
   },
   async messageHtml(accountId, messageId, allowRemoteImages, mode) {
-    if (!gateway.messageHtml) throw new Error('当前环境不支持富文本正文。');
+    if (!gateway.messageHtml) throw new Error(t('store.noRichBody'));
     return gateway.messageHtml(accountId, messageId, allowRemoteImages, mode);
   },
   async messageHtmlFragment(accountId, messageId) {
-    if (!gateway.messageHtmlFragment) throw new Error('当前环境无法引用原文。');
+    if (!gateway.messageHtmlFragment) throw new Error(t('store.noQuoteFragment'));
     return gateway.messageHtmlFragment(accountId, messageId);
   },
   async sendDraft(draftId, revision) {
-    if (!gateway.sendDraft) throw new Error('当前环境不能发送邮件。');
+    if (!gateway.sendDraft) throw new Error(t('store.noSend'));
     set({ error: null });
     return gateway.sendDraft(draftId, revision);
   },
   async deleteDraft(draftId) {
-    if (!gateway.deleteDraft) throw new Error('当前环境不能删除草稿。');
+    if (!gateway.deleteDraft) throw new Error(t('store.noDeleteDraft'));
     await gateway.deleteDraft(draftId);
     draftMutations += 1;
     // 放弃后立即从工作区移除该草稿；选中的草稿被删除时回落到列表第一封。
@@ -108,7 +113,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
   async pickAttachments(draftId, current) {
-    if (!gateway.pickAttachments) throw new Error('当前环境不支持添加附件。');
+    if (!gateway.pickAttachments) throw new Error(t('store.noPickAttachments'));
     return gateway.pickAttachments(draftId, current);
   },
   async load() {
@@ -182,6 +187,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   keepMessageLocal(id) { mutateMessage(id, () => ({}), true); },
   async requestRecovery(id, action) { return await mutateMessage(id, () => ({}), false, action) === true; },
   async requestBody(id) { return await mutateMessage(id, () => ({}), false, undefined, true) === true; },
+  deleteMessage(id) {
+    mutateMessage(id, message => message.mailbox === 'trash' || message.draft ? null : { delete: true });
+  },
+  async applyMessagePatch(id, patch) { await mutateMessage(id, () => patch); },
+  moveMessage(id, folderId) {
+    mutateMessage(id, message => message.draft ? null : { moveTo: folderId });
+  },
   archiveMessage(id) {
     mutateMessage(id, message => message.mailbox === 'archive' ? null : { archive: true });
   },
@@ -193,7 +205,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setView(view) { set({ view }); },
   async saveDraft(draft, options) {
     const message = await gateway.saveDraft(draft, options);
-    if (!message.draft) throw new Error('草稿保存结果不完整，请保留内容后重试。');
+    if (!message.draft) throw new Error(t('store.draftSaveIncomplete'));
     draftMutations += 1;
     set(state => state.accounts.some(account => account.id === message.accountId)
       ? { messages: [message, ...state.messages.filter(m => m.id !== message.id)] } : {});
