@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod acceptance;
 mod account_service;
 mod compose_attach;
 mod credentials;

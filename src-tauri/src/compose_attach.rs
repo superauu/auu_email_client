@@ -38,7 +38,7 @@ impl ComposeStaging {
     }
 
     /// 暂存新附件内容；sha256 与元数据必须来自同一次读取。
-    fn stage(
+    pub(crate) fn stage(
         &self,
         draft_id: &str,
         attachment: &DraftAttachment,

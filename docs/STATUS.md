@@ -1,6 +1,25 @@
 # 当前状态
 
-更新时间：2026-11-18。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**此前完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化；本轮完成第五批：大邮箱按视图懒加载（启动不再全量分页灌入，Rust 视图计数聚合，搜索改 LIKE 并移除 FTS，v17 迁移）**。抄送 / 密送独立收件、真实 POP3、Outlook 会话归组、真实服务器删除 / 移动仍待验收；修复后的中文附件名需在 Gmail 真实投递复验；大邮箱真实吞吐（5 万封级）待授权账号验收。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-18。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**此前完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化；第五批：大邮箱按视图懒加载（启动不再全量分页灌入，Rust 视图计数聚合，搜索改 LIKE 并移除 FTS，v17 迁移）；第六批：同标题会话折叠（列表「对话」开关，默认关闭）。第七批（本轮）：真实协议验收——自建 GreenMail 全栈服务器（IMAP / POP3 / SMTP，TLS + 用户信任库）驱动真实 Rust 协议路径完成六项验收，并修复验收发现的发送端多段 RFC 2231 接收损坏问题（改单段参数）**。自建服务器验收通过的项目在公网邮箱（Gmail / QQ / 163）上仍建议复验怪癖差异（IMAP 扩展、限速、垃圾过滤）；5 万封级吞吐受 GreenMail 内存实现限制定在 2000 封规模。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+
+## 最新增量：真实协议验收——自建 GreenMail 全栈（2026-11-18）
+
+- **验收环境**：GreenMail 2.1.4 standalone（真实第三方 Java 邮件服务器，IMAP :13143 / POP3 :13110 / SMTP :13025，支持 MOVE + UIDPLUS，实测 CAPABILITY）；本地自签 CA（OpenSSL 生成，SAN=localhost/127.0.0.1）装入用户信任库（`certutil -user -addstore Root`，用户作用域，可 `certutil -user -delstore Root AuuMail Acceptance CA` 移除）；Python TLS 终结代理（TLS 9301/9302/9303 → 明文后端，客户端经 Schannel 走 Security::Tls，零代码改动）。服务器与代理脚本在 git 忽略的 `artifacts/greenmail/`，不入库。
+- **验收载体**：`src-tauri/src/acceptance.rs`——真实账号保存路径（`mail_verify::verify` 真实 TLS 探针 → `account_service::persist` keyring 落库）、真实同步执行器（`imap_jobs::run`）、真实意图回写（`message_changes::update` → 同步会话内 flush）、真实发送（草稿 → `outbox::enqueue` → `outbox::run`）。独立核对通道用 imap 库 + 原始 SMTP 直连服务器，不经被测代码。未设 `AUUMAIL_ACCEPTANCE` 时全部跳过。
+- **六项结果（全部通过）**：① 中文附件名端到端复验：真实 outbox 发送（中文文件名）→ SMTP 投递 → IMAP 收信 → 原文下载 → 生产缓存解析链，附件名 `季度报告-验收版.txt` 与字节逐字还原；② Cc / Bcc：生产 outbox 按信封 RCPT 逐一投递，三个账号各自收到，投递副本不含 Bcc 头、Cc 头保留；③ 真实 POP3：TLS 收信 + UIDL 增量（二轮 0 新邮件）；④ 真实删除 / 移动：`UID MOVE` 后独立会话核对——INBOX 不再有，Archive / Trash 各一，本机投影 archive / trash 正确；⑤ Outlook 风格邮件（RE / FW 前缀 + Thread-Index / References）：主题与 Message-ID / References 证据链完整保留（同标题归组由 UI 层 threading 承担，归一化在 TS 单测 + e2e 覆盖）；⑥ 大邮箱吞吐：注入 2000 封（真实 SMTP，约 5s）→ 开启历史回填后全量同步约 397s → 二次增量 0；用例开头经独立 IMAP 会话清空目标邮箱，重跑自包含。同步耗时由逐轮历史回填（每轮重建 TLS 会话 + 100 UID 窗口）主导，初始窗口 50 封的设计保证首屏快；GreenMail 内存实现在万封级 FETCH 会挂起（探针实测），验收规模定在 2000 封，不外推为公网服务器表现。
+- **验收发现并修复的缺陷（发送端多段 RFC 2231）**：接收侧 mail-parser 0.10.2 把多段 2231 续行按段独立解码后拼接，段边界落在 UTF-8 多字节字符中间时损坏文件名（`季度报告-验收版.txt` → `季度报告-验收?8.txt`，探针测试 `probe_2231_single_vs_multi` 固化证据：单段正确 / 多段损坏）。此前 Python 严格解析器验证通过掩盖了这一点——mail-parser 是我们自己的接收解析器，验收必须走全链路。修复：`rfc2231_parameters` 在行限预算内（约 800 编码字符，覆盖一切真实文件名）输出单段 `filename*=utf-8''…`，仅超长名回退多段续行；发送端 4 个测试更新 + 新增超长名续行回退测试。**遗留（上游限制）**：接收其他客户端（Thunderbird 等按 ~60 字符分段的发件端）的多段 2231 长名仍会被 mail-parser 损坏，可在接收侧自行解析 2231 参数覆盖（后续独立增量）。
+- **验收过程的其余实测知识（已固化在测试注释）**：SMTP 投递按信封 RCPT TO 而非头字段（Cc/Bcc 头不触发投递）；DATA 载荷必须以 CRLF 结束否则终止点不独占一行、服务器 30s 后断开；IMAP SEARCH 中文主题匹配不到 RFC2047 编码头（按 Message-ID 搜索）；GreenMail API 服务器的 preloadDirectory 会持久化并回灌注入邮件（不要启用 `setup.api`）；POP3 每轮 `MAX_DOWNLOAD=50`；IMAP 初始同步只拉最近 50 封（INITIAL_WINDOW），全量需开启历史回填。
+- **验证**：`cargo test` 250 项全绿（新增 7 个：6 项验收 + 1 个 2231 回归记录；未设环境变量时跳过），验收套件完整顺序重跑两轮均全过（第二轮验证了污染邮箱自清理）；`npm run check` 82 个 TS 测试不变；Clippy / rustfmt 干净。完整验收运行记录见本次会话（六项 ok + 吞吐数据行）。
+- **待验收（公网差异项）**：Gmail / QQ / 163 的真实删除 / 移动（UID MOVE 行为、目录命名）、修复后中文附件名在 Gmail 真实投递复验（本验收已覆盖协议层，Gmail 的宽严差异仍值得跑一遍）、真实 POP3 服务商（QQ / 163 的 UIDL 稳定性）、5 万封级在真实服务器上的历史回填吞吐。
+
+## 最新增量：同标题会话折叠（2026-11-18）
+
+- **范围**：列表按归一化主题折叠为会话（Outlook「显示为对话」风格）。列表工具栏「全部 / 未读」旁新增「对话」开关（aria-pressed），默认关闭，持久化 `auumail.ui.threads.v1`（localStorage，与语言 / 导航偏好同级）；草稿视图不折叠且隐藏开关。
+- **归一化**：反复剥离 `Re` / `Re[2]` / `Fwd` / `Fw` / `AW` / `SV` / `回复` / `答复` / `转发` 前缀（中英文），折叠空白并转小写；剥离后为空的主题不折叠。分组键带 accountId——全部收件箱等跨账号视图里不同账号的同名主题不混。
+- **折叠语义**：≥2 封才成组。组行位置在组内最新一封处，显示会话根（最早一封）的实际主题 + 最新发件人 + 计数徽标 + 未读点；点击展开——组行保留作为折叠入口（aria-expanded），子行按时间正序缩进并带引导线，同时选中最新一封；再点折叠。全部 / 未读筛选与搜索先过滤后分组，组内计数反映当前视图；展开集合随视图切换清空。纯前端行为：不改 mailbox 投影、store 持久状态、Rust 或 IPC。
+- **懒加载边界**：分组基于当前已加载页；继续翻页后组自动变完整（与 Outlook 按当前视图分组一致）。组行与普通行同高（皮肤行高 token），折叠 / 展开只是行数变化，虚拟窗口计算不变。
+- **验证**：`npm run check`（lint / 皮肤 schema / 类型 / 构建、**82 个 TS 测试**：normalizeSubject 中英文前缀与边界、分组账号隔离与 ≥2 才成组、conversationRows 折叠位置 / 展开正序 / 组行保留）；完整 UI 回归 **74 个 Chromium 用例**（新增：默认平铺 → 开启折叠计数 3 → 展开选中最新 → 折叠 → 刷新后开关持久化 → 关闭恢复平铺；IPC harness 注入同标题 + Re / 转发前缀消息）。本轮无 Rust / SQL 改动。
+- **边界**：`threadId`（回复链 In-Reply-To / References）已存在，但本特性按用户要求的同标题分组实现，threadId 分组模式可作后续增强；会话内阅读导航（上一封 / 下一封）未做；真实账号下 Outlook / Thunderbird 客户端对照观感待验收。
 
 ## 最新增量：大邮箱按视图懒加载（2026-11-18）
 

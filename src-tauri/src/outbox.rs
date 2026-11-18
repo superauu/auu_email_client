@@ -319,11 +319,17 @@ fn is_ascii_safe_filename(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| FILENAME_SAFE.contains(c)) && name.len() <= 60
 }
 
-/// RFC 2231 扩展参数（仅编码路径）：`base*0*=utf-8''首段; base*1*=次段…`，
-/// 百分号编码值按 63 字符（21 个完整 %XX 转义）分段续行——分段不得切断转义序列，
-/// mail-parser 等实现按段独立解码；单行不超过约 80 字节；仅首段携带 charset 前缀。
+/// RFC 2231 扩展参数（仅编码路径）。编码值连同 `base` 与前缀能在 998 字节硬限内时
+/// 输出单段 `base*=utf-8''<value>`——mail-parser 0.10.2 接收侧把多段续行按段独立解码
+/// 后再拼接，段边界落在 UTF-8 多字节字符中间时会损坏文件名（2026-11-18 真实服务器
+/// 验收实测；单段解码正确）。仅编码值超过单行预算（约 800 字符）才回退多段续行：
+/// `base*0*=utf-8''首段; base*1*=次段…`，分段不切断 %XX 转义、仅首段带 charset 前缀。
 fn rfc2231_parameters(base: &str, name: &str) -> String {
     let percent = percent_encode_value(name);
+    let single_budget = 800usize.saturating_sub(base.len() + 1 + "utf-8''".len() + 4);
+    if percent.len() <= single_budget {
+        return format!("{base}*=utf-8''{percent}");
+    }
     let segments: Vec<&str> = percent
         .as_bytes()
         .chunks(63)
@@ -1750,15 +1756,25 @@ mod tests {
         let name = "中文附件.txt";
         let headers = attachment_headers(name, "text/plain", b"x");
         let expected_pct = percent_encode_value(name);
-        // Content-Disposition：RFC 2231 扩展参数（严格解析器标准形式，单段也带位置 0）。
-        assert!(headers.contains(&format!("filename*0*=utf-8''{expected_pct}")));
+        // Content-Disposition：RFC 2231 扩展参数（行限内用单段；多段在 mail-parser
+        // 0.10.2 接收侧会按段独立解码损坏文件名，见 rfc2231_parameters 文档与验收探针）。
+        assert!(headers.contains(&format!("filename*=utf-8''{expected_pct}")));
+        assert!(!headers.contains("filename*0*="));
         // Content-Type：引号内 RFC2047（Gmail 等宽松客户端兼容路径）。
         assert!(headers.contains("name=\"=?utf-8?B?"));
         // 同一头内不得再同时出现裸 filename 与 filename*（mail-parser 续行合并会误拼接），
         // 也不得出现裸（未加引号）encoded-word 参数值。
         assert!(!headers.contains("filename=\""));
         assert!(!headers.contains(" filename=?utf-8"));
-        assert!(!headers.contains("name*=utf-8"));
+        // Content-Type 不得使用 RFC2231 参数（按行核对：filename*= 是 name*= 的超串，不能整体 includes）。
+        for line in headers.split(
+            "
+",
+        ) {
+            if line.starts_with("Content-Type:") {
+                assert!(!line.contains("*="), "Content-Type 参数形式改变: {line}");
+            }
+        }
         let parsed = parse_back(&assemble(&MimeInput {
             from_name: "me",
             from_email: "me@example.test",
@@ -1779,14 +1795,14 @@ mod tests {
     }
 
     #[test]
-    fn long_cjk_filenames_fold_and_segment_within_line_limits() {
-        // >75 字节触发 RFC2047 折行、percent 值 >64 触发 RFC2231 分段续行。
-        let name = "这是一个相当长的中文文件名用来测试多段编码续行行为是否正确保存原名.txt";
+    fn long_cjk_filenames_stay_on_one_2231_line_within_limits() {
+        // >75 字节触发 RFC2047 折行；percent 值在 800 字符预算内保持单段 2231。
+        let name = "这是一个相当长的中文文件名用来测试编码续行行为是否正确保存原名.txt";
         assert!(name.len() > 75);
         let headers = attachment_headers(name, "application/octet-stream", b"long");
         assert!(headers.contains("name=\"=?utf-8?B?"));
-        assert!(headers.contains("filename*0*=utf-8''"));
-        assert!(headers.contains("filename*1*="));
+        assert!(headers.contains(&format!("filename*=utf-8''{}", percent_encode_value(name))));
+        assert!(!headers.contains("filename*0*="));
         assert!(!headers.contains("filename=\""));
         // 折行后每一行都不得超过 RFC 5322 单行 998 字节上限。
         for line in headers.split("\r\n") {
@@ -1811,13 +1827,30 @@ mod tests {
     }
 
     #[test]
+    fn extreme_filenames_fall_back_to_2231_continuations() {
+        // 编码值超过单行预算（约 800 字符）才回退多段续行。多段在 mail-parser 0.10.2
+        // 接收侧会损坏文件名（上游限制，probe_2231_single_vs_multi 实测），因此这里只
+        // 断言参数结构与行限，不做接收端原名往返断言。
+        let name = "长".repeat(300);
+        let headers = attachment_headers(&name, "application/octet-stream", b"x");
+        assert!(headers.contains("filename*0*=utf-8''"));
+        assert!(headers.contains("filename*1*="));
+        for line in headers.split(
+            "
+",
+        ) {
+            assert!(line.len() <= 998, "单行超限 {} 字节: {}", line.len(), line);
+        }
+    }
+
+    #[test]
     fn empty_or_injected_filenames_fall_back_safely() {
         let headers = attachment_headers("   ", "text/plain", b"x");
         assert!(headers.contains("name=\"attachment.bin\""));
         assert!(headers.contains("filename=\"attachment.bin\""));
         // 含引号 / 分号的注入形名字走编码路径，不能破坏参数结构。
         let headers = attachment_headers("evil\";.txt", "text/plain", b"x");
-        assert!(headers.contains("filename*0*=utf-8''evil%22%3B.txt"));
+        assert!(headers.contains("filename*=utf-8''evil%22%3B.txt"));
         assert!(!headers.contains("evil\";"));
     }
 
