@@ -5,7 +5,7 @@ import type { SyncJob } from '../src/domain/sync';
 import type { OutboxEntry } from '../src/domain/outbox';
 
 /** Test-only IPC harness. Validates UI behavior, not a real server or the Rust queue. */
-async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[]; huge?: number } = {}) {
+async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[]; huge?: number; threads?: boolean } = {}) {
   const accounts: MailAccount[] = (realAccounts ? [1, 2, 3] : []).map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
   if (options.pop3) accounts[2] = { ...accounts[2], provider: 'pop3' };
   await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion, navigation, options }) => {
@@ -16,6 +16,14 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       for (let index = 0; index < options.huge; index++) {
         workspace.messages.push({ ...base, id: `huge-${index}`, accountId: 'real-1', labelIds: [], unread: index % 7 === 0, subject: `大数据量邮件 ${index + 1}`, bodyText: `批量测试正文 ${index + 1}`, receivedAt: new Date(Date.UTC(2026, 0, 1) + index * 60000).toISOString(), changes: [], attachments: [] });
       }
+    }
+    if (options.threads) {
+      const base = workspace.messages[0];
+      const inject = (id: string, subject: string, at: string, unread = false) => workspace.messages.push({ ...base, id, accountId: 'real-1', labelIds: [], unread, subject, bodyText: `会话正文 ${id}`, receivedAt: at, changes: [], attachments: [] });
+      inject('thread-1', '季度评审报告', '2026-03-01T00:00:00Z', true);
+      inject('thread-2', 'Re: 季度评审报告', '2026-03-02T00:00:00Z');
+      inject('thread-3', '转发：季度评审报告', '2026-03-03T00:00:00Z', true);
+      inject('thread-solo', '独立通知', '2026-03-04T00:00:00Z');
     }
     if (recoveryMode) { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery = { state: recoveryMode === 'queued' ? 'queued' : 'available', detail: '旧缓存或未知归档需要远端核对。', location: null, evidence: null }; if (recoveryMode === 'unknown') { message.mailbox = 'archive'; message.changes = [{ field: 'archive', state: 'unknown', error: '归档结果待核对，不会自动重试。' }]; } }
     if (recoveryMode === 'fingerprint' || recoveryMode === 'unanchored') { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery!.fingerprint = { eligible: recoveryMode === 'fingerprint', reason: recoveryMode === 'fingerprint' ? '可信原定位仍在，可安全核对原文。' : '缺少可信原定位，不能升级为历史原文指纹。' }; }
@@ -891,6 +899,37 @@ test('reader toolbar deletes to trash and moves between folders', async ({ page 
   await page.screenshot({ path: info.outputPath('mail-management-reader.png') });
 });
 
+
+test('same-subject conversations fold into one row with a count, expand on click and persist the toggle', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true, true, { threads: true });
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  // 默认关闭：同标题邮件平铺展示。
+  await expect(list.getByRole('button', { name: '阅读邮件：季度评审报告', exact: true })).toBeVisible();
+  // 开启折叠：Re / 转发前缀归一后 3 封折叠为一行 + 计数徽标；根主题作组标题。
+  await list.getByRole('button', { name: '对话', exact: true }).click();
+  const group = list.getByRole('button', { name: '展开会话：季度评审报告，共 3 封', exact: true });
+  await expect(group).toBeVisible();
+  await expect(list.locator('.thread-toggle')).toHaveCount(1);
+  await expect(list.getByRole('button', { name: '阅读邮件：季度评审报告', exact: true })).toHaveCount(0);
+  // 展开按时间正序，最新一封自动选中；再点折叠（aria-label 随状态切换）。
+  await group.click();
+  const expandedGroup = list.getByRole('button', { name: '折叠会话：季度评审报告', exact: true });
+  await expect(expandedGroup).toBeVisible();
+  await expect(expandedGroup).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.locator('.thread-child')).toHaveCount(3);
+  await expect(list.locator('.thread-child.is-selected')).toContainText('转发：季度评审报告');
+  await expandedGroup.click();
+  await expect(list.locator('.thread-child')).toHaveCount(0);
+  // 开关持久化：刷新后仍为开启状态（展开集合按视图重置为折叠）。
+  await page.reload();
+  await expect(list.getByRole('button', { name: '展开会话：季度评审报告，共 3 封', exact: true })).toBeVisible();
+  // 关闭开关恢复平铺。
+  await list.getByRole('button', { name: '对话', exact: true }).click();
+  await expect(list.getByRole('button', { name: '阅读邮件：季度评审报告', exact: true })).toBeVisible();
+  await expect(list.locator('.thread-toggle')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('subject-conversations.png') });
+});
 
 test('large mailbox list renders only the virtual window and pages in as it scrolls', async ({ page }, info) => {
   await mockDesktop(page, true, undefined, true, true, true, { huge: 600 });

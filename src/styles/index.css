@@ -158,6 +158,17 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .row-select.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
 .mail-row.is-checked { background: var(--surface-selected); }
 @media (prefers-reduced-motion: reduce) { .row-select { transition: none; } }
+/* 同标题会话折叠：组行与普通行同高（虚拟化按行数取窗口）；展开的子行缩进并带会话引导线。 */
+.thread-row .thread-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: var(--list-row-height); padding: 7px 14px 7px 20px; text-align: left; color: var(--text); }
+.thread-row .thread-toggle > svg { flex-shrink: 0; color: var(--text-subtle); }
+.thread-row .thread-count { flex-shrink: 0; min-width: 18px; text-align: center; font-size: 10px; line-height: 16px; color: var(--text-subtle); background: var(--surface-hover); border-radius: 8px; padding: 0 5px; }
+.is-unread .thread-count { color: var(--accent-foreground); background: var(--accent); }
+.thread-subject { flex: 1; min-width: 0; font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-unread .thread-subject { font-weight: 600; }
+.thread-row .thread-toggle time { margin-left: auto; font-size: 9px; color: var(--text-subtle); white-space: nowrap; }
+.thread-row .row-account { top: 50%; transform: translateY(-50%); inset-inline-end: 34px; }
+.thread-child .mail-row-main { padding-left: 38px; }
+.thread-child::before { content: ''; position: absolute; left: 26px; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--border) 80%, transparent); }
 /* 批量操作栏与移动目标菜单（阅读区与列表共用）。 */
 .batch-bar { gap: 8px; }
 .batch-count { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, FolderInput, ListChecks, RefreshCw, Star, X } from 'lucide-react';
+import { ArrowDown, Check, ChevronDown, ChevronRight, FolderInput, ListChecks, RefreshCw, Star, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { useThemeStore } from '../../stores/themeStore';
+import { useThreadViewStore } from '../../stores/threadViewStore';
 import { mailboxName, selectMessages } from './selectors';
 import { countForView } from './viewCounts';
+import { conversationRows, type ThreadRow } from './threading';
 import { viewKey } from '../../domain/navigation';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -33,9 +35,13 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     applyMessagePatch: s.applyMessagePatch,
   })));
   const { jobs, submitting, enqueue } = useSyncStore(useShallow(s => ({ jobs: s.jobs, submitting: s.submitting, enqueue: s.enqueue })));
+  const groupBySubject = useThreadViewStore(s => s.groupBySubject);
+  const toggleThreadView = useThreadViewStore(s => s.toggle);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  // 会话折叠：开关开启时同标题 ≥2 封成组；展开集合按视图切换清空。
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   // ── 虚拟列表：只渲染视口窗口，滚动条高度由上下留白维持 ──
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -60,7 +66,21 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
   const rowHeight = useMemo(() => readRowHeight(skinId), [skinId]);
   const jobsByAccount = new Map(jobs.map(job => [job.accountId, job]));
   const visible = selectMessages(messages, query);
-  const window_ = virtualWindow({ count: visible.length, rowHeight, scrollTop, viewportHeight });
+  // ── 同标题折叠：草稿视图不折叠；组行与普通行同高，虚拟化只需按折叠后的行数取窗口 ──
+  const threadsEnabled = groupBySubject && query.mailbox !== 'drafts';
+  const rows: ThreadRow[] = useMemo(
+    () => threadsEnabled ? conversationRows(visible, expandedThreads) : visible.map(message => ({ kind: 'message' as const, message })),
+    [visible, threadsEnabled, expandedThreads],
+  );
+  const window_ = virtualWindow({ count: rows.length, rowHeight, scrollTop, viewportHeight });
+  function toggleThread(key: string) {
+    setExpandedThreads(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
   // ── 视图懒加载：桌面端按视图分页拉取；滚动到已加载末尾附近时追加下一页 ──
   const state = viewStates[viewKey(query)];
   const viewTotal = query.unreadOnly || query.search ? null : countForView(viewCounts, query)?.total ?? null;
@@ -69,8 +89,8 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     // 渲染窗口逼近已加载末尾（剩余不足一屏 + 12 行）即取下一页；空首页即 done，不会空转。
     if (window_.bottomPad < viewportHeight + rowHeight * 12) void loadMore();
   }, [state, window_.bottomPad, rowHeight, viewportHeight, loadMore]);
-  // 视图切换 / 搜索变化时清空选择，避免跨视图误操作。
-  useEffect(() => { setSelected([]); setMoveOpen(false); }, [query.accountId, query.mailbox, query.folderId, query.draftSource, query.labelId, query.search, query.unreadOnly]);
+  // 视图切换 / 搜索变化时清空选择与展开的会话，避免跨视图误操作。
+  useEffect(() => { setSelected([]); setMoveOpen(false); setExpandedThreads(new Set()); }, [query.accountId, query.mailbox, query.folderId, query.draftSource, query.labelId, query.search, query.unreadOnly]);
   const queriedAccount = query.accountId ? accounts.find(a => a.id === query.accountId) : null;
   const realAccount = queriedAccount && queriedAccount.status !== 'demo' ? queriedAccount : null;
   // 指定账号视图同步该账号；全部账号视图同步所有可同步账号（IMAP + Gmail OAuth）。
@@ -137,6 +157,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
       <div className="list-filters" role="group" aria-label={t('mailList.filterGroupAria')}>
         <button aria-pressed={!query.unreadOnly} onClick={() => setQuery({ unreadOnly: false })}>{t('mailList.filterAll')}</button>
         <button aria-pressed={Boolean(query.unreadOnly)} onClick={() => setQuery({ unreadOnly: true })}>{t('mailList.filterUnread')}</button>
+        {query.mailbox !== 'drafts' && <button aria-pressed={threadsEnabled} title={t('mailList.threadToggleTitle')} onClick={toggleThreadView}>{t('mailList.threadToggle')}</button>}
       </div>
       <div className="list-actions"><span className="list-order" title={t('mailList.orderByDateTitle')}>{t('mailList.orderByDate')}<ArrowDown size={12} /></span><Button variant="ghost" aria-label={t('mailList.selectAllAria')} title={t('mailList.selectAll')} disabled={!visible.length} onClick={() => setSelected(visible.map(message => message.id))}><ListChecks size={14} /></Button><Button variant="ghost" className="account-sync" aria-label={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} title={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? accountSyncing : syncingAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? t('settings.queuing') : jobsByAccount.get(syncTarget.id)?.status === 'queued' ? t('settings.queued') : jobsByAccount.get(syncTarget.id)?.status === 'running' ? t('settings.syncing') : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? t('settings.retry') : t('settings.sync') : syncingAll ? t('settings.syncing') : t('settings.sync')}</Button></div>
     </header>}
@@ -144,11 +165,27 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
       {visible.length === 0 && state?.loading ? <div className="list-loading" role="status">{t('mailList.loadingView')}</div>
         : visible.length === 0 ? (query.unreadOnly ? <EmptyState title={t('mailList.emptyUnreadTitle')} description={t('mailList.emptyUnreadBody')} /> : query.search ? <EmptyState title={t('mailList.emptySearchTitle')} description={t('mailList.emptySearchBody')} /> : realAccount ? <EmptyState title={t('mailList.emptyAccountTitle', { name: realAccount.name })} description={t('mailList.emptyAccountBody')} /> : <EmptyState title={t('mailList.emptyTitle')} description={t('mailList.emptyBody')} />) : <>
         {window_.topPad > 0 && <div style={{ height: window_.topPad }} aria-hidden />}
-        {visible.slice(window_.start, window_.end).map((message, offset) => {
+        {rows.slice(window_.start, window_.end).map((row, offset) => {
+        const position = window_.start + offset + 1;
+        if (row.kind === 'group') {
+          const { group, unread, latest } = row;
+          const expanded = expandedThreads.has(group.key);
+          const account = accounts.find(a => a.id === row.latest.accountId);
+          return <article key={group.key} aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', 'thread-row', unread > 0 && 'is-unread')}>
+            <button className="thread-toggle" aria-expanded={expanded} aria-label={expanded ? t('mailList.threadCollapseAria', { subject: group.subject }) : t('mailList.threadGroupAria', { subject: group.subject, count: group.messages.length })} title={t('mailList.threadCountTitle', { count: group.messages.length, unread })} onClick={() => { if (expanded || selectionMode) toggleThread(group.key); else { toggleThread(group.key); selectMessage(latest.id); } }}>
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <span className="sender"><span className={cn('unread-dot', unread === 0 && 'invisible')} /><span>{latest.from.name}</span></span>
+              <span className="thread-count" aria-hidden>{group.messages.length}</span>
+              <span className="thread-subject">{group.subject}</span>
+              <time dateTime={latest.receivedAt}>{new Intl.DateTimeFormat(currentLanguage(), { month: 'numeric', day: 'numeric' }).format(new Date(latest.receivedAt))}</time>
+            </button>
+            {!query.accountId && account && <span className={`row-account tone-${account.color}`} title={account.email}>{account.name}</span>}
+          </article>;
+        }
+        const message = row.message;
         const account = accounts.find(a => a.id === message.accountId);
         const isSelected = selected.includes(message.id);
-        const position = window_.start + offset + 1;
-        return <article key={message.id} aria-posinset={position} aria-setsize={visible.length} className={cn('mail-row', selectedId === message.id && 'is-selected', message.unread && 'is-unread', isSelected && 'is-checked')}>
+        return <article key={message.id} aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', row.childOf && threadsEnabled && 'thread-child', selectedId === message.id && 'is-selected', message.unread && 'is-unread', isSelected && 'is-checked')}>
           <button className={cn('row-select', isSelected && 'is-on')} aria-label={t('mailList.selectAria', { subject: message.subject })} aria-pressed={isSelected} onClick={() => toggleSelected(message.id)}><Check size={13} /></button>
           <button className="mail-row-main" title={[message.from.email, account?.name, ...message.labelIds.map(id => labels.find(label => label.id === id)?.name)].filter(Boolean).join(' · ')} aria-label={t('mailList.readAria', { subject: message.subject })} onClick={() => { if (!selectionMode) { selectMessage(message.id); onSelect(); } else toggleSelected(message.id); }} aria-current={selectedId === message.id ? 'true' : undefined}>
             <div className="mail-row-top"><span className="sender"><span className={cn('unread-dot', !message.unread && 'invisible')} /><span>{message.from.name}</span></span><time dateTime={message.receivedAt}>{new Intl.DateTimeFormat(currentLanguage(), { month: 'numeric', day: 'numeric' }).format(new Date(message.receivedAt))}</time></div>
