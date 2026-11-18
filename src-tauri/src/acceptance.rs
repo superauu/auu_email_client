@@ -724,6 +724,103 @@ mod tests {
         cleanup(&db, &[account]);
     }
 
+    /// ── 验收⑦：Thunderbird 风格多段 2231 附件名接收修复 ────────────
+    /// 注入多段续行（60 字符分段、切断 UTF-8 字符）的原始邮件 → 真实 IMAP 同步 →
+    /// 库内附件名应为本名（接收侧 rfc2231_attachment_name_fixes 自解析覆盖）。
+    #[test]
+    fn thunderbird_multisegment_2231_names_survive_real_receive() {
+        if !enabled() {
+            eprintln!("skip: AUUMAIL_ACCEPTANCE 未设置");
+            return;
+        }
+        let (db, _dir) = fresh_db("tb2231");
+        purge_mailbox("auu", "auupass");
+        let account = save_account(&db, "imap", "auu", "auupass", false);
+        let tag = marker();
+        let name = "季度报告-验收版.txt";
+        // 60 字符分段（Thunderbird 风格），段边界切断 UTF-8 字符。
+        let mut encoded = String::new();
+        for byte in name.as_bytes() {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+        let (seg0, seg1) = encoded.split_at(60);
+        let content = format!("多段 2231 验收正文 {tag}");
+        let encoded_content = base64::engine::general_purpose::STANDARD.encode(&content);
+        // GreenMail 只认已配置账号：认证用 auu，信封 MAIL FROM 保持第三方发件人。
+        raw_send(
+            "auu",
+            "auupass",
+            &[format!(
+                "From: colleague@{DOMAIN}
+To: auu@{DOMAIN}
+Subject: {tag} 多段附件名
+Message-ID: <{tag}@{DOMAIN}>
+Date: Sat, 7 Feb 2026 14:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=TB
+
+--TB
+Content-Type: text/plain; charset=utf-8
+
+{tag} 正文。
+--TB
+Content-Type: application/octet-stream
+Content-Disposition: attachment;
+ filename*0*=utf-8''{seg0};
+ filename*1*=utf-8''{seg1}
+Content-Transfer-Encoding: base64
+
+{encoded_content}
+--TB--
+"
+            )],
+        );
+        sync(&db, &account);
+        let subjects = inbox_subjects(&db, &account);
+        let (message_id, _) = subjects
+            .iter()
+            .find(|(_, subject)| subject.contains(&tag))
+            .expect("注入邮件应已同步");
+        let row = {
+            let conn = db.lock().unwrap();
+            mail_store::message_by_id(&conn, &account, message_id).unwrap()
+        };
+        assert_eq!(row.attachments.len(), 1, "应识别出一个附件");
+        assert_eq!(
+            row.attachments[0].name, name,
+            "Thunderbird 风格多段 2231 文件名应被接收侧修复还原"
+        );
+        // 字节级：原文下载后解析出的附件内容与注入一致。
+        let downloaded = crate::imap_body::request(
+            &mut db.lock().unwrap(),
+            &account,
+            message_id,
+            row.state_revision,
+        )
+        .unwrap();
+        let part = downloaded
+            .attachments
+            .iter()
+            .find(|a| a.index == 0)
+            .expect("下载后附件应存在");
+        assert_eq!(part.name, name);
+        let (root, key, _meta) = {
+            let conn = db.lock().unwrap();
+            crate::mail_attachments::load(&conn, &account, message_id, 0).unwrap()
+        };
+        let raw = crate::mail_cache::read(&root, &key).unwrap();
+        let parsed = mail_parser::MessageParser::default()
+            .parse(&raw)
+            .expect("缓存原文 MIME 有效");
+        let attachment = parsed.attachments().next().expect("缓存附件应存在");
+        assert_eq!(
+            String::from_utf8_lossy(attachment.contents()),
+            content,
+            "附件字节与注入一致"
+        );
+        cleanup(&db, &[account]);
+    }
+
     /// ── 验收⑥：大邮箱真实同步吞吐 ─────────────────────────────────
     /// 经真实 SMTP 注入 2000 封 → IMAP 全量同步计时 → 二次增量归零。
     /// 规模边界：GreenMail 内存实现在万封级 FETCH 上会挂起（探针实测），因此本验收

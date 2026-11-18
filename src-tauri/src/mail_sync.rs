@@ -555,6 +555,107 @@ pub(crate) fn parse_message(fetch: &imap::types::Fetch) -> Result<ParsedMessage,
         fetch.flags().contains(&imap::types::Flag::Flagged),
     )
 }
+/// mail-parser 0.10.2 的多段 RFC 2231 续行合并按段独立解码后再拼接，段边界落在
+/// UTF-8 多字节字符中间时会损坏文件名（acceptance probe_2231_single_vs_multi 实测；
+/// Thunderbird 等发件端按 ~60 字符分段，中文长名必中）。这里按 RFC 2231 规范自行
+/// 解码：段按原始字节连接、整体 percent-decode 后再 UTF-8 解码，用正确文件名覆盖。
+/// 仅对多段（filename*0* + filename*1*…）扩展参数生效；单段 mail-parser 解析正确。
+fn decode_rfc2231_filename(header_text: &str) -> Option<String> {
+    // 折叠多行：续行去掉行首空白后直接拼接，便于按 ';' 切分参数。
+    let joined: String = header_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .concat();
+    let mut segments: Vec<(u32, String)> = Vec::new();
+    for token in joined.split(';') {
+        let token = token.trim();
+        // filename*0*=…（扩展分段）或 filename*=…（单段扩展）。
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let Some(rest) = key.strip_prefix("filename*") else {
+            continue;
+        };
+        let segment = if rest == "*" {
+            0
+        } else {
+            let segment = rest.strip_suffix('*')?;
+            segment.parse::<u32>().ok()?
+        };
+        segments.push((segment, value.trim().to_string()));
+    }
+    if segments.len() < 2 {
+        return None; // 单段 mail-parser 解析正确，不干预。
+    }
+    segments.sort_by_key(|(segment, _)| *segment);
+    // 每段可能自带 charset''lang 前缀（Thunderbird 每段都带，非规范但常见）。
+    let mut bytes: Vec<u8> = Vec::new();
+    for (position, (_, value)) in segments.iter().enumerate() {
+        let value = if let Some((charset, rest)) = value.split_once("''") {
+            if position == 0 && !charset.is_empty() && !charset.eq_ignore_ascii_case("utf-8") {
+                // 仅支持 UTF-8 系；其他 charset 保留 mail-parser 原结果。
+                return None;
+            }
+            rest
+        } else {
+            value
+        };
+        bytes.extend(percent_decode(value)?);
+    }
+    let name = String::from_utf8(bytes).ok()?;
+    (!name.is_empty()).then_some(name)
+}
+
+fn percent_decode(value: &str) -> Option<Vec<u8>> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            let byte = u8::from_str_radix(hex, 16).ok()?;
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Some(out)
+}
+
+/// 附件名覆盖表：附件序号 → 自行按 RFC 2231 解码的正确文件名。
+fn rfc2231_attachment_name_fixes(
+    raw: &[u8],
+    parsed: &mail_parser::Message<'_>,
+) -> HashMap<usize, String> {
+    let mut fixes = HashMap::new();
+    for (index, part) in parsed.attachments().enumerate() {
+        for header in part.headers() {
+            if !matches!(header.name, mail_parser::HeaderName::ContentDisposition) {
+                continue;
+            }
+            if header.offset_start >= header.offset_end || header.offset_end > raw.len() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&raw[header.offset_start..header.offset_end]);
+            // 只有头文本同时含多段标记才需要修复；解析结果不同才覆盖。
+            if !(text.contains("filename*0*=") && text.contains("filename*1*=")) {
+                continue;
+            }
+            if let Some(name) = decode_rfc2231_filename(&text) {
+                if part.attachment_name().is_none_or(|merged| merged != name) {
+                    fixes.insert(index, name);
+                }
+            }
+        }
+    }
+    fixes
+}
+
 pub(crate) fn parse_raw(
     uid: u32,
     raw: &[u8],
@@ -616,33 +717,40 @@ pub(crate) fn parse_raw(
         };
         (!joined.is_empty()).then_some(joined)
     });
+    let mut attachments: Vec<Attachment> = parsed
+        .as_ref()
+        .map(|mail| {
+            mail.attachments()
+                .enumerate()
+                .map(|(index, part)| Attachment {
+                    index,
+                    name: part
+                        .attachment_name()
+                        .unwrap_or("attachment.bin")
+                        .chars()
+                        .take(240)
+                        .collect(),
+                    size: part.contents().len(),
+                    media_type: part
+                        .content_type()
+                        .map(|t| format!("{}/{}", t.ctype(), t.subtype().unwrap_or("octet-stream")))
+                        .unwrap_or_else(|| "application/octet-stream".into()),
+                })
+                .take(200)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(mail) = parsed.as_ref() {
+        // 多段 RFC 2231 续行损坏修复：用自行解码的正确文件名覆盖（附件序号对齐）。
+        for (index, name) in rfc2231_attachment_name_fixes(raw, mail) {
+            if let Some(attachment) = attachments.iter_mut().find(|a| a.index == index) {
+                attachment.name = name.chars().take(240).collect();
+            }
+        }
+    }
     Ok(ParsedMessage {
         raw_cache_key: None,
-        attachments: parsed
-            .as_ref()
-            .map(|mail| {
-                mail.attachments()
-                    .enumerate()
-                    .map(|(index, part)| Attachment {
-                        index,
-                        name: part
-                            .attachment_name()
-                            .unwrap_or("attachment.bin")
-                            .chars()
-                            .take(240)
-                            .collect(),
-                        size: part.contents().len(),
-                        media_type: part
-                            .content_type()
-                            .map(|t| {
-                                format!("{}/{}", t.ctype(), t.subtype().unwrap_or("octet-stream"))
-                            })
-                            .unwrap_or_else(|| "application/octet-stream".into()),
-                    })
-                    .take(200)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        attachments,
         content_hash: mail_recovery::hash(raw),
         header_message_id: parsed
             .as_ref()
@@ -1382,6 +1490,114 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn percent_encode(value: &str) -> String {
+        let mut encoded = String::new();
+        for byte in value.as_bytes() {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+        encoded
+    }
+
+    #[test]
+    fn rfc2231_decoder_handles_thunderbird_style_and_conformant_segments() {
+        let name = "季度报告-验收版.txt";
+        let encoded = percent_encode(name);
+        // Thunderbird 风格：60 字符分段（可能切断 UTF-8 字符），每段都带 charset 前缀。
+        let (seg0, seg1) = encoded.split_at(60);
+        let thunderbird = format!(
+            "Content-Disposition: attachment;
+ filename*0*=utf-8''{seg0};
+ filename*1*=utf-8''{seg1}"
+        );
+        assert_eq!(
+            decode_rfc2231_filename(&thunderbird).as_deref(),
+            Some(name),
+            "每段带 charset 的非规范形式也应正确还原"
+        );
+        // 规范形式：仅首段带 charset，其余段裸 percent 值。
+        let conformant = format!(
+            "Content-Disposition: attachment;
+ filename*0*=utf-8''{seg0};
+ filename*1*={seg1}"
+        );
+        assert_eq!(decode_rfc2231_filename(&conformant).as_deref(), Some(name));
+        // 超长名多段（3 段）。
+        let long_name = "这是一个非常长的中文附件名称用来验证三段续行的解码完整性报告.txt";
+        let long_encoded = percent_encode(long_name);
+        let segments: Vec<String> = long_encoded
+            .as_bytes()
+            .chunks(60)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .enumerate()
+            .map(|(index, segment)| format!("filename*{index}*=utf-8''{segment}"))
+            .collect();
+        let three = format!("Content-Disposition: attachment; {}", segments.join("; "));
+        assert_eq!(decode_rfc2231_filename(&three).as_deref(), Some(long_name));
+        // 单段不干预（返回 None，交给 mail-parser）。
+        assert_eq!(
+            decode_rfc2231_filename(
+                "Content-Disposition: attachment; filename*=utf-8''%E5%AD%A3.txt"
+            ),
+            None
+        );
+        // 段数不足两个的不触发。
+        assert_eq!(
+            decode_rfc2231_filename(
+                "Content-Disposition: attachment; filename*0*=utf-8''%E5%AD%A3.txt"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_raw_fixes_corrupted_multisegment_rfc2231_attachment_names() {
+        // Thunderbird 风格 60 字符分段，段边界切断 UTF-8 字符：
+        // mail-parser 合并结果损坏，parse_raw 应以自行解码的正确文件名覆盖。
+        let name = "季度报告-验收版.txt";
+        let encoded = percent_encode(name);
+        let (seg0, seg1) = encoded.split_at(60);
+        let disposition = format!(
+            "Content-Disposition: attachment;
+ filename*0*=utf-8''{seg0};
+ filename*1*=utf-8''{seg1}"
+        );
+        let raw = format!(
+            "From: sender@example.test
+To: me@example.test
+Subject: 2231 修复
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=BB
+
+--BB
+Content-Type: text/plain
+
+正文
+--BB
+Content-Type: application/octet-stream
+{name}
+Content-Transfer-Encoding: base64
+
+aGVsbG8=
+--BB--
+",
+            name = disposition
+        );
+        let parsed = parse_raw(
+            1,
+            raw.as_bytes(),
+            "2026-02-07T00:00:00Z".to_string(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(
+            parsed.attachments[0].name, name,
+            "多段 2231 文件名应被自行解码覆盖"
+        );
+        assert_eq!(parsed.attachments[0].size, 5);
     }
 
     #[test]
