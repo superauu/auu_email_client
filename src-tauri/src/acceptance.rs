@@ -261,9 +261,6 @@ mod tests {
         all
     }
 
-    /// 回归记录：mail-parser 0.10.2 对 RFC 2231 的单段与多段行为（2026-11-18 验收实测）。
-    /// 单段 `filename*=utf-8''…` 正确还原；多段续行按段独立解码后拼接，段边界落在
-    /// UTF-8 多字节字符中间时损坏文件名——发送端因此用单段（见 outbox rfc2231_parameters）。
     #[test]
     fn probe_2231_single_vs_multi() {
         use mail_parser::{MessageParser, MimeHeaders};

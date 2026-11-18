@@ -664,10 +664,20 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         .map(str::trim)
         .filter(|text| !text.is_empty());
     if let Some(term) = search {
-        clauses.push(LIKE_CLAUSE);
-        let pattern = like_pattern(term);
-        for _ in 0..4 {
-            args.push(Box::new(pattern.clone()));
+        // ≥3 字符走 trigram 索引（子串语义，中英文一致）；更短的查询 trigram 产生
+        // 不了序列，回退 LIKE 全表扫描（350ms 防抖后执行，短查询本身也便宜）。
+        if term.chars().count() >= 3 {
+            let phrase = format!("\"{}\"", term.replace('"', "\"\""));
+            clauses.push(
+                "m.rowid IN (SELECT rowid FROM messages_search WHERE messages_search MATCH ?)",
+            );
+            args.push(Box::new(phrase));
+        } else {
+            clauses.push(LIKE_CLAUSE);
+            let pattern = like_pattern(term);
+            for _ in 0..4 {
+                args.push(Box::new(pattern.clone()));
+            }
         }
     }
     if let Some(cursor) = &query.cursor {
@@ -1424,6 +1434,77 @@ mod tests {
         assert!(contact_suggestions(&conn, "missing", 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn trigram_search_covers_cjk_substrings_and_like_falls_back_for_short_terms() {
+        let conn = setup();
+        // ≥3 字符：trigram 索引子串命中（中文，跨词边界）。
+        let hits = all_ids(
+            &conn,
+            &MessageQuery {
+                search: Some("正文二".into()),
+                ..MessageQuery::default()
+            },
+        );
+        assert_eq!(hits, vec!["m2"]);
+        // 2 字符：trigram 无序列，LIKE 回退仍命中（三封正文都含该前缀）。
+        let short = all_ids(
+            &conn,
+            &MessageQuery {
+                search: Some("正文".into()),
+                ..MessageQuery::default()
+            },
+        );
+        assert_eq!(short, vec!["m1", "m2", "m3"]);
+        // 触发器维护：新邮件插入后立即可检索，删除后从索引消失。
+        conn.execute_batch(
+            "INSERT INTO messages (id,account_id,remote_id,thread_id,subject,sender_name,sender_email,body_text,received_at)
+             VALUES ('m9','a','r9','t9','主题九','发件人','from@example.test','独特的检索关键词组合','2026-01-05T00:00:00Z')",
+        )
+        .unwrap();
+        let found = all_ids(
+            &conn,
+            &MessageQuery {
+                search: Some("独特的检索关键词".into()),
+                ..MessageQuery::default()
+            },
+        );
+        assert_eq!(found, vec!["m9"]);
+        conn.execute("DELETE FROM messages WHERE id='m9'", [])
+            .unwrap();
+        let found = all_ids(
+            &conn,
+            &MessageQuery {
+                search: Some("独特的检索关键词".into()),
+                ..MessageQuery::default()
+            },
+        );
+        assert!(found.is_empty(), "删除后索引应同步移除");
+        // 标记更新（不列 subject/body 列）不破坏索引。
+        conn.execute("UPDATE messages SET unread=0 WHERE id='m1'", [])
+            .unwrap();
+        let hits = all_ids(
+            &conn,
+            &MessageQuery {
+                search: Some("正文一".into()),
+                ..MessageQuery::default()
+            },
+        );
+        assert_eq!(hits, vec!["m1"], "标记更新不应触发重索引或破坏索引");
+    }
+
+    #[test]
+    fn trigram_virtual_table_uses_trigram_tokenizer() {
+        let conn = setup();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='messages_search'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("trigram"));
     }
 
     #[test]
