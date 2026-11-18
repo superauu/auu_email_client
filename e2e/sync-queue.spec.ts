@@ -41,7 +41,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       workspace.messages.push({...message,id:'server-draft',mailbox:'drafts',subject:'服务器草稿测试',changes:[],attachments:[]});
       workspace.messages.push({...fixture.messages[1], id:'plain-link', accountId: 'real-1', labelIds: [], subject:'纯文本链接测试', bodyText:'请联系 help@anoma.ly 或访问 https://example.com/help。', unread:false, changes:[], attachments:[]});
     }
-    let folderList: MailFolder[] = completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [];
+    const folderList: MailFolder[] = completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [];
     if (navigation) {
       folderList.push(...[
         { id: 'inbox-1', name: 'INBOX', kind: 'inbox' },
