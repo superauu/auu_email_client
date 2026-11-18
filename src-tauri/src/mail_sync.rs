@@ -98,7 +98,7 @@ pub(crate) struct Attachment {
     pub media_type: String,
 }
 
-fn folder_kind(name: &str) -> &'static str {
+pub(crate) fn folder_kind(name: &str) -> &'static str {
     let name = name.to_lowercase();
     if name == "inbox" {
         "inbox"

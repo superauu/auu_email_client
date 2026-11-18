@@ -182,6 +182,15 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .list-loading { padding: 40px 20px; text-align: center; color: var(--text-subtle); font-size: 12px; }
 .list-footer .list-error { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); }
 .list-footer button { font-size: 9px; padding: 2px 6px; }
+/* 设置 · 目录管理：新建行 + 自定义目录列表（重命名内联编辑）。 */
+.folder-manager { display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+.folder-create { display: flex; gap: 6px; }
+.folder-create input { flex: 1; }
+.folder-list-manage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.folder-list-manage li { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 8px; background: var(--surface-hover); }
+.folder-list-manage li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.folder-list-manage li input { flex: 1; }
+.folder-delete { color: var(--danger); }
 .resize-handle { width: 5px; flex-shrink: 0; background: var(--border); cursor: col-resize; touch-action: none; border-inline: 2px solid var(--surface); }
 .resize-handle--sidebar { border-inline-start-color: var(--canvas); }
 .resize-handle:hover, .resize-handle:focus-visible, .resize-handle:active { background: var(--accent); outline-offset: -1px; }

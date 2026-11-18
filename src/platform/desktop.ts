@@ -164,6 +164,13 @@ export interface RealAccountInput {
   color: 'teal' | 'blue' | 'amber';
 }
 
+/** 远端目录 CRUD（仅 IMAP 自定义目录）；返回该账号最新目录列表。 */
+export const desktopFolders = {
+  async create(accountId: string, name: string): Promise<import('../domain/mail').MailFolder[]> { return invoke('mail_create_folder', { accountId, name }); },
+  async rename(accountId: string, folderId: string, newName: string): Promise<import('../domain/mail').MailFolder[]> { return invoke('mail_rename_folder', { accountId, folderId, newName }); },
+  async remove(accountId: string, folderId: string): Promise<import('../domain/mail').MailFolder[]> { return invoke('mail_delete_folder', { accountId, folderId }); },
+};
+
 /** Real-account lifecycle: verify a connection, persist it, or remove it. */
 export const desktopAccounts = {
   async configuration(id: string): Promise<RealAccountInput> { return invoke('mail_account_config', { id }); },

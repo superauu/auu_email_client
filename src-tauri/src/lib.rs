@@ -8,6 +8,7 @@ mod error;
 mod imap_body;
 mod imap_condstore;
 mod imap_download;
+mod imap_folders;
 mod imap_jobs;
 mod imap_limits;
 mod imap_settings;
@@ -393,6 +394,47 @@ async fn mail_update_message(
     })
     .await
     .map_err(|_| AppError::storage("邮件状态保存任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_create_folder(
+    db: State<'_, Db>,
+    account_id: String,
+    name: String,
+) -> Result<Vec<mail_store::FolderRow>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || imap_folders::create(&conn, &account_id, &name))
+        .await
+        .map_err(|_| AppError::storage("新建目录任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_rename_folder(
+    db: State<'_, Db>,
+    account_id: String,
+    folder_id: String,
+    new_name: String,
+) -> Result<Vec<mail_store::FolderRow>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_folders::rename(&conn, &account_id, &folder_id, &new_name)
+    })
+    .await
+    .map_err(|_| AppError::storage("目录重命名任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_delete_folder(
+    db: State<'_, Db>,
+    account_id: String,
+    folder_id: String,
+) -> Result<Vec<mail_store::FolderRow>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_folders::delete(&conn, &account_id, &folder_id)
+    })
+    .await
+    .map_err(|_| AppError::storage("删除目录任务未完成"))?
 }
 
 #[tauri::command]
@@ -797,6 +839,9 @@ pub fn run() {
             mail_request_recovery,
             mail_update_message,
             mail_purge_message,
+            mail_create_folder,
+            mail_rename_folder,
+            mail_delete_folder,
             mail_keep_message_local,
             get_app_info,
             list_user_skins,

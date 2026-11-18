@@ -915,6 +915,57 @@ Date: Sat, 7 Feb 2026 15:00:00 +0000
         cleanup(&db, &[account]);
     }
 
+    /// ── 验收⑨：远端目录 CRUD ─────────────────────────────────────
+    /// 新建 / 重命名 / 删除自定义目录：独立会话核对服务器 LIST，本地缓存同步更新。
+    #[test]
+    fn folder_crud_really_creates_renames_and_deletes_on_server() {
+        if !enabled() {
+            eprintln!("skip: AUUMAIL_ACCEPTANCE 未设置");
+            return;
+        }
+        let (db, _dir) = fresh_db("folders");
+        let account = save_account(&db, "imap", "auu", "auupass", false);
+        let tag = marker();
+        // 新建：服务器 LIST 应出现，本机缓存写入且 kind 与同步启发式一致。
+        let name = format!("{tag}-验收目录");
+        let list = crate::imap_folders::create(&db, &account, &name).unwrap();
+        assert!(list
+            .iter()
+            .any(|folder| folder.name == name && folder.kind == "other"));
+        // 线格式：IMAP 目录名是 mUTF-7；服务器 LIST 与本地 remote_id 都用线格式键。
+        let wire = crate::imap_folders::encode_mutf7(&name);
+        assert_ne!(wire, name, "非 ASCII 名称必须被编码");
+        let mut session = raw_imap("auu", "auupass");
+        assert!(
+            !session.list(Some(""), Some(&wire)).unwrap().is_empty(),
+            "服务器应已创建（线格式名称的）目录"
+        );
+        session.logout().unwrap();
+        let folder_id = format!("{account}:folder:{wire}");
+        // 重命名：服务器旧名消失、新名出现；本机旧行删除、新行写入。
+        let new_name = format!("{tag}-验收目录改");
+        let new_wire = crate::imap_folders::encode_mutf7(&new_name);
+        let list = crate::imap_folders::rename(&db, &account, &folder_id, &new_name).unwrap();
+        assert!(list.iter().any(|folder| folder.name == new_name));
+        assert!(!list.iter().any(|folder| folder.name == name));
+        let mut session = raw_imap("auu", "auupass");
+        assert!(!session.list(Some(""), Some(&new_wire)).unwrap().is_empty());
+        assert!(session.list(Some(""), Some(&wire)).unwrap().is_empty());
+        session.logout().unwrap();
+        // 删除：服务器目录消失，本机行删除。
+        let renamed_id = format!("{account}:folder:{new_wire}");
+        let list = crate::imap_folders::delete(&db, &account, &renamed_id).unwrap();
+        assert!(!list.iter().any(|folder| folder.name == new_name));
+        let mut session = raw_imap("auu", "auupass");
+        assert!(session.list(Some(""), Some(&new_wire)).unwrap().is_empty());
+        session.logout().unwrap();
+        // 标准目录守卫：删除 INBOX 类目录被拒绝（本地校验在会话之前）。
+        let inbox_id = format!("{account}:folder:INBOX");
+        let error = crate::imap_folders::delete(&db, &account, &inbox_id).unwrap_err();
+        assert_eq!(error.code, "invalid");
+        cleanup(&db, &[account]);
+    }
+
     /// ── 验收⑥：大邮箱真实同步吞吐 ─────────────────────────────────
     /// 经真实 SMTP 注入 2000 封 → IMAP 全量同步计时 → 二次增量归零。
     /// 规模边界：GreenMail 内存实现在万封级 FETCH 上会挂起（探针实测），因此本验收

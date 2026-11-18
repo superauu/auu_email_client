@@ -34,7 +34,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       workspace.messages.push({...message,id:'server-draft',mailbox:'drafts',subject:'服务器草稿测试',changes:[],attachments:[]});
       workspace.messages.push({...fixture.messages[1], id:'plain-link', accountId: 'real-1', labelIds: [], subject:'纯文本链接测试', bodyText:'请联系 help@anoma.ly 或访问 https://example.com/help。', unread:false, changes:[], attachments:[]});
     }
-    const folderList: MailFolder[] = completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [];
+    let folderList: MailFolder[] = completion ? [{id:'project-1',accountId:'real-1',name:'项目邮件',kind:'other',available:true}] : [];
     if (navigation) {
       folderList.push(...[
         { id: 'inbox-1', name: 'INBOX', kind: 'inbox' },
@@ -149,6 +149,26 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           }
           message.stateRevision = (message.stateRevision ?? 0) + 1;
           return structuredClone(message);
+        }
+        // 目录 CRUD：镜像 imap_folders —— 标准目录只读，服务器确认后更新本地缓存并返回最新列表。
+        case 'mail_create_folder': {
+          const name = String(input.name).trim();
+          if (!name || folderList.some(folder => folder.accountId === input.accountId && folder.name === name)) throw new Error('同名目录已存在');
+          folderList.push({ id: `${String(input.accountId)}:folder:${name}`, accountId: String(input.accountId), name, kind: 'other' as const, available: true });
+          return structuredClone(folderList.filter(folder => folder.accountId === input.accountId));
+        }
+        case 'mail_rename_folder': {
+          const folder = folderList.find(folder => folder.id === input.folderId && folder.accountId === input.accountId);
+          if (!folder || folder.kind !== 'other') throw new Error('目录不存在或不可修改');
+          folder.name = String(input.newName).trim();
+          folder.id = `${input.accountId}:folder:${folder.name}`;
+          return structuredClone(folderList.filter(f => f.accountId === input.accountId));
+        }
+        case 'mail_delete_folder': {
+          const index = folderList.findIndex(folder => folder.id === input.folderId && folder.accountId === input.accountId);
+          if (index < 0 || folderList[index].kind !== 'other') throw new Error('目录不存在或不可修改');
+          folderList.splice(index, 1);
+          return structuredClone(folderList.filter(folder => folder.accountId === input.accountId));
         }
         // 永久删除：镜像 message_changes::purge —— IMAP 账号排队（消息保留在 trash 投影），
         // 本测试桩统一返回 queued 行为（POP3 removed 分支由 Rust 单测覆盖）。
@@ -963,6 +983,31 @@ test('trash view offers permanent delete which queues expunge after confirm', as
   expect(purgeStates.length).toBeGreaterThan(0);
   expect(purgeStates.every(change => change.state === 'queued')).toBe(true);
   await page.screenshot({ path: info.outputPath('mail-purge-trash.png') });
+});
+
+test('settings folder management creates renames and deletes custom IMAP folders', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
+  await accountCard.getByRole('button', { name: '管理 测试邮箱 1 的服务器目录' }).click();
+  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 服务器目录' });
+  await expect(dialog).toBeVisible();
+  // 新建目录。
+  await dialog.getByRole('textbox', { name: '新建目录名称' }).fill('验收目录');
+  await dialog.getByRole('button', { name: '新建', exact: true }).click();
+  await expect(dialog.getByText('验收目录')).toBeVisible();
+  // 重命名（确认对话框）。
+  page.once('dialog', dialog => dialog.accept());
+  await dialog.getByRole('button', { name: '重命名目录 验收目录' }).click();
+  await dialog.getByRole('textbox', { name: '重命名目录 验收目录' }).fill('验收目录改');
+  await dialog.getByRole('button', { name: '重命名', exact: true }).click();
+  await expect(dialog.getByText('验收目录改')).toBeVisible();
+  // 删除（确认对话框）。
+  page.once('dialog', dialog => dialog.accept());
+  await dialog.getByRole('button', { name: '删除目录 验收目录改' }).click();
+  await expect(dialog.getByText('验收目录改')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('settings-folder-manager.png') });
 });
 
 test('large mailbox list renders only the virtual window and pages in as it scrolls', async ({ page }, info) => {
