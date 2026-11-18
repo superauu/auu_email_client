@@ -191,6 +191,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .folder-list-manage li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .folder-list-manage li input { flex: 1; }
 .folder-delete { color: var(--danger); }
+/* 阅读区会话内导航位置徽标。 */
+.conversation-position { font-size: 10px; color: var(--text-subtle); white-space: nowrap; }
 .resize-handle { width: 5px; flex-shrink: 0; background: var(--border); cursor: col-resize; touch-action: none; border-inline: 2px solid var(--surface); }
 .resize-handle--sidebar { border-inline-start-color: var(--canvas); }
 .resize-handle:hover, .resize-handle:focus-visible, .resize-handle:active { background: var(--accent); outline-offset: -1px; }

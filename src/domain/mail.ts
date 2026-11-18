@@ -52,6 +52,9 @@ export interface MailMessage {
   /** Reply-To 头地址；缺省 = 未提供，回复时退回发件人。 */
   replyTo?: string[];
   subject: string;
+  /** 会话归组证据（桌面端随行返回）：裸 Message-ID 与 References 链（空格分隔）。 */
+  headerMessageId?: string;
+  headerReferences?: string;
   preview: string;
   /** Plain text only. Remote HTML must go through a future isolated renderer. */
   bodyText: string;

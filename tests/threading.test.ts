@@ -38,12 +38,24 @@ test('groupBySubject groups only two or more same-subject messages within one ac
     message({ id: 'empty', accountId: 'a', subject: 'Re:', receivedAt: '2026-01-06T00:00:00Z' }),
   ];
   const groups = groupBySubject(messages);
-  // 账号 b 的同名单封不成组；跨账号不混。
+  // 账号 b 的同名单封不成组；跨账号不混。组键为会话根邮件 id。
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].key, 'a\u{1f}方案评审');
+  assert.equal(groups[0].key, 'a1');
   // 组内时间正序，展示主题取会话根（最早一封）。
   assert.deepEqual(groups[0].messages.map(item => item.id), ['a1', 'a2', 'a3']);
   assert.equal(groups[0].subject, '方案评审');
+});
+
+test('reference chains link conversations even when the subject changes mid-thread', () => {
+  const messages: MailMessage[] = [
+    message({ id: 'root', accountId: 'a', subject: 'Q3 评审', headerMessageId: 'root@mail', receivedAt: '2026-01-01T00:00:00Z' }),
+    message({ id: 'reply', accountId: 'a', subject: '改名后的讨论', headerMessageId: 'reply@mail', headerReferences: 'root@mail', receivedAt: '2026-01-02T00:00:00Z', unread: true }),
+    message({ id: 'other', accountId: 'a', subject: '无关邮件', receivedAt: '2026-01-03T00:00:00Z' }),
+  ];
+  const groups = groupBySubject(messages);
+  // 引用链把改主题的回复连回根会话；标题不同也能归组。
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].messages.map(item => item.id), ['root', 'reply']);
 });
 
 test('conversationRows folds groups at the newest message position and expands chronologically', () => {

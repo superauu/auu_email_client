@@ -182,8 +182,9 @@ pub struct MessageRow {
     pub locator_verified: bool,
     #[serde(skip)]
     pub content_hash_verified: bool,
-    #[serde(skip)]
+    /// 会话归组证据（裸 Message-ID / References 链，随行返回给 UI；定位恢复仍走内部字段）。
     pub header_message_id: Option<String>,
+    pub header_references: Option<String>,
     pub state_revision: i64,
     pub changes: Vec<crate::message_changes::ChangeStatus>,
     pub id: String,
@@ -685,7 +686,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
     let sql = format!(
         "SELECT m.id, m.account_id, COALESCE(m.original_remote_id,m.remote_id), m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipients_json, m.body_text, m.received_at, m.unread, m.starred,
            {projection} AS mailbox, m.state_revision
-         ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing,m.cc_json,m.reply_to_json FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
+         ,m.content_hash,m.header_message_id,m.locator_verified,m.content_hash_verified,m.attachments_json,m.remote_missing,m.cc_json,m.reply_to_json,m.header_references FROM messages m {where_sql} ORDER BY m.received_at DESC, m.id DESC LIMIT ?"
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -704,6 +705,8 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         let recipients: String = row.get(7).map_err(|e| AppError::storage(e.to_string()))?;
         let cc_json: String = row.get(20).map_err(|e| AppError::storage(e.to_string()))?;
         let reply_to_json: String = row.get(21).map_err(|e| AppError::storage(e.to_string()))?;
+        let header_references: Option<String> =
+            row.get(22).map_err(|e| AppError::storage(e.to_string()))?;
         let body_text: Option<String> = row.get(8).map_err(|e| AppError::storage(e.to_string()))?;
         let id: String = row.get(0).map_err(|e| AppError::storage(e.to_string()))?;
         let received_at: String = row.get(9).map_err(|e| AppError::storage(e.to_string()))?;
@@ -721,6 +724,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
                 .map_err(|_| AppError::storage("无法读取远端状态"))?,
             recovery: crate::mail_recovery::status(conn, &id)?,
             content_hash: row.get(14).map_err(|e| AppError::storage(e.to_string()))?,
+            header_references,
             locator_verified: row.get(16).map_err(|e| AppError::storage(e.to_string()))?,
             content_hash_verified: row.get(17).map_err(|e| AppError::storage(e.to_string()))?,
             header_message_id: row.get(15).map_err(|e| AppError::storage(e.to_string()))?,

@@ -306,6 +306,7 @@ fn project(conn: &Connection, draft: Draft) -> Result<MessageRow, AppError> {
         locator_verified: false,
         content_hash_verified: false,
         header_message_id: None,
+        header_references: None,
         state_revision: 0,
         changes: vec![],
         id: draft.id.clone(),

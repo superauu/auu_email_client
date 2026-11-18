@@ -19,11 +19,18 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     }
     if (options.threads) {
       const base = workspace.messages[0];
-      const inject = (id: string, subject: string, at: string, unread = false) => workspace.messages.push({ ...base, id, accountId: 'real-1', labelIds: [], unread, subject, bodyText: `会话正文 ${id}`, receivedAt: at, changes: [], attachments: [] });
+      const inject = (id: string, subject: string, at: string, unread = false): MailMessage => { const item = { ...base, id, accountId: 'real-1', labelIds: [], unread, subject, bodyText: `会话正文 ${id}`, receivedAt: at, changes: [], attachments: [] }; workspace.messages.push(item); return item; };
       inject('thread-1', '季度评审报告', '2026-03-01T00:00:00Z', true);
       inject('thread-2', 'Re: 季度评审报告', '2026-03-02T00:00:00Z');
       inject('thread-3', '转发：季度评审报告', '2026-03-03T00:00:00Z', true);
       inject('thread-solo', '独立通知', '2026-03-04T00:00:00Z');
+      // 引用链会话：回复改了主题，References 仍连回根——对话模式下应与根同组。
+      const chained = inject('chain-root', '立项讨论（原主题）', '2026-03-05T00:00:00Z');
+      inject('chain-reply', '改主题后的跟进', '2026-03-06T00:00:00Z');
+      const chainReply = workspace.messages.at(-1)!;
+      chainReply.headerMessageId = 'chain-reply@mail';
+      chainReply.headerReferences = 'chain-root@mail';
+      chained.headerMessageId = 'chain-root@mail';
     }
     if (recoveryMode) { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery = { state: recoveryMode === 'queued' ? 'queued' : 'available', detail: '旧缓存或未知归档需要远端核对。', location: null, evidence: null }; if (recoveryMode === 'unknown') { message.mailbox = 'archive'; message.changes = [{ field: 'archive', state: 'unknown', error: '归档结果待核对，不会自动重试。' }]; } }
     if (recoveryMode === 'fingerprint' || recoveryMode === 'unanchored') { const message = workspace.messages.find(message => message.id === 'real-message')!; message.recovery!.fingerprint = { eligible: recoveryMode === 'fingerprint', reason: recoveryMode === 'fingerprint' ? '可信原定位仍在，可安全核对原文。' : '缺少可信原定位，不能升级为历史原文指纹。' }; }
@@ -1008,6 +1015,26 @@ test('settings folder management creates renames and deletes custom IMAP folders
   await dialog.getByRole('button', { name: '删除目录 验收目录改' }).click();
   await expect(dialog.getByText('验收目录改')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('settings-folder-manager.png') });
+});
+
+test('conversation mode links reference chains and the reader navigates within a conversation', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true, true, { threads: true });
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  await list.getByRole('button', { name: '对话', exact: true }).click();
+  // 引用链 + 改主题：与标题归组不同，这里靠 References 连通。
+  const chained = list.getByRole('button', { name: '展开会话：立项讨论（原主题），共 2 封', exact: true });
+  await expect(chained).toBeVisible();
+  await chained.click();
+  // 点击组内最新一封（改主题后的跟进），阅读区出现会话导航。
+  await list.getByRole('button', { name: '阅读邮件：改主题后的跟进', exact: true }).click();
+  const reader = page.getByRole('region', { name: '邮件阅读区' });
+  await expect(reader.getByText('2 / 2')).toBeVisible();
+  // 上一封：回到根邮件（原主题）。
+  await reader.getByRole('button', { name: '会话内上一封' }).click();
+  await expect(reader.getByText('1 / 2')).toBeVisible();
+  await expect(reader.getByRole('heading', { name: /立项讨论（原主题）/ })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('reader-conversation-nav.png') });
 });
 
 test('large mailbox list renders only the virtual window and pages in as it scrolls', async ({ page }, info) => {
