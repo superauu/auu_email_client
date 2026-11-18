@@ -318,7 +318,8 @@ pub(crate) fn sync_account(
     let uidls_only: Vec<String> = uidl_list.iter().map(|(_, uidl)| uidl.clone()).collect();
     mail_sync::commit_pop3(db, id, generation, &uidls_only, &downloaded)?;
     Ok(SyncOutcome {
-        refresh_needed: true,
+        // 静默同步语义：无新邮件的 UIDL 轮次不要求前端刷新（POP3 无回写通道）。
+        refresh_needed: fetched > 0,
         folders: 1,
         fetched_messages: fetched,
         synced_at: crate::now_utc(),

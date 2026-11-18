@@ -111,6 +111,14 @@ export const zhCN = {
   'app.syncQueuedNotice': '已排队同步全部账号…',
   'app.syncProgressFailed': '同步进度读取失败：{error}',
   'app.dismissToast': '关闭提示',
+  'app.menuAria': '打开功能菜单',
+  'app.menuCompose': '写邮件',
+  'app.menuSearch': '搜索邮件',
+  'app.menuSyncAll': '同步全部账号',
+  'app.menuEvents': '事件与待办',
+  'app.menuAppearance': '外观与皮肤',
+  'app.menuSettings': '设置',
+  'app.menuAbout': '关于 AuuMail',
 
   // ── 转发引用头（进入邮件正文，随界面语言） ─────────────────
   'app.forwardSubjectPrefix': '转发：{subject}',
@@ -312,6 +320,11 @@ export const zhCN = {
   'reader.remoteMissingNote': '远端原定位已不存在，本机内容和修改已保留。可核对远端定位。',
   'reader.remoteImagesBlocked': '已拦截远程图片，防止发件人追踪读取行为。',
   'reader.loadRemoteImages': '加载远程图片',
+  'reader.trustSender': '信任发件人',
+  'reader.trustDomain': '信任发件域名',
+  'reader.trustMenuAria': '信任选项',
+  'reader.trustedNote': '已信任该来源，远程图片自动加载。',
+  'reader.untrust': '取消信任',
   'reader.htmlFrameTitle': '邮件正文（富文本）',
   'reader.emptyLocalDraft': '这封草稿还没有正文。',
   'reader.emptyPlainBody': '这封邮件没有纯文本正文。',
@@ -388,8 +401,8 @@ export const zhCN = {
   'compose.deleting': '正在删除…',
   'compose.discardTitle': '删除这份草稿并关闭撰写面',
   'compose.capabilityFrom': '发件账号：{email}',
-  'compose.noImageInsert': ' · 暂不支持图片插入',
-  'compose.attachDesktopLimitNote': ' · 附件仅桌面版可用，暂不支持图片插入',
+  'compose.imagePasteNote': ' · 支持 Ctrl+V 粘贴图片',
+  'compose.attachDesktopLimitNote': ' · 附件仅桌面版可用',
 
   // ── 富文本编辑器 ────────────────────────────────────────────
   'editor.toolbarAria': '格式工具栏',
@@ -413,6 +426,7 @@ export const zhCN = {
   'editor.alignJustify': '两端对齐',
   'editor.quote': '引用',
   'editor.insertLink': '插入链接',
+  'editor.insertImage': '插入图片',
   'editor.insertHr': '插入分割线',
   'editor.clearFormat': '清除格式',
   'editor.undo': '撤销',
@@ -424,7 +438,8 @@ export const zhCN = {
   'editor.insert': '插入',
   'editor.placeholder': '在这里写下邮件正文…',
   'editor.bodyAria': '邮件正文',
-  'editor.pasteImageBlocked': '图片未插入：目前仅支持文字与格式粘贴。',
+  'editor.pasteImageBlocked': '剪贴板里的文件未插入：仅支持位图图片（PNG / JPG / GIF / WebP / BMP）。',
+  'editor.pasteImageTooLarge': '有 {count} 张图片超过 1 MiB，未插入。',
   'editor.pasteNoticeClose': '关闭粘贴提示',
 
   // ── 收件人字段 ──────────────────────────────────────────────
@@ -531,6 +546,16 @@ export const zhCN = {
   'syncOptions.noteCommon': '自动同步在应用运行时生效，断线后逐步重试。未完成的同步会在重启后继续；手动停止后需重新点击同步。',
   'syncOptions.notePop3': 'POP3 将服务器中尚未下载的邮件分批保存到单一收件箱，不删除服务器副本，不同步服务器已读状态。',
   'syncOptions.noteImapHistory': '启用历史下载后，下次同步会继续补齐较早邮件。',
+
+  // ── 邮件签名（每账号，Outlook 式自动追加） ───────────────────
+  'signature.buttonAria': '编辑 {name} 的邮件签名',
+  'signature.button': '签名',
+  'signature.title': '{name} · 邮件签名',
+  'signature.description': '每封邮件自动追加的固定签名；支持富文本与图片（图片以内嵌附件发送）。可分别控制新邮件与回复 / 转发是否追加；新邮件中光标在签名上方，回复中签名位于引用之上。',
+  'signature.useNew': '新邮件追加签名',
+  'signature.useReply': '回复 / 转发追加签名',
+  'signature.invalidData': '签名数据无效',
+  'signature.tooLarge': '签名超出长度限制（含图片编码），请精简或压缩图片',
 
   // ── 发送队列（domain/outbox 摘要与面板） ────────────────────
   'outbox.stateQueued': '发送排队中',
@@ -641,6 +666,7 @@ export const zhCN = {
   'syncSummary.failed': '同步失败：{error}',
   'syncSummary.retryNeeded': '部分文件夹未完成，已提交邮件保留；{warnings}',
   'syncSummary.listening': '已同步 · 新邮件通知已启用{extra}',
+  'syncSummary.listeningRunning': '已连接 · 实时监听中…',
   'syncSummary.listeningFetched': '，拉取 {count} 封邮件',
   'syncSummary.done': '同步完成：{folders} 个文件夹，拉取 {count} 封邮件{warnings}',
   'syncSummary.donePlain': '同步完成',
@@ -667,6 +693,9 @@ export const zhCN = {
 
   // ── stores / 平台 / 通用 UI ─────────────────────────────────
   'store.imapOptionsDesktopOnly': '同步设置仅在桌面版可用。',
+  'store.signatureDesktopOnly': '签名设置仅在桌面版可用。',
+  'store.trustDesktopOnly': '信任设置仅在桌面版可用。',
+  'trust.invalidData': '信任数据无效',
   'store.noRichBody': '当前环境不支持富文本正文。',
   'store.noQuoteFragment': '当前环境无法引用原文。',
   'store.noSend': '当前环境不能发送邮件。',

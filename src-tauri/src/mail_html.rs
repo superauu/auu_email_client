@@ -32,7 +32,9 @@ fn load_cache_key(
 }
 
 /// 内联图片（multipart/related 的 cid: 引用）转 data: URI；超大图片跳过，不猜正文。
-fn inline_data_uris(parsed: &mail_parser::Message<'_>) -> Result<Vec<(String, String)>, AppError> {
+pub(crate) fn inline_data_uris(
+    parsed: &mail_parser::Message<'_>,
+) -> Result<Vec<(String, String)>, AppError> {
     let mut map = Vec::new();
     let mut total = 0usize;
     for part in parsed.attachments() {
@@ -64,52 +66,112 @@ fn inline_data_uris(parsed: &mail_parser::Message<'_>) -> Result<Vec<(String, St
 }
 
 /// 撰写草稿的 HTML 消毒（compose 专用，比收件消毒更严格）：
-/// 保留格式标签与 style 属性；剥 <style> 块 / img / data: URI / 相对地址 / 脚本与事件处理器。
-/// 撰写内容会发送给别人，消毒发生在草稿写入时而非发送时。
+/// 保留格式标签、style 属性与 `data:image/*` 内联图片（签名 / 未来的正文插图走此通道，
+/// 发送时由 outbox 转 cid: 内联件）；剥 <style> 块 / 其他 img（远程与 svg）/ 相对地址 /
+/// 脚本与事件处理器。`data:` 只对 img src 放行是经 attribute_filter 精确收紧的——ammonia
+/// 的 url_schemes 是全局的，否则 data: 也会进入 a href。撰写内容会发送给别人，
+/// 消毒发生在草稿写入时而非发送时。
 pub(crate) fn sanitize_compose(html: &str) -> String {
+    sanitize_compose_inner(html, true)
+}
+
+/// 引用管线变体：剥除全部图片——引用不携带原文图片（接收侧引用本就剥图），
+/// 也避免原文的远程追踪图进入撰写正文。
+pub(crate) fn sanitize_quote_fragment(html: &str) -> String {
+    sanitize_compose_inner(html, false)
+}
+
+fn sanitize_compose_inner(html: &str, keep_images: bool) -> String {
     let mut builder = ammonia::Builder::default();
-    builder.tags(HashSet::from([
-        "p",
-        "div",
-        "span",
-        "br",
-        "hr",
-        "b",
-        "strong",
-        "i",
-        "em",
-        "u",
-        "s",
-        "strike",
-        "a",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "ul",
-        "ol",
-        "li",
-        "blockquote",
-        "pre",
-        "code",
-        "table",
-        "thead",
-        "tbody",
-        "tfoot",
-        "caption",
-        "colgroup",
-        "col",
-        "tr",
-        "td",
-        "th",
-        "font",
-        "center",
-        "small",
-        "sub",
-        "sup",
-    ]));
+    let tags: &[&str] = if keep_images {
+        &[
+            "p",
+            "div",
+            "span",
+            "br",
+            "hr",
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "s",
+            "strike",
+            "a",
+            "img",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "li",
+            "blockquote",
+            "pre",
+            "code",
+            "table",
+            "thead",
+            "tbody",
+            "tfoot",
+            "caption",
+            "colgroup",
+            "col",
+            "tr",
+            "td",
+            "th",
+            "font",
+            "center",
+            "small",
+            "sub",
+            "sup",
+        ]
+    } else {
+        &[
+            "p",
+            "div",
+            "span",
+            "br",
+            "hr",
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "s",
+            "strike",
+            "a",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "li",
+            "blockquote",
+            "pre",
+            "code",
+            "table",
+            "thead",
+            "tbody",
+            "tfoot",
+            "caption",
+            "colgroup",
+            "col",
+            "tr",
+            "td",
+            "th",
+            "font",
+            "center",
+            "small",
+            "sub",
+            "sup",
+        ]
+    };
+    builder.tags(HashSet::from_iter(tags.iter().copied()));
     builder.generic_attributes(HashSet::from(["style", "data-auumail-quote"]));
     builder.filter_style_properties(HashSet::from([
         "color",
@@ -173,6 +235,10 @@ pub(crate) fn sanitize_compose(html: &str) -> String {
     ]));
     builder.tag_attributes(std::collections::HashMap::from([
         ("a", HashSet::from(["href", "title"])),
+        (
+            "img",
+            HashSet::from(["src", "alt", "width", "height", "align", "border"]),
+        ),
         ("blockquote", HashSet::from(["data-auumail-quote"])),
         (
             "tr",
@@ -204,9 +270,22 @@ pub(crate) fn sanitize_compose(html: &str) -> String {
         ("font", HashSet::from(["color", "face", "size"])),
         ("hr", HashSet::from(["size", "width", "align"])),
     ]));
-    builder.url_schemes(HashSet::from(["http", "https", "mailto"]));
+    builder.url_schemes(HashSet::from(["http", "https", "mailto", "data"]));
     builder.url_relative(ammonia::UrlRelative::Deny);
     builder.link_rel(Some("noopener noreferrer"));
+    builder.attribute_filter(|element, attribute, value| {
+        // img src 仅放行位图 data:image/*（svg 因收件端普遍拦截面排除），远程 src 剥除
+        // （撰写不引用外部资源，离线签名图片不破图）；其余任何属性上的 data:（如 a
+        // href）一律剥除。attribute_filter 在 url_schemes 清洗之后执行，是精确收紧点。
+        let inline_image = element == "img"
+            && attribute == "src"
+            && value.starts_with("data:image/")
+            && !value.starts_with("data:image/svg");
+        if value.starts_with("data:") || (element == "img" && attribute == "src") {
+            return inline_image.then(|| value.into());
+        }
+        Some(value.into())
+    });
     builder.clean(html).to_string()
 }
 
@@ -457,7 +536,7 @@ fn prepare_quote(html: &str) -> Result<String, AppError> {
         .filter(|value| value.chars().all(|c| c.is_ascii_alphanumeric() || c == '#'))
         .unwrap_or("#000000");
     let wrapper = format!("<div style=\"color:{foreground};background-color:{background};font-family:Arial,sans-serif;font-size:14px;line-height:normal;text-align:start;{}\">{}</div>", escape(body.value().attr("style").unwrap_or("")), body.inner_html());
-    let safe = sanitize_compose(&wrapper);
+    let safe = sanitize_quote_fragment(&wrapper);
     if safe.len() > MAX_QUOTE {
         return Err(AppError::invalid("原邮件排版过大，改用纯文本引用"));
     }
@@ -583,6 +662,38 @@ mod tests {
         assert!(safe.contains("data-auumail-quote=\"true\""));
         assert!(safe.contains("border-top-width:0px"));
         assert!(!safe.contains("position"));
+    }
+
+    #[test]
+    fn compose_sanitize_allows_only_bitmap_data_image_on_img_src() {
+        // 签名图片通道：img src 的位图 data:image/* 保留，alt/尺寸属性随行。
+        let keep = sanitize_compose(
+            "<p><img src=\"data:image/png;base64,iVBORw0KGgo=\" alt=\"logo\" width=\"120\"></p>",
+        );
+        assert!(keep.contains("src=\"data:image/png;base64,iVBORw0KGgo=\""));
+        assert!(keep.contains("alt=\"logo\""));
+        assert!(keep.contains("width=\"120\""));
+        // svg（收件端普遍拦截）与其他 data: 一律剥除；远程 src 仍禁止。
+        let strip = sanitize_compose(
+            "<img src=\"data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=\">\
+             <img src=\"data:text/html;base64,PGI+PGI+\">\
+             <img src=\"https://example.test/x.png\">",
+        );
+        assert!(!strip.contains("data:image/svg"));
+        assert!(!strip.contains("data:text/html"));
+        assert!(!strip.contains("example.test"));
+        // a href 上的 data: 剥除，https 保留。
+        let link = sanitize_compose(
+            "<a href=\"data:image/png;base64,AAAA\">bad</a><a href=\"https://ok.test/\">ok</a>",
+        );
+        assert!(!link.contains("href=\"data:"));
+        assert!(link.contains("href=\"https://ok.test/\""));
+        // img 不复活事件处理器与脚本注入。
+        let hostile = sanitize_compose(
+            "<img src=\"data:image/png;base64,AAAA\" onerror=\"evil()\"><script>bad()</script>",
+        );
+        assert!(!hostile.contains("onerror"));
+        assert!(!hostile.contains("<script"));
     }
 
     #[test]

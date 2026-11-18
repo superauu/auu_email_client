@@ -1,6 +1,6 @@
 # 邮件撰写
 
-更新：2026-11-16。参考 [Outlook 新建邮件](https://support.microsoft.com/en-us/outlook/mail/create-an-email-message-in-outlook) 的地址分行与抄送 / 密送，以及 [Outlook 网页版格式选项](https://support.microsoft.com/en-us/outlook/customize-your-email-message-in-outlook-on-the-web) 的格式选项，沿用 AuuMail 皮肤与右栏工作区；按当前产品反馈将格式栏放在正文上方。
+更新：2026-11-19。参考 [Outlook 新建邮件](https://support.microsoft.com/en-us/outlook/mail/create-an-email-message-in-outlook) 的地址分行与抄送 / 密送，以及 [Outlook 网页版格式选项](https://support.microsoft.com/en-us/outlook/customize-your-email-message-in-outlook-on-the-web) 的格式选项，沿用 AuuMail 皮肤与右栏工作区；按当前产品反馈将格式栏放在正文上方。
 
 ## 当前行为
 
@@ -10,18 +10,20 @@
 - 三类地址均可单独发送，发送前检查格式；空主题需明确选择「仍然发送」。引用准备期间暂不能发送，失败回退原文纯文本。
 - 回复目标（2026-11-15）：普通回复优先原邮件 Reply-To 头，缺失或只含本账号地址时退回发件人；回复全部合并发件人 + To + Cc，按地址小写去重并剔除本账号地址，抄送人进入草稿的抄送栏。全部目标为空时回复全部退化为普通回复。阅读窗格显示原邮件抄送行，「回复全部」按钮在没有任何可回对象时禁用。
 - 正文支持段落 / 标题、字号、强调、颜色、列表、对齐、引用、链接、撤销 / 重做与清除格式。工具按钮可用键盘触发；焦点进入工具栏或链接输入框后仍保留正文选区。
-- 粘贴前过滤脚本、图片、远程资源、全局样式、事件和类名；保留白名单内的尺寸 / 边距 / 对齐 / 表格排版。布局表格不强加单元格边框和留白，HTML cellpadding / cellspacing / align 等转为局部样式。图片被过滤时展示提示，Rust 保存仍独立消毒。
+- 粘贴（2026-11-19 更新）：**Ctrl+V 粘贴剪贴板位图图片**（截图 / 复制图片）以 data URI 内联插入正文，发送时由 outbox 转 cid 内联件（见 SENDING）；单图解码后 ≤ 1 MiB，超限明确提示不静默丢弃；svg 与其他文件不插入并说明。HTML 粘贴仍过滤脚本、远程图片、全局样式、事件和类名（位图 data:image 保留），保留白名单内的排版；HTML 中的远程图片剥除时展示提示，Rust 保存仍独立消毒。纯图片正文按非空处理（不会丢失 data URI）。
 - 回复 / 转发的原文先在 Rust 将邮件内样式表转换为局部内联样式，再过滤；保留 body 原有文字 / 背景 / 行高与表格属性，不让邮件样式污染编辑器。css-inline 禁用 HTTP / 文件加载功能并显式关闭外部样式解析；CSS 内联、缓存读取和 MIME 解析在 DB 锁外后台执行。输入超过 2 MiB / 4000 元素 / 64 KiB 样式，或转换结果超过 200000 字节时回退纯文本；不截断富文本再冒充完整引用。
 - 新输入正文为 1.45 行高、段前段后均为 0，Enter 保留段落语义但不额外空一行，Shift+Enter 为段内换行；原邮件显式行距不随编辑器压缩。
 - 已保存草稿使用其现有引用，不从服务器自动覆盖；旧版本已经丢失的排版需从原邮件新建回复。
 - 自动保存时继续编辑，顺序写入最新缓冲区；Ctrl / Cmd + S 手动保存。旧纯文本草稿不会在初始化时清空，打开 / 关闭未修改的空白撰写不制造草稿。关闭失败保留内容并暂停自动保存，明确继续编辑才恢复。
 - 撰写附件（2026-11-16）：命令栏「附件」按钮在桌面版打开 Rust 侧多选文件对话框；主题下方以 chip 列出文件名（长名截断）+ 大小 + 移除按钮。每封邮件最多 20 个附件、原始字节合计 16 MiB，超限选取与保存均明确拒绝。浏览器演示不支持读取本机文件，按钮禁用并说明。
+- 每账号签名（2026-11-19）：设置 → 邮箱账号「签名」按钮（仅真实账号），富文本编辑 +「插入图片」按钮（Rust 文件对话框；仅 png/jpg/gif/webp/bmp 位图，单图解码后 ≤ 1 MiB，svg 与远程图拒绝）。两个独立开关：新邮件追加 / 回复转发追加，默认都开。新草稿挂载时签名物理插入编辑器（可单封删改）：新邮件光标在签名上方，回复 / 转发签名位于引用块上方；已保存草稿不重复追加，中途换发件账号不重写签名，签名后续修改不影响已创建草稿。签名 HTML 经 compose 消毒入库（含位图 data:image），发送时转 cid 内联件（见 SENDING）；转发引用不再预塞纯文本正文（避免与 HTML 引用叠加成双重引用）。
 
 ## 存储与发送
 
 - `MailDraft.cc / bcc` 为可选字符串，旧草稿缺省为空；每栏最多 1000 UTF-16 单元，TS 与 Rust 同步校验。无效地址可作为未完成草稿保存。
 - SQLite v12 追加 `drafts.cc / bcc`，旧迁移不改；桌面只存 SQLite，浏览器只存演示覆盖层。保存沿用 revision + previousAccountId；回复锁定所属账号，抄送 / 密送随草稿原子移动。
 - 附件存储（v15）：`drafts.attachments_json` 保存有序元数据数组（id / name / size / mediaType / sha256，与 TS `DraftAttachment` 对称），字节在 `draft_attachment_blobs` 子表（随草稿级联删除）。选取时文件字节只进 Rust 进程内暂存区（64 MiB 上限），保存事务内核对 sha256 后写入子表并回收暂存；暂存缺失且无同 sha256 落库内容时保存失败并提示重新添加，不静默丢附件。前端不接触文件路径，路径只在 Rust 侧流转。
+- 签名存储（v20）：`account_signatures` 表（account_id 主键，账号删除级联），html 为 compose 消毒后的签名正文（位图以 data:image 内嵌），use_new / use_reply 独立开关，拒绝演示账号与超限内容；不放 profile_json（004 触发器会把 profile_json 变更旋转 sync_generation）。读取无行时返回默认值（空签名、双开关开启）。
 - outbox 登记和 worker 快照均读取三类地址。SMTP 信封合并并去重；MIME 头仅输出 To / Cc，绝不输出 Bcc 或将密送合入 To。仅密送时 To 为 `undisclosed-recipients:;`。
 - 纯文本 MIME 使用一次 Content-Type 与 base64 传输编码；富文本仍为 multipart/alternative。有附件时正文外包一层 multipart/mixed：附件为 base64 part，Content-Disposition: attachment，文件名 ASCII 安全字符用引号串、其余用 RFC2047 编码，CR/LF 注入中和，非法 media_type 回退 octet-stream；无附件输出与既有格式逐字节一致。快照时逐个核对子表内容 sha256 与大小，缺失或不一致即失败，不发送不完整邮件。Message-ID、同账号队列、generation 与 unknown 不自动重发规则见 [SENDING](SENDING.md)。
 
@@ -33,4 +35,4 @@
 
 中文附件名在 Gmail 正常，但当前未加引号的 RFC2047 参数被 Python 严格 MIME 解析器忽略，标准参数编码兼容性待修。Cc / Bcc 独立收件与隐私、回复全部 / Reply-To、Outlook 归组、接近 16 MiB 附件和原生超限提示仍未验收。本轮回复保留合成原文引用；自动化直接 set_value 未触发富文本输入持久化，不作为新增回复正文编辑验证。
 
-签名管理、定时发送、云端通讯录、独立撰写窗口与图片插入（正文内联 / 粘贴图片）尚未实现。
+签名已实现（每账号一个，含图片，见上）；**Ctrl+V 粘贴剪贴板图片已实现（2026-11-19，data URI → cid 管道）**；正文工具栏「插入图片」按钮、定时发送、云端通讯录、独立撰写窗口尚未实现。

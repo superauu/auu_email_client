@@ -53,6 +53,8 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       workspace.messages.find(message => message.id === 'server-draft')!.folderIds = ['drafts-1'];
     }
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
+    const signatures = new Map<string,{html:string;useNew:boolean;useReply:boolean}>();
+    const trusted = new Map<string,string>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting'; let pickFailure = false;
     const htmlRequests: Array<{ id: string; allow: boolean }> = []; const openCalls: string[] = [];
     const outboxActions: Array<{ id: string; action: string }> = [];
@@ -208,6 +210,14 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         }
         case 'mail_imap_settings': return imapSettings.get(input.accountId as string) ?? {syncAllFolders:true,historyEnabled:false,autoSyncSeconds:0};
         case 'mail_save_imap_settings': if(settingFails){settingFails=false;throw new Error('设置暂时未保存');} imapSettings.set(input.accountId as string,input.settings as {syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number});return;
+        // 签名：镜像 signature.rs —— 未设置返回默认值（开关全开、空签名），保存后按账号记忆。
+        case 'mail_account_signature': return signatures.get(input.accountId as string) ?? { html: '', useNew: true, useReply: true };
+        case 'mail_save_account_signature': signatures.set(input.accountId as string, input.signature as { html: string; useNew: boolean; useReply: boolean }); return;
+        // 远程图片信任列表：镜像 mail_trust —— add/remove 幂等，列表按 kind:value 记忆。
+        case 'mail_trusted_senders': return [...trusted.entries()].map(([key, value]) => ({ kind: key.split(':')[0], value, createdAt: '2026-11-19T00:00:00Z' }));
+        case 'mail_trust_add': { const kind = String(input.kind); const value = String(input.value).toLowerCase(); trusted.set(`${kind}:${value}`, value); return { kind, value, createdAt: '2026-11-19T00:00:00Z' }; }
+        case 'mail_trust_remove': trusted.delete(`${String(input.kind)}:${String(input.value).toLowerCase()}`); return;
+        case 'mail_compose_pick_signature_image': return { dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', name: '签名图片.png', size: 70 };
         case 'mail_account_config': {const account=accounts.find(account=>account.id===input.id)!; return {id:account.id,provider:account.provider,name:account.name,email:account.email,imapHost:account.provider === 'pop3' ? 'pop.example.test' : 'imap.example.test',imapPort:account.provider === 'pop3' ? 995 : 993,imapSecurity:'tls',smtpHost:'',smtpPort:465,receiveOnly:true,authUser:account.email,avatar:'T',color:'teal'};}
         case 'mail_verify_account': accountInputs.push({ command, provider: (input.endpoints as { provider?: string }).provider }); return {imap:{ok:true,skipped:false,error:null,code:null},smtp:{ok:false,skipped:true,error:null,code:null},folderCount:2};
         case 'mail_save_account': accountInputs.push({ command, provider: (input.account as { provider?: string }).provider }); return 'real-3';
@@ -287,6 +297,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       failNextOutbox() { outboxFails = true; },
       accountInputs: () => structuredClone(accountInputs),
       settings: () => Object.fromEntries(imapSettings),
+      signatures: () => Object.fromEntries(signatures),
       recoveryResult(result: 'located' | 'source-present' | 'unresolved' | 'scanning') { nextRecovery = result; },
       segmentPhase(phase: 'collecting' | 'validating' | 'located' | 'unresolved') { segmentPhase = phase; },
       finish(id: string, failure: boolean) {
@@ -947,7 +958,8 @@ test('same-subject conversations fold into one row with a count, expand on click
   await list.getByRole('button', { name: '对话', exact: true }).click();
   const group = list.getByRole('button', { name: '展开会话：季度评审报告，共 3 封', exact: true });
   await expect(group).toBeVisible();
-  await expect(list.locator('.thread-toggle')).toHaveCount(1);
+  // 两个会话组：同标题组（本用例主角）+ 引用链组（chain-root / chain-reply，890c729 注入）。
+  await expect(list.locator('.thread-toggle')).toHaveCount(2);
   await expect(list.getByRole('button', { name: '阅读邮件：季度评审报告', exact: true })).toHaveCount(0);
   // 展开按时间正序，最新一封自动选中；再点折叠（aria-label 随状态切换）。
   await group.click();
@@ -1017,6 +1029,83 @@ test('settings folder management creates renames and deletes custom IMAP folders
   await page.screenshot({ path: info.outputPath('settings-folder-manager.png') });
 });
 
+test('per-account signature editor saves html with an image and keeps its toggles', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
+  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
+  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  await expect(dialog).toBeVisible();
+  const editor = dialog.getByRole('textbox', { name: '邮件正文' });
+  await editor.fill('张三 · 产品部');
+  // 插入图片：Rust 对话框桩返回 data URI，img 落在光标处。
+  await dialog.getByRole('button', { name: '插入图片', exact: true }).click();
+  await expect(dialog.locator('.compose-editor img')).toHaveCount(1);
+  // 关闭回复追加开关并保存。
+  await dialog.getByRole('checkbox', { name: '回复 / 转发追加签名' }).uncheck();
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  // 落库内容含图片（区分保存丢失与重开渲染丢失）。
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncTest: { signatures: () => Record<string, { html: string; useNew: boolean; useReply: boolean }> } }).__syncTest.signatures()['real-1']?.html ?? '')).toContain('data:image/png');
+  // 重开：按账号记忆——文字、图片与开关状态都保留。
+  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
+  const reopened = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  await expect(reopened.locator('.compose-editor img')).toHaveCount(1);
+  await expect(reopened.getByRole('textbox', { name: '邮件正文' })).toContainText('张三 · 产品部');
+  await expect(reopened.getByRole('checkbox', { name: '回复 / 转发追加签名' })).not.toBeChecked();
+  await expect(reopened.getByRole('checkbox', { name: '新邮件追加签名' })).toBeChecked();
+  await page.screenshot({ path: info.outputPath('settings-signature.png') });
+});
+
+test('compose appends the signature to new mail and above the reply quote', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  // 保存签名（两个开关默认都开）。
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
+  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
+  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  await dialog.getByRole('textbox', { name: '邮件正文' }).fill('张三 · 产品部');
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // 新邮件：签名自动追加；光标在签名上方，打字不落在签名之后。
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  const editor = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
+  await expect(editor).toContainText('张三 · 产品部');
+  await editor.pressSequentially('你好，');
+  const html = await editor.innerHTML();
+  expect(html.indexOf('你好，')).toBeGreaterThanOrEqual(0);
+  expect(html.indexOf('你好，')).toBeLessThan(html.indexOf('张三 · 产品部'));
+  // 签名随草稿正文落库（自动保存后可查）。
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts().some(draft => (draft.bodyHtml ?? '').includes('张三 · 产品部')))).toBe(true);
+  await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
+  // 回复：签名位于引用块上方（Outlook 语义）。
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  await page.getByRole('button', { name: '回复邮件', exact: true }).click();
+  const replyEditor = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
+  await expect(replyEditor).toContainText('张三 · 产品部');
+  await expect(replyEditor).toContainText('引用的原文 HTML');
+  const replyHtml = await replyEditor.innerHTML();
+  expect(replyHtml.indexOf('张三 · 产品部')).toBeLessThan(replyHtml.indexOf('<blockquote'));
+  await page.screenshot({ path: info.outputPath('compose-signature-reply.png') });
+  await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
+  // 关闭回复追加开关后：再次回复无签名，引用不受影响。
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
+  const toggle = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  await toggle.getByRole('checkbox', { name: '回复 / 转发追加签名' }).uncheck();
+  await toggle.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(toggle).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  await page.getByRole('button', { name: '回复邮件', exact: true }).click();
+  const plain = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
+  await expect(plain).toContainText('引用的原文 HTML');
+  await expect(plain).not.toContainText('张三 · 产品部');
+});
+
 test('conversation mode links reference chains and the reader navigates within a conversation', async ({ page }, info) => {
   await mockDesktop(page, true, undefined, true, true, true, { threads: true });
   await page.goto('/');
@@ -1065,4 +1154,83 @@ test('large mailbox list renders only the virtual window and pages in as it scro
   await list.getByRole('button', { name: '选择当前列表全部邮件' }).click();
   await expect(page.getByText('已选 602 封', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('virtual-large-list.png') });
+});
+
+test('avatar menu gathers app functions: opens settings, switches view, closes on escape', async ({ page }, info) => {  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  // 头像触发菜单：账号标签 + 功能项齐全。
+  await page.getByRole('button', { name: '打开功能菜单', exact: true }).click();
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('test1@mail.example');
+  for (const item of ['写邮件', '搜索邮件', '同步全部账号', '事件与待办', '外观与皮肤', '设置', '关于 AuuMail']) {
+    await expect(menu.getByRole('menuitem', { name: item, exact: true })).toBeVisible();
+  }
+  await page.screenshot({ path: info.outputPath('avatar-menu.png') });
+  // 「设置」打开设置对话框（账号页签）。
+  await menu.getByRole('menuitem', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('让工作区，更像你');
+  await page.keyboard.press('Escape');
+  // 再开菜单切到事件与待办视图。
+  await page.getByRole('button', { name: '打开功能菜单', exact: true }).click();
+  await page.getByRole('menuitem', { name: '事件与待办', exact: true }).click();
+  await expect(page.getByRole('button', { name: '事件与待办', exact: true })).toHaveAttribute('aria-current', 'page');
+  // Escape 也能直接关闭菜单本体。
+  await page.getByRole('button', { name: '打开功能菜单', exact: true }).click();
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+});
+
+test('compose accepts clipboard image paste as inline data uri and reports oversize honestly', async ({ page }, info) => {
+  await mockDesktop(page); await page.goto('/');
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  const editor = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
+  await editor.click();
+  // 1x1 PNG（合法位图）+ 一张超过 1 MiB 的图：合法的插入、超限的明确提示。
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    transfer.items.add(new File([Uint8Array.from(atob(png), c => c.charCodeAt(0))], 'shot.png', { type: 'image/png' }));
+    transfer.items.add(new File([new Uint8Array(1024 * 1024 + 1)], 'big.png', { type: 'image/png' }));
+    const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: transfer });
+    document.querySelector('.compose-editor')!.dispatchEvent(event);
+  });
+  await expect(editor.locator('img')).toHaveCount(1);
+  await expect(page.getByRole('status').filter({ hasText: '超过 1 MiB' })).toBeVisible();
+  // 纯图片正文（无文字）也按非空处理：data URI 随草稿落库（发送侧 outbox 转 cid 由 Rust 覆盖）。
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncTest: { drafts: () => MailDraft[] } }).__syncTest.drafts().some(draft => (draft.bodyHtml ?? '').includes('data:image/png')))).toBe(true);
+  await page.screenshot({ path: info.outputPath('compose-paste-image.png') });
+});
+
+test('trusted senders auto-load remote images and can be untrusted', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  const frame = page.locator('iframe.mail-html-frame');
+  // 默认拦截：CSP 不放行远程图片，横幅提供三个操作。
+  await expect(frame).toHaveAttribute('srcdoc', /img-src 'none'/);
+  const banner = page.getByRole('status').filter({ hasText: '已拦截远程图片' });
+  await expect(banner).toBeVisible();
+  await expect(banner.getByRole('button', { name: '加载远程图片', exact: true })).toBeVisible();
+  // 信任发件人：本封立即自动加载，横幅切换为信任提示 + 取消信任。
+  await banner.getByRole('button', { name: '信任选项', exact: true }).click();
+  await page.getByRole('menuitem', { name: '信任发件人', exact: true }).click();
+  await expect(frame).toHaveAttribute('srcdoc', /img-src https: data:/);
+  await expect(page.getByRole('status').filter({ hasText: '远程图片自动加载' })).toBeVisible();
+  // 取消信任：恢复拦截。
+  await page.getByRole('button', { name: '取消信任', exact: true }).click();
+  await expect(frame).toHaveAttribute('srcdoc', /img-src 'none'/);
+  await expect(page.getByRole('status').filter({ hasText: '已拦截远程图片' }).first()).toBeVisible();
+  // 信任发件域名：同样自动加载。
+  await page.getByRole('status').filter({ hasText: '已拦截远程图片' }).getByRole('button', { name: '信任选项', exact: true }).click();
+  await page.getByRole('menuitem', { name: '信任发件域名', exact: true }).click();
+  await expect(frame).toHaveAttribute('srcdoc', /img-src https: data:/);
+  // 重开同一封邮件：信任持久，自动加载且无拦截横幅。
+  await page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true }).click();
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  await expect(frame).toHaveAttribute('srcdoc', /img-src https: data:/);
+  await expect(page.getByRole('status').filter({ hasText: '已拦截远程图片' })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('reader-trust-sender.png') });
 });

@@ -25,6 +25,13 @@
 - 总大小无客户端 SMTP SIZE 预检：服务器因限额拒绝按明确 failed 展示服务器错误，不伪装；本地保存侧的 16 MiB 限额先于发送拦截大部分超限。
 - 铁律不变：Message-ID 复用、unknown 语义、不自动重试、同账号队列均与无附件发送一致。
 
+## 内联图片发送（2026-11-19）
+
+- 签名 / 正文内的位图以 `data:image/*` URI 内嵌在草稿 body_html 里（compose 消毒仅放行 `img src` 的位图 data:image，svg / 远程 src / 其他属性上的 data: 一律剥除）；body_html 上限 200k → 2,000,000 UTF-16（容纳 base64，量级对齐收信侧 MAX_HTML 2 MiB）。
+- outbox 组装前扫描正文 `src="data:image/<subtype>;base64,<payload>"`（compose 消毒输出的固定双引号形式）：解码字节、按 sha256 内容去重（同图多处引用只建一个内联件）、src 替换为 `cid:<uuid@auumail.local>`；解码失败或子类型异常的 data URI **原样保留**，不建件、不静默改写正文。
+- MIME 结构：`multipart/alternative > multipart/related > [text/html, inline image*]`；有常规附件时外层照旧 `multipart/mixed`。内联件头：`Content-Type: image/<t>; name="inline.<ext>"` + `Content-Transfer-Encoding: base64` + `Content-Disposition: inline; filename="inline.<ext>"` + `Content-ID: <uuid>`（文件名是生成的 ASCII 名，无需 RFC 2231）。无内联图的输出与既有格式逐字节一致。
+- 收信端复用 `mail_html::inline_data_uris`（cid → data URI，单件 2 MiB / 合计 8 MiB 上限）渲染。真实验收⑩（GreenMail 全栈）通过：签名含 PNG 端到端，html 引用 cid、内联件字节与原文件逐字一致。正文任意位置插图未做（管道已就绪，属后续增量）。
+
 ## 回复会话关联（2026-11-15）
 
 - 回复目标规则见 COMPOSING；发送侧同步补全 RFC 5322 会话头：worker 快照读取草稿 `reply_to_id`（本机邮件 ID），在同账号 messages 查原邮件的 `header_message_id` 与 `header_references`（迁移 013，IMAP / POP3 解析时落库）。

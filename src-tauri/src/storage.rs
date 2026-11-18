@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i64 = 19;
+const LATEST_VERSION: i64 = 21;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_foundation.sql")),
     (2, include_str!("../migrations/002_mail_store.sql")),
@@ -40,6 +40,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
         19,
         include_str!("../migrations/019_message_search_trigram.sql"),
     ),
+    (20, include_str!("../migrations/020_account_signatures.sql")),
+    (21, include_str!("../migrations/021_trusted_senders.sql")),
 ];
 
 pub fn initialize(path: &Path) -> Result<Connection, String> {

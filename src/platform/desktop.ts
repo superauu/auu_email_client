@@ -84,6 +84,15 @@ export const desktopMail = {
   async requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage> { return invoke('mail_request_body', { accountId, messageId, revision }); },
   async imapSettings(accountId: string): Promise<import('../domain/imap').ImapSettings> { return invoke('mail_imap_settings', { accountId }); },
   async saveImapSettings(accountId: string, settings: import('../domain/imap').ImapSettings): Promise<void> { return invoke('mail_save_imap_settings', { accountId, settings }); },
+  /** 每账号签名：读取（未设置返回默认值）与保存（Rust 侧 compose 消毒后入库）。 */
+  async accountSignature(accountId: string): Promise<import('../domain/signature').AccountSignature> { return invoke('mail_account_signature', { accountId }); },
+  async saveAccountSignature(accountId: string, signature: import('../domain/signature').AccountSignature): Promise<void> { return invoke('mail_save_account_signature', { accountId, signature }); },
+  /** 签名图片选取：Rust 文件对话框，返回 data URI（取消返回 null）。 */
+  async pickSignatureImage(): Promise<{ dataUri: string; name: string; size: number } | null> { return invoke('mail_compose_pick_signature_image'); },
+  /** 远程图片信任列表（v21）：读取 / 添加 / 移除（kind='sender'|'domain'，value 小写）。 */
+  async trustedSenders(): Promise<unknown[]> { return invoke('mail_trusted_senders'); },
+  async trustAdd(kind: 'sender' | 'domain', value: string): Promise<unknown> { return invoke('mail_trust_add', { kind, value }); },
+  async trustRemove(kind: 'sender' | 'domain', value: string): Promise<void> { return invoke('mail_trust_remove', { kind, value }); },
   async exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean> { return invoke('mail_export_attachment', { accountId, messageId, index }); },
   async requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage> { return invoke('mail_request_recovery', { accountId, messageId, revision, action }); },
   async updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage> { return invoke('mail_update_message', { accountId, messageId, patch }); },

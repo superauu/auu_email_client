@@ -37,17 +37,25 @@ interface SyncState {
   monitor: () => () => void;
 }
 
+/** 用户手动发起同步的账号（本轮终态消费一次）：完成提示只对手动 / 有结果的轮次弹出，
+ *  IDLE 监听续跑与自动空轮次静默（SYNCHRONIZATION.md）。 */
+const manualAccounts = new Set<string>();
+export function consumeManualSync(accountId: string): boolean {
+  return manualAccounts.delete(accountId);
+}
+
 /** UI observes the native queue; closing Settings never owns or cancels a task. */
-export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePollMs = 5000, runningRefreshMs = 2000) {
+export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePollMs = 5000) {
   let monitors = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reading: Promise<void> | null = null;
   let needsWorkspaceRefresh = false;
   let refreshingWorkspace = false;
   let pollingFailed = false;
-  let lastWorkspaceRefresh = 0;
   let outboxEpoch = 0;
   const acknowledged = new Set<string>();
+  /** 每账号上一轮 outcome.folders：远端目录结构变化（0 拉取轮次）也要让界面跟进。 */
+  const lastFolders = new Map<string, number>();
   const store = create<SyncState>((set, get) => {
     async function changeOutbox(id: string, action: ((id: string) => Promise<OutboxEntry>) | undefined, remove = false) {
       if (!transport.available() || !action || get().outboxPending.includes(id)) return false;
@@ -72,7 +80,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       if (refreshingWorkspace) return;
       refreshingWorkspace = true;
       try {
-        while (needsWorkspaceRefresh) { needsWorkspaceRefresh = false; await transport.refreshWorkspace(); lastWorkspaceRefresh = Date.now(); }
+        while (needsWorkspaceRefresh) { needsWorkspaceRefresh = false; await transport.refreshWorkspace(); }
         if (get().error?.startsWith(t('sync.errRefreshFailedPrefix'))) set({ error: null });
       } catch (error) { needsWorkspaceRefresh = true; set({ error: `${t('sync.errRefreshFailedPrefix')}${errorMessage(error)}` }); }
       finally { refreshingWorkspace = false; }
@@ -81,12 +89,16 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       if (snapshot.revision < get().revision) return;
       // A first snapshot can contain a job completed while Settings was closed.
       for (const job of snapshot.jobs) {
+        const previousFolders = lastFolders.get(job.accountId);
+        if (job.outcome) lastFolders.set(job.accountId, job.outcome.folders);
         if (!isSyncActive(job) && !acknowledged.has(job.id)) {
           acknowledged.add(job.id);
-          if ((job.status !== 'cancelled' || job.startedAt !== null) && job.outcome?.refreshNeeded !== false) needsWorkspaceRefresh = true;
+          // 静默同步（SYNCHRONIZATION.md）：无拉取、无回写确认且目录结构未变的空轮次
+          // 不重建工作区——自动同步 / IDLE 轮次对阅读界面完全不可见；新邮件、EXPUNGE
+          // 等回写确认、远端目录变化才触发刷新。
+          const foldersChanged = job.outcome !== null && previousFolders !== undefined && previousFolders !== job.outcome.folders;
+          if ((job.status !== 'cancelled' || job.startedAt !== null) && (job.outcome?.refreshNeeded !== false || foldersChanged)) needsWorkspaceRefresh = true;
         }
-        // 运行中节流刷新：后端每个批次提交落库后，新邮件随轮询逐步进入列表（终态仍立即刷新）。
-        if (job.status === 'running' && Date.now() - lastWorkspaceRefresh >= runningRefreshMs) needsWorkspaceRefresh = true;
       }
       const retained = new Set(snapshot.jobs.map(job => job.id));
       for (const id of acknowledged) if (!retained.has(id)) acknowledged.delete(id);
@@ -104,6 +116,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         const pending = new Set(get().submitting);
         const unique = [...new Set(ids)].filter(id => !pending.has(id));
         if (!unique.length) return;
+        for (const id of unique) manualAccounts.add(id);
         set({ submitting: [...pending, ...unique], error: null });
         try { apply(await transport.enqueue(unique)); }
         catch (error) { set({ error: errorMessage(error) }); }

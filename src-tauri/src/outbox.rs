@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const SENT_DOMAIN: &str = "auumail.local";
@@ -397,6 +398,105 @@ fn attachment_headers(name: &str, media_type: &str, content: &[u8]) -> String {
     )
 }
 
+/// 正文 HTML 内嵌图片（签名 / 未来的正文插图以 `data:image/*` URI 存在草稿里），
+/// 发送时转成 multipart/related 的 cid: 内联件。
+struct InlineImage {
+    content_id: String,
+    media_type: String,
+    extension: &'static str,
+    content: Vec<u8>,
+}
+
+/// 解析 needle 之后的 `<subtype>;base64,<payload>`；子类型必须是受限 MIME token。
+/// 返回 (完整 media type, 文件扩展名, 解码字节)。
+fn decode_inline_uri(uri: &str) -> Option<(String, &'static str, Vec<u8>)> {
+    let (subtype, payload) = uri.split_once(";base64,")?;
+    if subtype.is_empty()
+        || subtype.len() > 40
+        || !subtype
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'.' | b'-'))
+    {
+        return None;
+    }
+    let content = BASE64.decode(payload).ok()?;
+    if content.is_empty() {
+        return None;
+    }
+    let extension = match subtype {
+        "png" => "png",
+        "jpeg" => "jpg",
+        "gif" => "gif",
+        "webp" => "webp",
+        "bmp" => "bmp",
+        _ => "img",
+    };
+    Some((format!("image/{subtype}"), extension, content))
+}
+
+/// 从正文 HTML 提取内嵌图片（`src="data:image/…;base64,…"`，compose 消毒输出的固定
+/// 双引号形式），解码字节按内容去重（同图多处引用只建一个内联件），src 替换为
+/// `cid:<id>`。解码失败或子类型异常的 data URI **原样保留**——不建件、不静默改写
+/// 正文，收件端按各自策略处理该 URI。
+fn extract_inline_images(html: &str) -> (String, Vec<InlineImage>) {
+    const NEEDLE: &str = "src=\"data:image/";
+    let mut out = String::with_capacity(html.len());
+    let mut images: Vec<InlineImage> = Vec::new();
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut rest = html;
+    while let Some(position) = rest.find(NEEDLE) {
+        let (head, tail) = rest.split_at(position);
+        out.push_str(head);
+        rest = &tail[NEEDLE.len()..];
+        let Some(end) = rest.find('"') else {
+            out.push_str(NEEDLE);
+            break;
+        };
+        let uri = &rest[..end];
+        rest = &rest[end + 1..];
+        match decode_inline_uri(uri) {
+            Some((media_type, extension, content)) => {
+                let digest = format!("{:x}", Sha256::digest(&content));
+                let content_id = match seen.get(&digest) {
+                    Some(existing) => existing.clone(),
+                    None => {
+                        let content_id = format!("{}@{SENT_DOMAIN}", Uuid::new_v4().simple());
+                        seen.insert(digest, content_id.clone());
+                        images.push(InlineImage {
+                            content_id: content_id.clone(),
+                            media_type,
+                            extension,
+                            content,
+                        });
+                        content_id
+                    }
+                };
+                out.push_str(&format!("src=\"cid:{content_id}\""));
+            }
+            None => {
+                out.push_str(NEEDLE);
+                out.push_str(uri);
+                out.push('"');
+            }
+        }
+    }
+    out.push_str(rest);
+    (out, images)
+}
+
+/// 内联图片 part（multipart/related 成员）：Content-Disposition: inline + Content-ID；
+/// 文件名是我们生成的 ASCII 名，无需 RFC 2231。末尾为 base64（无 CRLF），与
+/// attachment_headers 同一约定。
+fn inline_image_headers(image: &InlineImage) -> String {
+    let name = format!("inline.{}", image.extension);
+    format!(
+        "Content-Type: {}; name=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: inline; filename=\"{name}\"\r\nContent-ID: <{}>\r\n\r\n{}",
+        image.media_type,
+        image.content_id,
+        fold_base64(&BASE64.encode(&image.content))
+    )
+}
+
 fn assemble(input: &MimeInput<'_>) -> String {
     let (
         from_name,
@@ -442,15 +542,40 @@ fn assemble(input: &MimeInput<'_>) -> String {
     );
     let (mut content_headers, mut body) = match body_html.filter(|html| !html.trim().is_empty()) {
         Some(html) => {
+            let (html, inline) = extract_inline_images(html);
             let boundary = format!("=_auumail_{}", Uuid::new_v4().simple());
-            let html_part = format!(
-                "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
-                fold_base64(&BASE64.encode(html.as_bytes()))
-            );
-            (
-                format!("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n"),
-                format!("--{boundary}\r\n{text_part}\r\n--{boundary}\r\n{html_part}\r\n--{boundary}--\r\n"),
-            )
+            let text_leg = format!("--{boundary}\r\n{text_part}");
+            if inline.is_empty() {
+                let html_part = format!(
+                    "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
+                    fold_base64(&BASE64.encode(html.as_bytes()))
+                );
+                (
+                    format!("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n"),
+                    format!("{text_leg}\r\n--{boundary}\r\n{html_part}\r\n--{boundary}--\r\n"),
+                )
+            } else {
+                // alternative > related > [html, image*]：收件端按 cid 关联正文内嵌图。
+                let related = format!("=_auumail_{}", Uuid::new_v4().simple());
+                let html_part = format!(
+                    "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
+                    fold_base64(&BASE64.encode(html.as_bytes()))
+                );
+                let mut parts = vec![format!("--{related}\r\n{html_part}")];
+                for image in &inline {
+                    parts.push(format!("--{related}\r\n{}", inline_image_headers(image)));
+                }
+                parts.push(format!("--{related}--"));
+                let related_headers =
+                    format!("Content-Type: multipart/related; boundary=\"{related}\"\r\n");
+                (
+                    format!("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n"),
+                    format!(
+                        "{text_leg}\r\n--{boundary}\r\n{related_headers}\r\n{}\r\n--{boundary}--\r\n",
+                        parts.join("\r\n")
+                    ),
+                )
+            }
         }
         None => (
             "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n"
@@ -1264,6 +1389,123 @@ mod tests {
         assert_eq!(decoded, "<p>rich <b>text</b></p>");
         // 纯文本部分保留。
         assert!(raw.contains("cGxhaW4gdGV4dA==") || raw.contains(&BASE64.encode(b"plain text")));
+    }
+
+    #[test]
+    fn data_uri_images_become_related_inline_parts_with_content_dedupe() {
+        use mail_parser::{MessageParser, MimeHeaders};
+        let png: Vec<u8> = vec![137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3];
+        let encoded = BASE64.encode(&png);
+        let html = format!(
+            "<p>张三</p><img src=\"data:image/png;base64,{encoded}\" alt=\"logo\"><img src=\"data:image/png;base64,{encoded}\">"
+        );
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "签名",
+            body_text: "签名文本",
+            body_html: Some(&html),
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[],
+        });
+        assert!(raw.contains("Content-Type: multipart/alternative; boundary=\"=_auumail_"));
+        assert!(raw.contains("Content-Type: multipart/related; boundary=\"=_auumail_"));
+        assert!(raw.contains("Content-Disposition: inline; filename=\"inline.png\""));
+        // mail_parser 回读（与收信渲染同一路径）：两处 src 都替换为 cid，同图去重只建一个内联件。
+        let parsed = MessageParser::default().parse(raw.as_bytes()).unwrap();
+        let html = parsed.body_html(0).unwrap().into_owned();
+        let cids: Vec<String> = html
+            .match_indices("cid:")
+            .map(|(index, _)| {
+                let start = index + 4;
+                let end = html[start..].find('"').unwrap() + start;
+                html[start..end].to_string()
+            })
+            .collect();
+        assert_eq!(cids.len(), 2, "两处引用都替换为 cid");
+        assert_eq!(cids[0], cids[1], "同图按内容去重");
+        assert!(cids[0].ends_with("@auumail.local"));
+        assert!(!html.contains("data:image/png"), "原文 data URI 不残留");
+        let inline: Vec<_> = parsed
+            .attachments()
+            .filter(|part| part.content_id().is_some())
+            .collect();
+        assert_eq!(inline.len(), 1, "同图只建一个内联件");
+        assert_eq!(
+            inline[0].content_id().unwrap(),
+            cids[0],
+            "Content-ID 与 cid 引用对应"
+        );
+        assert_eq!(inline[0].contents(), png, "图片字节逐字一致");
+    }
+
+    #[test]
+    fn undecodable_data_uri_is_kept_verbatim_without_related_parts() {
+        use mail_parser::MessageParser;
+        let broken = "data:image/png;base64,!not-base64!";
+        let html = format!("<p><img src=\"{broken}\"></p>");
+        let (converted, images) = extract_inline_images(&html);
+        assert!(images.is_empty());
+        assert!(converted.contains(broken), "无法解码的原样保留");
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "sig",
+            body_text: "text",
+            body_html: Some(&html),
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[],
+        });
+        assert!(
+            !raw.contains("multipart/related"),
+            "无有效内联图不建 related 结构"
+        );
+        let parsed = MessageParser::default().parse(raw.as_bytes()).unwrap();
+        assert!(parsed.body_html(0).unwrap().contains(broken));
+    }
+
+    #[test]
+    fn inline_images_nest_inside_mixed_with_regular_attachments() {
+        let png = vec![9u8; 16];
+        let encoded = BASE64.encode(&png);
+        let html = format!("<p><img src=\"data:image/jpeg;base64,{encoded}\"></p>");
+        let raw = assemble(&MimeInput {
+            from_name: "me",
+            from_email: "me@example.test",
+            recipients: &Recipients {
+                to: vec!["friend@example.test".into()],
+                ..Default::default()
+            },
+            subject: "mixed",
+            body_text: "text",
+            body_html: Some(&html),
+            message_id: "<abc@auumail.local>",
+            reply: None,
+            attachments: &[AttachmentPayload {
+                name: "报告.pdf".into(),
+                media_type: "application/pdf".into(),
+                content: b"pdf".to_vec(),
+            }],
+        });
+        let mixed_at = raw.find("multipart/mixed").unwrap();
+        let alternative_at = raw.find("multipart/alternative").unwrap();
+        let related_at = raw.find("multipart/related").unwrap();
+        assert!(
+            mixed_at < alternative_at && alternative_at < related_at,
+            "嵌套顺序 mixed > alternative > related"
+        );
+        assert!(raw.contains("Content-Disposition: attachment"));
+        assert!(raw.contains("Content-Disposition: inline; filename=\"inline.jpg\""));
     }
 
     #[test]

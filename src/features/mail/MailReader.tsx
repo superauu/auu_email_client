@@ -1,9 +1,12 @@
-import { ChevronDown, ChevronUp, Archive, ArrowLeft, CornerUpLeft, FolderInput, Forward, Image, Mail, MailOpen, PenLine, ReplyAll, Sparkles, Star, Trash, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Archive, ArrowLeft, CornerUpLeft, FolderInput, Forward, Globe, Image, Mail, MailOpen, PenLine, ReplyAll, ShieldCheck, Sparkles, Star, Trash, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useShallow } from 'zustand/react/shallow';
 import { replyTargets, type MailMessage, type RecoveryAction } from '../../domain/mail';
 import { linkifyText } from '../../domain/linkify';
+import { senderDomain } from '../../domain/trust';
 import { errorMessage } from '../../domain/errors';
+import { useTrustStore } from '../../stores/trustStore';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useThreadViewStore } from '../../stores/threadViewStore';
 import { groupConversations } from './threading';
@@ -16,7 +19,7 @@ import { desktop, isDesktop } from '../../platform/desktop';
 import { useThemeStore } from '../../stores/themeStore';
 import { useI18n, currentLanguage } from '../../i18n/react';
 
-type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean };
+type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean; trustedSender?: boolean };
 
 /** 回复全部：收件目标含 Cc；没有任何可回对象时禁用（等同无意义操作）。 */
 function ReplyAllButton({ message, accountEmail, onCompose }: { message: MailMessage; accountEmail: string; onCompose: (message: MailMessage, editing?: boolean, mode?: 'reply' | 'reply-all' | 'forward') => void }) {
@@ -100,9 +103,12 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
       const target = useWorkspaceStore.getState().messages.find(m => m.id === messageId);
       if (!target || target.draft) return;
       try {
-        const doc = await messageHtmlAction(target.accountId, target.id, false, themeMode);
+        // 信任判定：发件地址或域名在信任列表 → 直接加载远程图片（静默同步同款不打扰语义）。
+        await useTrustStore.getState().ensure().catch(() => undefined);
+        const trusted = useTrustStore.getState().isTrusted(target.from.email);
+        const doc = await messageHtmlAction(target.accountId, target.id, trusted, themeMode);
         if (!active) return;
-        setHtml({ state: 'ready', doc, allowImages: false });
+        setHtml({ state: 'ready', doc, allowImages: trusted, trustedSender: trusted });
       } catch { if (active) setHtml({ state: 'plain', doc: '', allowImages: false }); }
     }
     void load();
@@ -128,16 +134,36 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
     if (action === 'check' && message.recovery?.state === 'queued') { await enqueue([message.accountId]); return; }
     if (await requestRecovery(message.id, action)) await enqueue([message.accountId]);
   }
-  function loadWithImages() {
+  /** 重新渲染正文（allow=是否放行远程图片）；trust 仅用于横幅状态展示。 */
+  async function reloadHtml(allow: boolean, trusted: boolean) {
     if (!message) return;
     const current = message;
-    void (async () => {
-      try {
-        const doc = await messageHtml(current.accountId, current.id, true, useThemeStore.getState().resolvedMode);
-        setHtml({ state: 'ready', doc, allowImages: true });
-        setOpenError('');
-      } catch (error) { setHtml({ state: 'plain', doc: '', allowImages: false }); setOpenError(errorMessage(error)); }
-    })();
+    try {
+      const doc = await messageHtml(current.accountId, current.id, allow, useThemeStore.getState().resolvedMode);
+      setHtml({ state: 'ready', doc, allowImages: allow, trustedSender: trusted });
+      setOpenError('');
+    } catch (error) { setHtml({ state: 'plain', doc: '', allowImages: false }); setOpenError(errorMessage(error)); }
+  }
+  function loadWithImages() { void reloadHtml(true, false); }
+  /** 信任发件地址或域名：入库后立即自动加载本封远程图片，此后该来源一律自动加载。 */
+  async function trustCurrent(kind: 'sender' | 'domain') {
+    if (!message) return;
+    const value = kind === 'sender' ? message.from.email.trim().toLowerCase() : senderDomain(message.from.email);
+    if (!value) return;
+    try { await useTrustStore.getState().add(kind, value); }
+    catch (error) { setOpenError(errorMessage(error)); return; }
+    await reloadHtml(true, true);
+  }
+  /** 取消信任：移除该发件地址与其域名的全部条目，恢复拦截。 */
+  async function untrustCurrent() {
+    if (!message) return;
+    const store = useTrustStore.getState();
+    try {
+      await store.remove('sender', message.from.email.trim().toLowerCase());
+      const domain = senderDomain(message.from.email);
+      if (domain) await store.remove('domain', domain);
+    } catch (error) { setOpenError(errorMessage(error)); return; }
+    await reloadHtml(false, false);
   }
   const richAvailable = html.state === 'ready' && !!html.doc;
   return <section className="mail-reader" aria-label={t('reader.sectionAria')}>
@@ -185,7 +211,22 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
       {!!message.attachments?.length && <AttachmentList key={message.id} message={message} />}
       {richAvailable
         ? <div className="mail-html-wrapper">
-          {html.allowImages ? null : <div className="html-remote-note" role="status"><span>{t('reader.remoteImagesBlocked')}</span><Button variant="ghost" onClick={loadWithImages}><Image size={14} />{t('reader.loadRemoteImages')}</Button></div>}
+          {html.state === 'ready' && html.allowImages && html.trustedSender ? <div className="html-remote-note" role="status"><span>{t('reader.trustedNote')}</span><Button variant="ghost" onClick={() => void untrustCurrent()}>{t('reader.untrust')}</Button></div>
+            : html.allowImages ? null
+            : <div className="html-remote-note" role="status"><span>{t('reader.remoteImagesBlocked')}</span>
+                <span className="remote-actions">
+                  <Button variant="ghost" onClick={loadWithImages}><Image size={14} />{t('reader.loadRemoteImages')}</Button>
+                  {isDesktop() && !localDraft && <DropdownMenu.Root>
+                    <DropdownMenu.Trigger asChild><Button variant="ghost" iconOnly aria-label={t('reader.trustMenuAria')} title={t('reader.trustMenuAria')}><ChevronDown size={14} /></Button></DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content side="bottom" align="start" className="avatar-menu">
+                        <DropdownMenu.Item className="avatar-menu-item" onSelect={() => void trustCurrent('sender')}><ShieldCheck size={15} /><span>{t('reader.trustSender')}</span></DropdownMenu.Item>
+                        <DropdownMenu.Item className="avatar-menu-item" onSelect={() => void trustCurrent('domain')}><Globe size={15} /><span>{t('reader.trustDomain')}</span></DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>}
+                </span>
+              </div>}
           <iframe className="mail-html-frame" sandbox="allow-scripts" srcDoc={html.doc} title={t('reader.htmlFrameTitle')} style={frameHeight ? { height: `${frameHeight}px` } : undefined} />
         </div>
         : <PlainBody text={message.bodyText} empty={localDraft ? t('reader.emptyLocalDraft') : t('reader.emptyPlainBody')} onOpen={openExternalLink} />}

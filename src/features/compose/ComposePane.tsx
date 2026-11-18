@@ -7,6 +7,7 @@ import { errorMessage } from '../../domain/errors';
 import { desktop, isDesktop } from '../../platform/desktop';
 import { DraftSession } from './DraftSession';
 import { RichEditor, escapeHtml } from './RichEditor';
+import { useSignatureStore } from '../../stores/signatureStore';
 import { RecipientField } from './RecipientField';
 import { isRecipientAddress, recipientError, splitRecipients } from '../../domain/recipients';
 import { useI18n, currentLanguage } from '../../i18n/react';
@@ -76,11 +77,24 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
         : t('compose.sendBlockedCapability');
 
   // 回复 / 转发引用：取消毒后的原文片段（无缓存时保留既有纯文本引用）。
+  // 签名（新邮件按 useNew、回复 / 转发按 useReply）与引用并行取；签名先落位再注入引用，
+  // 保证签名位于引用块上方（Outlook 语义）。已保存草稿（有 revision / 正文）不重复追加。
   const quoteInjected = useRef(false);
+  const [signatureHtml, setSignatureHtml] = useState<string | null>(null);
   useEffect(() => {
-    if (quoteInjected.current || initial.bodyHtml || initial.revision || !initial.replyToId) return;
+    if (quoteInjected.current || initial.bodyHtml || initial.revision) return;
     quoteInjected.current = true;
     void (async () => {
+      // 签名读取失败静默置空（撰写不被阻塞），演示端无签名。
+      let signature = '';
+      if (isDesktop()) {
+        try {
+          const value = await useSignatureStore.getState().load(initial.accountId);
+          if (initial.replyToId ? value.useReply : value.useNew) signature = value.html;
+        } catch { /* 无签名 */ }
+      }
+      setSignatureHtml(signature || null);
+      if (!initial.replyToId) return;
       const origin = useWorkspaceStore.getState().messages.find(message => message.id === initial.replyToId);
       try {
         const fragment = await messageHtmlFragment(initial.accountId, initial.replyToId!);
@@ -251,12 +265,12 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
         </li>)}
       </ul>}
       {quoteLoading && <p className="compose-quote-loading" role="status">{t('compose.quoteLoading')}</p>}
-      <RichEditor initialHtml={initial.bodyHtml ?? ''} initialText={initial.replyToId && !initial.revision && !initial.bodyHtml ? '' : initial.bodyText} quoteHtml={quoteHtml} disabled={busy} formatting={formatting} onChange={(html, text) => session.update({ bodyHtml: html, bodyText: text })} />
+      <RichEditor initialHtml={initial.bodyHtml ?? ''} initialText={initial.replyToId && !initial.revision && !initial.bodyHtml ? '' : initial.bodyText} quoteHtml={quoteHtml} signatureHtml={signatureHtml} disabled={busy} formatting={formatting} onChange={(html, text) => session.update({ bodyHtml: html, bodyText: text })} />
     </div>
     {(state.error || platformError) && <p className="compose-feedback inline-error" role="alert">{state.error || platformError}</p>}
     {confirmSend && <div className="discard-prompt" role="alert"><span>{t('compose.emptySubjectConfirm')}</span><Button disabled={busy} onClick={() => void performSend()}>{t('compose.sendAnyway')}</Button><Button variant="ghost" onClick={() => { setConfirmSend(false); document.getElementById('compose-subject')?.focus(); }}>{t('compose.fillSubject')}</Button></div>}
     {closeTarget && <div className="discard-prompt" role="alert"><span>{t('compose.autosaveFailed')}</span><Button onClick={() => void save(true)} disabled={state.saving || busy}>{closeTarget === 'window' ? t('compose.saveAndExit') : t('compose.saveAndClose')}</Button><Button variant="ghost" disabled={state.saving || busy} onClick={() => void discard()}>{t('compose.discardDraft')}</Button><Button variant="ghost" onClick={() => { setCloseTarget(null); session.resume(); }}>{t('compose.keepEditing')}</Button></div>}
     <footer className="compose-pane-footer"><span role="status">{state.saving ? <Loader2 size={13} className="spin" /> : state.saved && !state.dirty ? <Check size={13} /> : <Save size={13} />}{status}</span><Button variant="ghost" className="button-danger-ghost" disabled={state.saving || busy} title={t('compose.discardTitle')} onClick={() => void discard()}><Trash2 size={15} />{discarding ? t('compose.deleting') : t('compose.discardDraft')}</Button></footer>
-    <div className="compose-capability">{canSend ? t('compose.capabilityFrom', { email: account?.email ?? '' }) : sendBlockReason}{isDesktop() ? t('compose.noImageInsert') : t('compose.attachDesktopLimitNote')}</div>
+    <div className="compose-capability">{canSend ? t('compose.capabilityFrom', { email: account?.email ?? '' }) : sendBlockReason}{isDesktop() ? t('compose.imagePasteNote') : t('compose.attachDesktopLimitNote')}</div>
   </section>;
 }

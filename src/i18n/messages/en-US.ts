@@ -109,6 +109,14 @@ export const enUS: Record<MessageId, string> = {
   'app.syncQueuedNotice': 'Queued sync for all accounts…',
   'app.syncProgressFailed': 'Failed to read sync progress: {error}',
   'app.dismissToast': 'Dismiss',
+  'app.menuAria': 'Open function menu',
+  'app.menuCompose': 'New mail',
+  'app.menuSearch': 'Search mail',
+  'app.menuSyncAll': 'Sync all accounts',
+  'app.menuEvents': 'Events & tasks',
+  'app.menuAppearance': 'Appearance & skins',
+  'app.menuSettings': 'Settings',
+  'app.menuAbout': 'About AuuMail',
 
   // ── Forward quote header (part of outgoing body, follows UI language) ──
   'app.forwardSubjectPrefix': 'Fwd: {subject}',
@@ -310,6 +318,11 @@ export const enUS: Record<MessageId, string> = {
   'reader.remoteMissingNote': 'The original remote location no longer exists; local content and edits are kept. You can verify the remote location.',
   'reader.remoteImagesBlocked': 'Remote images are blocked to prevent sender tracking.',
   'reader.loadRemoteImages': 'Load remote images',
+  'reader.trustSender': 'Trust sender',
+  'reader.trustDomain': 'Trust sender domain',
+  'reader.trustMenuAria': 'Trust options',
+  'reader.trustedNote': 'Trusted source: remote images load automatically.',
+  'reader.untrust': 'Remove trust',
   'reader.htmlFrameTitle': 'Message body (rich text)',
   'reader.emptyLocalDraft': 'This draft has no body yet.',
   'reader.emptyPlainBody': 'This message has no plain-text body.',
@@ -386,8 +399,8 @@ export const enUS: Record<MessageId, string> = {
   'compose.deleting': 'Deleting…',
   'compose.discardTitle': 'Delete this draft and close the compose pane',
   'compose.capabilityFrom': 'Sending from {email}',
-  'compose.noImageInsert': ' · Inline images not supported yet',
-  'compose.attachDesktopLimitNote': ' · Attachments are desktop-only; inline images not supported yet',
+  'compose.imagePasteNote': ' · Paste images with Ctrl+V',
+  'compose.attachDesktopLimitNote': ' · Attachments are desktop-only',
 
   // ── Rich text editor ────────────────────────────────────────
   'editor.toolbarAria': 'Formatting toolbar',
@@ -411,6 +424,7 @@ export const enUS: Record<MessageId, string> = {
   'editor.alignJustify': 'Justify',
   'editor.quote': 'Quote',
   'editor.insertLink': 'Insert link',
+  'editor.insertImage': 'Insert image',
   'editor.insertHr': 'Insert divider',
   'editor.clearFormat': 'Clear formatting',
   'editor.undo': 'Undo',
@@ -422,7 +436,8 @@ export const enUS: Record<MessageId, string> = {
   'editor.insert': 'Insert',
   'editor.placeholder': 'Write your message here…',
   'editor.bodyAria': 'Message body',
-  'editor.pasteImageBlocked': 'Images were not pasted: only text and formatting are supported for now.',
+  'editor.pasteImageBlocked': 'Clipboard files were not pasted: only bitmap images (PNG / JPG / GIF / WebP / BMP) are supported.',
+  'editor.pasteImageTooLarge': '{count} image(s) exceeded 1 MiB and were not inserted.',
   'editor.pasteNoticeClose': 'Dismiss paste notice',
 
   // ── Recipient field ─────────────────────────────────────────
@@ -529,6 +544,16 @@ export const enUS: Record<MessageId, string> = {
   'syncOptions.noteCommon': 'Auto sync runs while the app is open and retries gradually after disconnects. Unfinished syncs resume after restart; after a manual stop you need to sync again.',
   'syncOptions.notePop3': 'POP3 saves not-yet-downloaded server mail in batches into a single inbox, keeps server copies, and does not sync server read state.',
   'syncOptions.noteImapHistory': 'With history download enabled, the next sync continues fetching older mail.',
+
+  // ── Email signature (per account, Outlook-style auto append) ──
+  'signature.buttonAria': "Edit {name}'s email signature",
+  'signature.button': 'Signature',
+  'signature.title': '{name} · Email signature',
+  'signature.description': 'A fixed signature appended automatically to your mail; rich text and images are supported (images travel as inline attachments). Choose separately whether new mail and replies / forwards append it; the cursor sits above the signature in new mail and the signature sits above the quote in replies.',
+  'signature.useNew': 'Append to new mail',
+  'signature.useReply': 'Append to replies / forwards',
+  'signature.invalidData': 'Invalid signature data',
+  'signature.tooLarge': 'Signature exceeds the length limit (including image encoding); shorten it or compress the image',
 
   // ── Outbox (domain summary + panel) ─────────────────────────
   'outbox.stateQueued': 'Queued for sending',
@@ -639,6 +664,7 @@ export const enUS: Record<MessageId, string> = {
   'syncSummary.failed': 'Sync failed: {error}',
   'syncSummary.retryNeeded': 'Some folders unfinished; committed mail is kept; {warnings}',
   'syncSummary.listening': 'Synced · new-mail notifications enabled{extra}',
+  'syncSummary.listeningRunning': 'Connected · listening for new mail…',
   'syncSummary.listeningFetched': ', fetched {count} messages',
   'syncSummary.done': 'Sync finished: {folders} folders, {count} messages fetched{warnings}',
   'syncSummary.donePlain': 'Sync finished',
@@ -665,6 +691,9 @@ export const enUS: Record<MessageId, string> = {
 
   // ── Stores / platform / generic UI ──────────────────────────
   'store.imapOptionsDesktopOnly': 'Sync settings are only available in the desktop app.',
+  'store.signatureDesktopOnly': 'Signature settings are only available in the desktop app.',
+  'store.trustDesktopOnly': 'Trust settings are only available in the desktop app.',
+  'trust.invalidData': 'Invalid trust data',
   'store.noRichBody': 'Rich-text bodies are not supported in this environment.',
   'store.noQuoteFragment': 'Quoting the original message is not available in this environment.',
   'store.noSend': 'Sending is not available in this environment.',

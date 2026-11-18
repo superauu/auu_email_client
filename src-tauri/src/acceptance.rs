@@ -5,6 +5,7 @@
 //!    注意：不要启用 `-Dgreenmail.setup.api`——API 服务器的 preloadDirectory 会把注入的邮件持久化并在重启后自动回灌，导致用例状态污染（2026-11-18 实测）。
 //! 2. `python tls_proxy.py`（TLS 9301→IMAP、9302→POP3、9303→SMTP，终止自签 CA 证书）；
 //! 3. `certutil -user -addstore Root ca.cer`（把验收 CA 装入用户信任库，供 Schannel 信任）。
+//!
 //! 运行：`AUUMAIL_ACCEPTANCE=1 cargo test --manifest-path src-tauri/Cargo.toml --lib acceptance::tests -- --nocapture --test-threads=1`
 //! 未设置 AUUMAIL_ACCEPTANCE 时全部跳过，常规 `check:native` 不受影响。
 //!
@@ -231,7 +232,7 @@ mod tests {
     ) -> std::collections::HashSet<u32> {
         session.select(mailbox).unwrap();
         session
-            .uid_search(&format!("HEADER MESSAGE-ID \"{message_id}\""))
+            .uid_search(format!("HEADER MESSAGE-ID \"{message_id}\"").as_str())
             .unwrap()
     }
 
@@ -336,9 +337,9 @@ mod tests {
             drafts::save(&mut conn, &draft, &account, &staging).unwrap()
         };
         {
-            let mut conn = db.lock().unwrap();
+            let conn = db.lock().unwrap();
             let saved_revision = saved.draft.as_ref().map(|d| d.revision).unwrap_or(0);
-            outbox::enqueue(&mut conn, &saved.id, saved_revision).unwrap();
+            outbox::enqueue(&conn, &saved.id, saved_revision).unwrap();
         }
         let sends = outbox::run(&db, &account).unwrap();
         assert!(sends, "发送队列应有任务被处理");
@@ -442,9 +443,9 @@ mod tests {
             drafts::save(&mut conn, &draft, &account, &ComposeStaging::default()).unwrap()
         };
         {
-            let mut conn = db.lock().unwrap();
+            let conn = db.lock().unwrap();
             let saved_revision = saved.draft.as_ref().map(|d| d.revision).unwrap_or(0);
-            outbox::enqueue(&mut conn, &saved.id, saved_revision).unwrap();
+            outbox::enqueue(&conn, &saved.id, saved_revision).unwrap();
         }
         assert!(
             outbox::run(&db, &account).unwrap(),
@@ -454,7 +455,7 @@ mod tests {
         // auu（To）、cc（Cc）、bcc（Bcc）各自的账号分别真实收信。
         let ids: Vec<String> = ["auu", "cc", "bcc"]
             .iter()
-            .map(|user| match user.as_ref() {
+            .map(|user| match *user {
                 "auu" => account.clone(),
                 other => save_account(&db, "imap", other, &format!("{other}pass"), false),
             })
@@ -861,7 +862,6 @@ Date: Sat, 7 Feb 2026 15:00:00 +0000
         };
         let message_id = find(&db);
         // 删除到废纸篓并同步（服务器侧 MOVE 完成）。
-        let trash_folder = format!("{account}:folder:Trash");
         message_changes::update(
             &mut db.lock().unwrap(),
             &account,
@@ -1027,6 +1027,132 @@ Date: Sat, 7 Feb 2026 15:00:00 +0000
         let second = sync(&db, &account);
         assert_eq!(second.fetched_messages, 0, "增量同步应为 0");
         eprintln!("[吞吐] 注入 {total} 封：{injected:?}；全量同步：{elapsed:?}；二次增量：0 封");
+        cleanup(&db, &[account]);
+    }
+
+    /// ── 验收⑩：签名含图片端到端（multipart/related 内联件） ─────────
+    /// signature::save（compose 消毒保 data:image）→ 草稿正文携带签名 → 真实 outbox
+    /// 把 data URI 转 cid + multipart/related → GreenMail SMTP 投递 → IMAP 收信 →
+    /// 解析核对：html 引用 cid、内联件字节逐字一致、收信渲染路径能还原 data URI。
+    #[test]
+    fn signature_with_image_survives_real_smtp_as_inline_related_part() {
+        if !enabled() {
+            eprintln!("skip: AUUMAIL_ACCEPTANCE 未设置");
+            return;
+        }
+        let (db, _dir) = fresh_db("signature");
+        let account = save_account(&db, "imap", "auu", "auupass", false);
+        let tag = marker();
+        let png = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+            .unwrap();
+
+        // 保存签名（含 data:image 内嵌图）；读取回核：图保留、开关落库。
+        let signature = crate::signature::Signature {
+            html: format!(
+                "<p>张三 · 验收签名 {tag}</p><img src=\"data:image/png;base64,{}\" alt=\"徽标\">",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            ),
+            use_new: true,
+            use_reply: true,
+        };
+        {
+            let conn = db.lock().unwrap();
+            crate::signature::save(&conn, &account, &signature).unwrap();
+            let stored = crate::signature::read(&conn, &account).unwrap();
+            assert!(stored.html.contains("data:image/png;base64,"));
+            assert!(stored.html.contains(&format!("验收签名 {tag}")));
+            assert!(stored.use_new && stored.use_reply);
+        }
+
+        // 模拟 ComposePane 产出：正文 + 签名 HTML 物理合入草稿。
+        let draft = drafts::Draft {
+            id: format!("draft-acc-{}", uuid::Uuid::new_v4()),
+            account_id: account.clone(),
+            to: format!("auu@{DOMAIN}"),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: format!("{tag} 签名内联图验收"),
+            body_text: format!("{tag} 正文与签名文本。"),
+            body_html: Some(format!(
+                "<p>{tag} 正文。</p>{}",
+                crate::signature::read(&db.lock().unwrap(), &account)
+                    .unwrap()
+                    .html
+            )),
+            reply_to_id: None,
+            attachments: Vec::new(),
+            updated_at: crate::now_utc(),
+            revision: 0,
+        };
+        let saved = {
+            let mut conn = db.lock().unwrap();
+            drafts::save(&mut conn, &draft, &account, &ComposeStaging::default()).unwrap()
+        };
+        {
+            let conn = db.lock().unwrap();
+            let saved_revision = saved.draft.as_ref().map(|d| d.revision).unwrap_or(0);
+            outbox::enqueue(&conn, &saved.id, saved_revision).unwrap();
+        }
+        assert!(
+            outbox::run(&db, &account).unwrap(),
+            "发送队列应有任务被处理"
+        );
+        {
+            let conn = db.lock().unwrap();
+            let entry = outbox::list(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.draft_id == saved.id)
+                .unwrap();
+            assert_eq!(entry.state, "sent", "真实 SMTP 投递应确认 sent");
+        }
+
+        // 真实 IMAP 收信，取缓存原文核对 MIME 结构与内联件字节。
+        let outcome = sync(&db, &account);
+        assert!(outcome.fetched_messages >= 1);
+        let messages = inbox_subjects(&db, &account);
+        let hit = messages
+            .iter()
+            .find(|(_, subject)| subject.contains(&tag))
+            .unwrap();
+        let (root, key, _meta) = {
+            let conn = db.lock().unwrap();
+            crate::mail_attachments::load(&conn, &account, &hit.0, 0).unwrap()
+        };
+        let raw = crate::mail_cache::read(&root, &key).unwrap();
+        let raw_text = String::from_utf8_lossy(&raw);
+        assert!(raw_text.contains("multipart/related"), "应有 related 结构");
+        assert!(raw_text.contains("Content-ID: <"), "内联件应有 Content-ID");
+        assert!(
+            raw_text.contains("Content-Disposition: inline; filename=\"inline.png\""),
+            "内联件应为 inline 处置的 png"
+        );
+        let parsed = mail_parser::MessageParser::default()
+            .parse(&raw)
+            .ok_or_else(|| panic!("收件原文 MIME 无效"))
+            .unwrap();
+        let html = parsed.body_html(0).unwrap().into_owned();
+        assert!(
+            !html.contains("data:image/png"),
+            "发送侧 data URI 应已转 cid"
+        );
+        let cid_start = html.find("cid:").expect("html 应引用 cid") + 4;
+        let cid_end = cid_start + html[cid_start..].find('"').unwrap();
+        let cid = &html[cid_start..cid_end];
+        let inline = parsed
+            .attachments()
+            .find(|part| part.content_id().map(|id| id == cid).unwrap_or(false))
+            .expect("应有与 cid 对应的内联件");
+        assert_eq!(inline.contents(), png, "内联图片字节必须与原文件逐字一致");
+        // 收信渲染路径（inline_data_uris）能把该内联件还原为可显示的 data URI。
+        let inline_map = crate::mail_html::inline_data_uris(&parsed).unwrap();
+        assert!(
+            inline_map
+                .iter()
+                .any(|(id, uri)| id == cid && uri.starts_with("data:image/png;base64,")),
+            "收件端应能把 cid 还原为 data URI"
+        );
         cleanup(&db, &[account]);
     }
 }

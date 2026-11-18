@@ -16,6 +16,11 @@ pub type SharedDb = Arc<Mutex<Connection>>;
 mod extended_tests;
 #[path = "imap_live.rs"]
 mod live;
+/// IDLE 监听周期查询（队列快照把这类运行标记为 listening）。
+pub(crate) use live::is_idling;
+/// 标记辅助仅供测试直接操纵监听注册表（生产路径经 live 轮次逻辑置位）。
+#[cfg(test)]
+pub(crate) use live::{mark_idling, unmark_idling};
 #[path = "imap_round.rs"]
 mod round;
 const INITIAL_WINDOW: u32 = 50;
@@ -425,14 +430,18 @@ fn sync_session_mode<S: Read + Write>(
         tx.commit()
             .map_err(|_| AppError::storage("文件夹更新未完成"))?;
     }
+    // 静默同步语义：仅在确实拉取到邮件或确认了本机回写时才要求前端刷新工作区；
+    // IDLE / 自动同步的空轮次对界面完全不可见。目录结构变化由前端按 outcome.folders
+    // 与上轮比对（本机 CRUD 自带即时刷新，远端目录变化罕见）。
+    let (warnings, writebacks) = if plan.force_full || plan.settings.auto_sync_seconds > 0 {
+        imap_writeback::flush(db, &plan.account_id, session, archive.as_deref(), trace)?
+    } else {
+        (vec![], 0)
+    };
     let mut outcome = SyncOutcome {
-        refresh_needed: true,
+        refresh_needed: false,
         folders: names.len(),
-        warnings: if plan.force_full || plan.settings.auto_sync_seconds > 0 {
-            imap_writeback::flush(db, &plan.account_id, session, archive.as_deref(), trace)?
-        } else {
-            vec![]
-        },
+        warnings,
         ..SyncOutcome::default()
     };
     outcome.warnings.extend(mail_recovery::process(
@@ -525,12 +534,16 @@ fn sync_session_mode<S: Read + Write>(
         let pending:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM message_recovery WHERE account_id=?1 AND state='queued') OR EXISTS(SELECT 1 FROM imap_body_requests WHERE account_id=?1 AND state='queued')",[&plan.account_id],|r|r.get(0)).map_err(|_|AppError::storage("无法读取剩余只读请求"))?;
         outcome.has_more |= pending;
     }
-    if outcome.has_more {
+    // IDLE 实时监听轮（listening）也会置 has_more——那是常驻后台机制而非"待续同步"，
+    // 不生成这条警告（前端对空轮次静默，见 SYNCHRONIZATION.md）。
+    if outcome.has_more && !outcome.listening {
         outcome
             .warnings
             .push("本轮完整批次已保存，仍有邮件范围等待继续同步。".into());
     }
     outcome.synced_at = crate::now_utc();
+    // 有拉取或有回写确认才算"需要刷新"；warn-only 轮次（剩余待回写提示等）不惊动界面。
+    outcome.refresh_needed = outcome.fetched_messages > 0 || writebacks > 0;
     Ok(outcome)
 }
 pub(crate) fn forget_session(id: &str) {
@@ -2030,6 +2043,7 @@ aGVsbG8=
         )
         .unwrap();
         assert_eq!(outcome.fetched_messages, 1);
+        assert!(outcome.refresh_needed, "有拉取必须要求刷新");
         assert!(outcome.retry_needed && outcome.has_more);
         assert!(outcome
             .warnings
@@ -2346,6 +2360,10 @@ aGVsbG8=
         let script = prefix(2000, 5002).replace("* 1 EXISTS", "* 0 EXISTS");
         let outcome = run(&db, format!("{script}* BYE bye\r\na4 OK logout\r\n")).unwrap();
         assert_eq!(outcome.fetched_messages, 0);
+        assert!(
+            !outcome.refresh_needed,
+            "0 拉取且无回写确认的空轮次必须静默（不要求前端刷新）"
+        );
         let conn = db.lock().unwrap();
         assert_eq!(
             read_cursor(&conn, "acc", "inbox").unwrap(),

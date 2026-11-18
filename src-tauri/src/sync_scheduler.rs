@@ -35,6 +35,9 @@ pub struct JobSnapshot {
     pub id: String,
     pub account_id: String,
     pub status: JobStatus,
+    /// 运行中的任务当前处于 IDLE 实时监听阶段（非主动同步）：前端据此不转圈、
+    /// 摘要显示"实时监听中"（静默同步语义，见 SYNCHRONIZATION.md）。
+    pub listening: bool,
     pub queued_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -189,6 +192,7 @@ impl SyncScheduler {
                             id: uuid::Uuid::new_v4().to_string(),
                             account_id: id.clone(),
                             status: JobStatus::Queued,
+                            listening: false,
                             queued_at: crate::now_utc(),
                             started_at: None,
                             finished_at: None,
@@ -326,11 +330,17 @@ fn snapshot(queue: &Queue) -> QueueSnapshot {
             .jobs
             .iter()
             .map(|job| {
-                job.state
+                let mut snapshot = job
+                    .state
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .snapshot
-                    .clone()
+                    .clone();
+                // 运行中的任务若正处于 IDLE 实时监听片段（含轮间续跑间隙），标记 listening：
+                // 前端不把实时监听当主动同步转圈，摘要显示监听状态。
+                snapshot.listening = snapshot.status == JobStatus::Running
+                    && crate::mail_sync::is_idling(&snapshot.account_id);
+                snapshot
             })
             .collect(),
     }
@@ -622,5 +632,33 @@ mod tests {
         busy.wait().unwrap();
         assert!(rejected);
         assert_eq!(count, MAX_PENDING + 1);
+    }
+
+    #[test]
+    fn idle_listening_running_jobs_are_marked_listening_in_snapshots() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release = Mutex::new(release_rx);
+        let scheduler = SyncScheduler::with_workers(1, move |id| {
+            started_tx.send(id.to_string()).unwrap();
+            release.lock().unwrap().recv_timeout(WAIT).unwrap();
+            Ok(SyncOutcome::default())
+        })
+        .unwrap();
+        let job = scheduler.ticket("a".into()).unwrap();
+        started_rx.recv_timeout(WAIT).unwrap();
+        assert!(
+            !scheduler.snapshot().unwrap().jobs[0].listening,
+            "未标记的运行任务不是监听（主动同步应转圈）"
+        );
+        crate::mail_sync::mark_idling("a");
+        assert!(
+            scheduler.snapshot().unwrap().jobs[0].listening,
+            "监听中的运行任务应标记 listening"
+        );
+        crate::mail_sync::unmark_idling("a");
+        assert!(!scheduler.snapshot().unwrap().jobs[0].listening);
+        release_tx.send(()).unwrap();
+        job.wait().unwrap();
     }
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, Undo2, Redo2, RemoveFormatting, Link2, AlignLeft, AlignCenter, AlignRight, AlignJustify, Minus, Type, X } from 'lucide-react';
+import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, Undo2, Redo2, RemoveFormatting, Link2, AlignLeft, AlignCenter, AlignRight, AlignJustify, Minus, Type, X, Image as ImageIcon } from 'lucide-react';
+import { MAX_INLINE_IMAGE } from '../../domain/signature';
 import { useI18n } from '../../i18n/react';
 
 const SAFE_LINK = /^(https?:\/\/|mailto:)[^\s<>"']+$/i;
@@ -9,12 +10,18 @@ export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** img 仅保留位图 data:image 内嵌（签名 / 正文插图通道）；远程、相对与 svg src 仍剥除。 */
+const INLINE_IMAGE_SRC = /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i;
+
 /** Filter before insertion so pasted HTML cannot introduce app styles or remote resources. */
 function cleanHtml(html: string): string {
   const template = document.createElement('template');
   template.innerHTML = html;
-  template.content.querySelectorAll('script,style,iframe,object,embed,svg,math,form,input,button,meta,link,img,video,audio,source').forEach(node => node.remove());
-  const tags = new Set('p div span br hr b strong i em u s strike a h1 h2 h3 ul ol li blockquote pre code table thead tbody tfoot caption colgroup col tr td th font center small sub sup'.split(' '));
+  template.content.querySelectorAll('script,style,iframe,object,embed,svg,math,form,input,button,meta,link,video,audio,source').forEach(node => node.remove());
+  template.content.querySelectorAll('img').forEach(node => {
+    if (!INLINE_IMAGE_SRC.test(node.getAttribute('src') ?? '')) node.remove();
+  });
+  const tags = new Set('p div span br hr b strong i em u s strike a img h1 h2 h3 ul ol li blockquote pre code table thead tbody tfoot caption colgroup col tr td th font center small sub sup'.split(' '));
   for (const element of [...template.content.querySelectorAll('*')]) {
     if (!tags.has(element.tagName.toLowerCase())) { element.replaceWith(...element.childNodes); continue; }
     if (element instanceof HTMLElement) {
@@ -46,6 +53,9 @@ function cleanHtml(html: string): string {
     for (const attribute of [...element.attributes]) {
       const allowed = (element.tagName === 'A' && attribute.name === 'href' && SAFE_LINK.test(attribute.value)) ||
         (element.tagName === 'FONT' && ['color', 'face', 'size'].includes(attribute.name) && /^[\w\s#.,'-]+$/.test(attribute.value)) ||
+        (element.tagName === 'IMG' && attribute.name === 'src' && INLINE_IMAGE_SRC.test(attribute.value)) ||
+        (element.tagName === 'IMG' && attribute.name === 'alt' && /^[^"'<>]*$/.test(attribute.value)) ||
+        (element.tagName === 'IMG' && ['width', 'height'].includes(attribute.name) && /^\d+%?$/.test(attribute.value)) ||
         (element.tagName === 'BLOCKQUOTE' && attribute.name === 'data-auumail-quote' && attribute.value === 'true') ||
         (['TABLE', 'TD', 'TH', 'TR', 'COL'].includes(element.tagName) && ['width', 'height', 'cellpadding', 'cellspacing', 'border', 'bgcolor', 'align', 'valign'].includes(attribute.name) && /^[#a-z\d%.]+$/i.test(attribute.value)) ||
         (['TD', 'TH'].includes(element.tagName) && ['colspan', 'rowspan'].includes(attribute.name) && /^\d{1,2}$/.test(attribute.value));
@@ -65,8 +75,12 @@ function cleanHtml(html: string): string {
   return template.innerHTML;
 }
 
-export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disabled, formatting = true }: {
+export function RichEditor({ initialHtml, initialText, quoteHtml, signatureHtml, onPickImage, onChange, disabled, formatting = true }: {
   initialHtml: string; initialText: string; quoteHtml?: string | null;
+  /** 账号签名（Rust 消毒后的 HTML，含 data:image 内嵌图）：一次性插入正文末尾。 */
+  signatureHtml?: string | null;
+  /** 可选「插入图片」按钮（签名编辑器）：Rust 对话框选图后返回 data URI。 */
+  onPickImage?: (() => Promise<{ dataUri: string; name?: string } | null>) | null;
   onChange: (html: string, text: string) => void; disabled?: boolean; formatting?: boolean;
 }) {
   const t = useI18n();
@@ -80,6 +94,7 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
   const [linkText, setLinkText] = useState('');
   const [empty, setEmpty] = useState(!initialHtml && !initialText);
   const [pasteNotice, setPasteNotice] = useState('');
+  const [picking, setPicking] = useState(false);
   const changeRef = useRef(onChange);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
 
@@ -87,8 +102,9 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
     const el = editorRef.current;
     if (!el) return;
     const text = el.innerText.replace(/\n+$/, '');
-    setEmpty(text.trim() === '' && !el.querySelector('hr,table'));
-    changeRef.current(text.trim() || el.querySelector('hr,table') ? el.innerHTML : '', text);
+    // 仅图片（无文字）的正文也算非空，否则占位符叠加且 data URI 在保存时被丢弃。
+    setEmpty(text.trim() === '' && !el.querySelector('hr,table,img'));
+    changeRef.current(text.trim() || el.querySelector('hr,table,img') ? el.innerHTML : '', text);
   }, []);
   const syncStates = useCallback(() => {
     const el = editorRef.current;
@@ -122,6 +138,22 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
     el.innerHTML = initialHtml ? cleanHtml(initialHtml) : initialText ? `<p>${escapeHtml(initialText).replace(/\n/g, '<br>')}</p>` : '<p><br></p>';
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Parent keys editor by draft identity.
   }, []);
+  const signatureInjected = useRef(false);
+  useEffect(() => {
+    if (signatureInjected.current || !signatureHtml) return;
+    signatureInjected.current = true;
+    const el = editorRef.current;
+    if (!el) return;
+    // 签名是 Rust 消毒后的自家内容，不过 cleanHtml（其 img 剥除针对不可信粘贴）。
+    el.insertAdjacentHTML('beforeend', signatureHtml);
+    // Outlook 语义：光标置于签名之前，打字内容在签名上方。
+    const range = document.createRange();
+    range.setStart(el, 0);
+    range.collapse(true);
+    const current = window.getSelection();
+    current?.removeAllRanges(); current?.addRange(range);
+    emit();
+  }, [signatureHtml, emit]);
   const injected = useRef(false);
   useEffect(() => {
     if (injected.current || !quoteHtml) return;
@@ -157,6 +189,16 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
         {tool('justifyLeft', AlignLeft, t('editor.alignLeft'), true)}{tool('justifyCenter', AlignCenter, t('editor.alignCenter'), true)}{tool('justifyRight', AlignRight, t('editor.alignRight'), true)}{tool('justifyFull', AlignJustify, t('editor.alignJustify'), true)}
         <button type="button" title={t('editor.quote')} aria-label={t('editor.quote')} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => exec('formatBlock', 'blockquote')}><Quote size={16} /></button>
         <button type="button" title={t('editor.insertLink')} aria-label={t('editor.insertLink')} aria-expanded={linkOpen} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={() => { setLinkText(window.getSelection()?.toString() ?? ''); setLinkOpen(value => !value); }}><Link2 size={16} /></button>
+        {onPickImage && <button type="button" title={t('editor.insertImage')} aria-label={t('editor.insertImage')} disabled={disabled || picking} onMouseDown={event => event.preventDefault()} onClick={() => {
+          void (async () => {
+            setPicking(true);
+            try {
+              const picked = await onPickImage();
+              // 文件对话框会移走焦点，先恢复光标再插入。
+              if (picked) { restoreSelection(); exec('insertHTML', `<img src="${picked.dataUri}" alt="${escapeHtml(picked.name ?? '')}">`); }
+            } finally { setPicking(false); }
+          })();
+        }}><ImageIcon size={16} /></button>}
         {tool('insertHorizontalRule', Minus, t('editor.insertHr'))}{tool('removeFormat', RemoveFormatting, t('editor.clearFormat'))}
         <span className="toolbar-divider" />{tool('undo', Undo2, t('editor.undo'))}{tool('redo', Redo2, t('editor.redo'))}
       </div>
@@ -173,7 +215,35 @@ export function RichEditor({ initialHtml, initialText, quoteHtml, onChange, disa
           event.preventDefault();
           const html = event.clipboardData.getData('text/html');
           const text = event.clipboardData.getData('text/plain');
-          if ([...event.clipboardData.items].some(item => item.kind === 'file') || /<img\b/i.test(html)) setPasteNotice(t('editor.pasteImageBlocked'));
+          // 剪贴板位图图片（截图 / 复制图片）→ data URI 内联插入；发送时由 outbox 转 cid
+          // 内联件。svg 与超限图片明确提示，不静默丢弃。
+          const images = [...event.clipboardData.items]
+            .filter(item => item.kind === 'file' && /^image\/(png|jpeg|gif|webp|bmp)$/i.test(item.type))
+            .map(item => item.getAsFile())
+            .filter((file): file is File => file !== null);
+          if (images.length) {
+            let deferred = 0;
+            for (const file of images) {
+              if (file.size > MAX_INLINE_IMAGE) { deferred += 1; continue; }
+              const reader = new FileReader();
+              reader.onload = () => {
+                if (typeof reader.result !== 'string') return;
+                restoreSelection();
+                exec('insertHTML', `<img src="${reader.result}" alt="">`);
+              };
+              reader.readAsDataURL(file);
+            }
+            if (deferred) setPasteNotice(t('editor.pasteImageTooLarge', { count: deferred }));
+            return;
+          }
+          // HTML 粘贴里的远程 / svg 图片仍剥除并提示；位图 data:image 保留（cleanHtml）。
+          let foreignImage = false;
+          if (/<img\b/i.test(html)) {
+            const probe = document.createElement('template');
+            probe.innerHTML = html;
+            foreignImage = [...probe.content.querySelectorAll('img')].some(img => !INLINE_IMAGE_SRC.test(img.getAttribute('src') ?? ''));
+          }
+          if ([...event.clipboardData.items].some(item => item.kind === 'file') || foreignImage) setPasteNotice(t('editor.pasteImageBlocked'));
           if (html) exec('insertHTML', cleanHtml(html));
           else if (text) exec('insertHTML', escapeHtml(text).replace(/\r?\n/g, '<br>'));
         }} />

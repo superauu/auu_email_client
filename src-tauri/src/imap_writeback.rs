@@ -200,31 +200,38 @@ fn state(
     message_changes::transition(&mut conn, intent, status, error, target)
 }
 /// At most 200 intents per manually requested sync. Changes made during replay remain durable.
+/// 处理待回写意图。返回 (warnings, 确认数)：确认数 = 本轮发生 DB 状态写入的意图数
+/// （state() 冲突/失败/unknown 写入与成功 ack 都算），供 outcome.refresh_needed
+/// 判断"0 拉取轮次是否仍有界面可见变更"（静默同步语义，见 SYNCHRONIZATION.md）。
 pub fn flush<S: Read + Write>(
     db: &SharedDb,
     account: &str,
     session: &mut imap::Session<S>,
     archive: Option<&str>,
     trace: Option<&Trace>,
-) -> Result<Vec<String>, AppError> {
+) -> Result<(Vec<String>, usize), AppError> {
     let intents = {
         let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
         message_changes::pending(&conn, account)?
     };
     if intents.is_empty() {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     }
     let can_move = session
         .capabilities()
         .map_err(|error| crate::imap_limits::network(error, "无法读取 IMAP 回写能力"))?
         .has_str("MOVE");
     let mut warnings = vec![];
+    // 未产生任何 DB 写入的跳过分支（恢复保护暂停、并发更新抢输、applying 转移失败）。
+    let mut untouched = 0usize;
+    let total = intents.len();
     for intent in intents {
         {
             let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
             if !message_changes::current(&conn, &intent)? {
                 let paused:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM message_recovery WHERE message_id=?1 AND state NOT IN ('restored','local'))",[&intent.message_id],|r|r.get(0)).map_err(|_|AppError::storage("无法检查恢复请求"))?;
                 if paused {
+                    untouched += 1;
                     continue;
                 }
                 drop(conn);
@@ -330,6 +337,7 @@ pub fn flush<S: Read + Write>(
         {
             let mut conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
             if !message_changes::current(&conn, &intent)? {
+                untouched += 1;
                 continue;
             }
             // archive 在 applying 时记录解析出的归档目录；delete / move 的目标已在入队时落库。
@@ -340,6 +348,7 @@ pub fn flush<S: Read + Write>(
             };
             if !message_changes::transition(&mut conn, &intent, "applying", None, applying_target)?
             {
+                untouched += 1;
                 continue;
             }
         }
@@ -543,7 +552,7 @@ pub fn flush<S: Read + Write>(
             unreachable!("intent fields are flags or the move family")
         }
     }
-    Ok(warnings)
+    Ok((warnings, total - untouched))
 }
 
 fn acknowledge_move(
@@ -802,13 +811,71 @@ pub(crate) mod tests {
             ],
             None,
         );
-        assert!(flush(&db, "acc", &mut s, Some("Archive"), Some(&t))
-            .unwrap()
-            .is_empty());
+        let (warnings, changed) = flush(&db, "acc", &mut s, Some("Archive"), Some(&t)).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(changed, 1, "一个成功 ack 的意图计为一次变更");
         assert!(statuses(&db).is_empty());
         let commands = log.lock().unwrap().join("");
         assert!(!commands.contains("EXPUNGE"));
         assert!(!commands.contains("FLAGS.SILENT (\\Answered"));
+    }
+    #[test]
+    fn flush_counts_only_intents_that_wrote_state() {
+        let db = db();
+        // 空意图：0 变更（静默同步的快路径）。
+        let (mut s, t, _) = session(vec![capability()], None);
+        let (warnings, changed) = flush(&db, "acc", &mut s, Some("Archive"), Some(&t)).unwrap();
+        assert!(warnings.is_empty() && changed == 0);
+        // 两个意图：星标成功 ack（计 1）+ 恢复保护暂停（不计）。
+        edit(
+            &db,
+            message_changes::Patch {
+                starred: Some(true),
+                ..Default::default()
+            },
+        );
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO message_recovery (message_id,account_id,generation,revision,action,state,detail,updated_at) \
+                 VALUES ('m','acc','gen',0,'check','checking','','2026-11-19T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        let (mut s, t, _) = session(vec![capability()], None);
+        let (_, changed) = flush(&db, "acc", &mut s, Some("Archive"), Some(&t)).unwrap();
+        assert_eq!(changed, 0, "恢复保护暂停的意图不写库也不计数");
+        message_changes::recover(&mut db.lock().unwrap()).unwrap();
+        db.lock()
+            .unwrap()
+            .execute("DELETE FROM message_recovery WHERE message_id='m'", [])
+            .unwrap();
+        edit(
+            &db,
+            message_changes::Patch {
+                unread: Some(true),
+                ..Default::default()
+            },
+        );
+        let (mut s, t, _) = session(
+            vec![
+                capability(),
+                select(),
+                fetch(""),
+                step(
+                    "UID STORE 1 +FLAGS.SILENT (\\Flagged)",
+                    "{tag} OK stored\r\n",
+                ),
+                fetch("\\Answered \\Flagged"),
+                select(),
+                fetch(""),
+                step("UID STORE 1 -FLAGS.SILENT (\\Seen)", "{tag} OK stored\r\n"),
+                fetch(""),
+            ],
+            None,
+        );
+        let (_, changed) = flush(&db, "acc", &mut s, Some("Archive"), Some(&t)).unwrap();
+        assert_eq!(changed, 2, "两个成功 ack 的意图各计一次变更");
     }
     #[test]
     fn unread_uses_seen_removal_and_missing_uid_never_sends_store() {
@@ -847,9 +914,8 @@ pub(crate) mod tests {
             ],
             None,
         );
-        assert!(!flush(&db, "acc", &mut s, None, Some(&t))
-            .unwrap()
-            .is_empty());
+        let (warnings, _) = flush(&db, "acc", &mut s, None, Some(&t)).unwrap();
+        assert!(!warnings.is_empty(), "冲突应有警告");
         assert_eq!(statuses(&db)[0].state, "conflict");
         assert!(!log
             .lock()

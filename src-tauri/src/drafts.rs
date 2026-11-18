@@ -14,6 +14,11 @@ const CONFLICT: &str = "草稿已在其他窗口修改，请保留当前内容�
 pub(crate) const MAX_ATTACH_COUNT: usize = 20;
 pub(crate) const MAX_ATTACH_TOTAL: usize = 16 * 1024 * 1024;
 
+/// body_html 上限（TS 侧对称镜像）。200k → 2M：签名 / 内联图片以 data:image/* URI
+/// 内嵌在正文 HTML 里（base64 约占 4/3 原始字节），发送时由 outbox 转 cid: 内联件；
+/// 量级与收信侧单 HTML 上限（mail_html::MAX_HTML，2 MiB）对齐。
+pub(crate) const MAX_BODY_HTML: usize = 2_000_000;
+
 /// 撰写附件元数据；字节内容存 draft_attachment_blobs，前端与暂存区仅持有本结构。
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -114,7 +119,7 @@ fn validate(draft: &Draft) -> Result<(), AppError> {
         || draft
             .body_html
             .as_ref()
-            .is_some_and(|html| html.encode_utf16().count() > 200_000)
+            .is_some_and(|html| html.encode_utf16().count() > MAX_BODY_HTML)
         || draft.revision > 1_000_000_000
         || draft
             .reply_to_id

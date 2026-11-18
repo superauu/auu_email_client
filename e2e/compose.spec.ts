@@ -81,7 +81,8 @@ test('paste keeps safe formatting while dropping remote images and app-level sty
   });
   await expect(editor.locator('b,strong')).toHaveText('粘贴的内容');
   await expect(editor.locator('img, style, [class], [onclick], [href]')).toHaveCount(0);
-  await expect(page.getByRole('status').filter({ hasText: '图片未插入' })).toBeVisible();
+  // 远程图片不进正文（位图 data:image 除外——那是 Ctrl+V 粘贴图片通道）。
+  await expect(page.getByRole('status').filter({ hasText: '未插入' })).toBeVisible();
 });
 
 for (const skin of ['paper', 'graphite', 'linen']) for (const mode of ['light', 'dark']) {

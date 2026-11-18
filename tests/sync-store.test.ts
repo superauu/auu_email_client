@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSyncStore } from '../src/stores/syncStore';
+import { syncJobSummary } from '../src/domain/sync';
+import { consumeManualSync } from '../src/stores/syncStore';
 import type { SyncJob, SyncQueueSnapshot } from '../src/domain/sync';
 import type { OutboxEntry } from '../src/domain/outbox';
 
@@ -137,28 +139,49 @@ test('stopping a running sync refreshes committed batches while cancelling a que
   await store.getState().refresh();assert.equal(refreshes(),1);
 });
 
-test('a running sync surfaces committed batches progressively without waiting for the terminal state', async () => {
+test('a running sync never rebuilds the workspace; the honest terminal outcome decides', async () => {
   const { transport, setSnapshot, refreshes } = setup();
-  const store = createSyncStore(transport, 5, 5000, 0); // runningRefreshMs=0：每个运行中快照都允许刷新
+  const store = createSyncStore(transport, 5, 5000);
   setSnapshot({ revision: 1, jobs: [job('a', 'running')] });
   await store.getState().refresh();
-  assert.equal(refreshes(), 1, '运行中快照即触发工作区刷新');
-  setSnapshot({ revision: 2, jobs: [job('a', 'running')] });
+  assert.equal(refreshes(), 0, '运行中快照不再触发刷新（静默同步）');
+  setSnapshot({ revision: 2, jobs: [{ ...job('b', 'succeeded'), outcome: { folders: 25, fetchedMessages: 2, syncedAt: '2026-11-19T00:00:00Z', warnings: [] } }] });
   await store.getState().refresh();
-  assert.equal(refreshes(), 2, '无终态也继续刷新');
-  setSnapshot({ revision: 3, jobs: [job('a', 'succeeded')] });
-  await store.getState().refresh();
-  assert.equal(refreshes(), 3, '终态后仍立即刷新');
+  assert.equal(refreshes(), 1, '有拉取的终态立即刷新');
 });
 
-test('running-batch refreshes are throttled to the configured interval', async () => {
+test('empty sync rounds stay silent while real changes still refresh', async () => {
   const { transport, setSnapshot, refreshes } = setup();
-  const store = createSyncStore(transport, 5, 5000, 2000);
-  setSnapshot({ revision: 1, jobs: [job('a', 'running')] });
-  await store.getState().refresh(); // 首个运行中快照（lastWorkspaceRefresh 尚为 0）触发一次刷新
-  setSnapshot({ revision: 2, jobs: [job('a', 'running')] });
-  await store.getState().refresh(); // 距上次刷新不足 2000ms：不刷新
-  setSnapshot({ revision: 3, jobs: [job('a', 'running')] });
+  const store = createSyncStore(transport, 5, 5000);
+  const outcome = (overrides: Partial<import('../src/domain/sync').SyncOutcome> = {}) => ({ folders: 25, fetchedMessages: 0, syncedAt: '2026-11-19T00:00:00Z', warnings: [], refreshNeeded: false, ...overrides });
+  // 同一账号每轮新任务 id（真实队列语义：job id 是每轮新 uuid，accountId 不变）。
+  setSnapshot({ revision: 1, jobs: [{ ...job('r1', 'succeeded', 'acc'), outcome: outcome() }] });
   await store.getState().refresh();
-  assert.equal(refreshes(), 1, '节流间隔内不再重复刷新');
+  assert.equal(refreshes(), 0, '空轮次（无拉取 / 无回写 / 目录未变）不重建工作区');
+  setSnapshot({ revision: 2, jobs: [{ ...job('r2', 'succeeded', 'acc'), outcome: outcome({ fetchedMessages: 1, refreshNeeded: true }) }] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 1, '新邮件到达立即刷新（后端 refreshNeeded 编码 fetched>0）');
+  setSnapshot({ revision: 3, jobs: [{ ...job('r3', 'succeeded', 'acc'), outcome: outcome({ refreshNeeded: true }) }] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 2, '回写确认（EXPUNGE / MOVE ack）即使 0 拉取也刷新');
+  setSnapshot({ revision: 4, jobs: [{ ...job('r4', 'succeeded', 'acc'), outcome: outcome({ folders: 26 }) }] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 3, '远端目录结构变化即使 0 拉取也刷新');
+  setSnapshot({ revision: 5, jobs: [{ ...job('r5', 'succeeded', 'acc'), outcome: outcome({ folders: 26 }) }] });
+  await store.getState().refresh();
+  assert.equal(refreshes(), 3, '目录数稳定后恢复静默（26→25 也算结构变化）');
+});
+
+test('running listening jobs report listening instead of syncing', () => {
+  const base = { id: 'a', accountId: 'a', queuedAt: '2026-11-19T00:00:00Z', startedAt: '2026-11-19T00:00:01Z', finishedAt: null, outcome: null, error: null };
+  assert.equal(syncJobSummary({ ...base, status: 'running', listening: true } as SyncJob), '已连接 · 实时监听中…');
+  assert.equal(syncJobSummary({ ...base, status: 'running' } as SyncJob), '同步中…');
+});
+
+test('manual enqueues are remembered for completion toasts and consumed once', async () => {
+  const { store } = setup();
+  await store.getState().enqueue(['manual-a']);
+  assert.equal(consumeManualSync('manual-a'), true, '手动发起的账号应被标记');
+  assert.equal(consumeManualSync('manual-a'), false, '标记消费一次即清除');
+  assert.equal(consumeManualSync('manual-b'), false, '未手动发起的账号不标记');
 });

@@ -73,7 +73,20 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .activity-rail button:hover { background: var(--surface-hover); }
 .activity-rail button.is-active { background: var(--surface); color: var(--accent); box-shadow: 0 2px 5px color-mix(in srgb, var(--text) 4%, transparent); }
 .rail-spacer { flex: 1; }
-.profile-avatar { display: grid; place-items: center; width: 30px; height: 30px; background: var(--surface); border: 1px solid var(--border); color: var(--accent); border-radius: 50%; font-size: 12px; font-weight: 600; }
+.profile-avatar { display: grid; place-items: center; width: 30px; height: 30px; background: var(--surface); border: 1px solid var(--border); color: var(--accent); border-radius: 50%; font-size: 12px; font-weight: 600; cursor: pointer; }
+.profile-avatar:hover { background: var(--surface-hover); }
+.activity-rail button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 左下角头像功能菜单（Radix DropdownMenu，portal 渲染；视觉沿用 surface/border token）。 */
+.avatar-menu { z-index: 60; min-width: 210px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); padding: 4px; display: flex; flex-direction: column; }
+.avatar-menu-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: var(--text); cursor: pointer; outline: none; user-select: none; }
+.avatar-menu-item[data-highlighted] { background: var(--surface-hover); }
+.avatar-menu-item[data-disabled] { color: var(--text-subtle); opacity: 0.6; cursor: default; }
+.avatar-menu-label { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px 7px; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-menu-label small { font-size: 10px; color: var(--text-subtle); }
+.avatar-menu-separator { height: 1px; margin: 4px 6px; background: var(--border); }
+/* 拦截横幅的主按钮 + 信任下拉（分裂式）：主按钮仅本封放行，信任项走菜单。 */
+.remote-actions { display: inline-flex; align-items: center; gap: 2px; }
+.remote-actions button { flex-shrink: 0; }
 .sidebar { width: var(--sidebar-width, 222px); flex-shrink: 0; display: flex; flex-direction: column; background: var(--canvas); border-right: 1px solid var(--border); padding: 25px 16px 0; }
 .workspace-name { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-weight: 600; margin-bottom: 22px; }
 .workspace-name .label { font-size: 8px; letter-spacing: .7px; padding: 2px 5px; }
@@ -131,7 +144,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .list-toolbar, .reader-toolbar { height: 44px; min-height: 44px; flex-shrink: 0; }
 .list-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--border); }
 .list-filters { display: flex; align-self: stretch; gap: 16px; }
-.list-filters button { color: var(--text-muted); border-bottom: 2px solid transparent; font-size: 12px; padding: 0 1px; }
+/* 筛选按钮永不换行（窄窗下 CJK 文字会被挤成竖排），挤压由 min-width:0 的 list-actions 一侧吸收。 */
+.list-filters button { color: var(--text-muted); border-bottom: 2px solid transparent; font-size: 12px; padding: 0 1px; white-space: nowrap; flex-shrink: 0; }
 .list-filters button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .list-order { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-subtle); white-space: nowrap; }
 .list-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -152,8 +166,9 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .row-account { position: absolute; top: 28px; right: 14px; max-width: 58px; color: var(--tone); font-size: 9px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .row-star { position: absolute; right: 10px; bottom: 5px; padding: 4px; color: var(--text-subtle); }
 .row-star.is-starred { color: var(--warning); }
-/* 多选：行首选择框默认收起，悬停或选中态展开；整行选中高亮沿用 surface-selected。 */
-.row-select { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; border: 1px solid var(--border); color: transparent; background: var(--surface); opacity: 0; }
+/* 多选：行首选择框默认收起，悬停或选中态展开；16px 框完全落在行首 20px 预留槽内，
+   不遮盖发件人 / 主题文字（此前 20px 框跨到 26px，压住内容）。 */
+.row-select { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border); color: transparent; background: var(--surface); opacity: 0; }
 .mail-row:hover .row-select, .row-select:focus-visible, .row-select.is-on { opacity: 1; }
 .row-select.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
 .mail-row.is-checked { background: var(--surface-selected); }

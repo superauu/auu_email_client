@@ -1,7 +1,7 @@
 //! Short IDLE slices reuse secure sessions while the same two FIFO workers stay fair.
 use super::*;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -21,7 +21,28 @@ static POOL: OnceLock<Mutex<HashMap<String, Pooled>>> = OnceLock::new();
 fn pool() -> &'static Mutex<HashMap<String, Pooled>> {
     POOL.get_or_init(Default::default)
 }
+/// 账号当前处于 IDLE 监听周期（5 秒片段 → 1 秒续跑 → 再次监听）：队列快照据此把这类
+/// 运行标记为 listening，前端不再把实时监听当"同步中"转圈（静默同步语义）。标记在
+/// 进入监听片段时置位并跨轮保持（含轮间 1 秒间隙），真实同步轮（全量 / 本地工作）清除。
+static IDLING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+fn idling() -> &'static Mutex<HashSet<String>> {
+    IDLING.get_or_init(Default::default)
+}
+pub(crate) fn is_idling(id: &str) -> bool {
+    idling().lock().map(|set| set.contains(id)).unwrap_or(false)
+}
+pub(crate) fn mark_idling(id: &str) {
+    if let Ok(mut set) = idling().lock() {
+        set.insert(id.to_string());
+    }
+}
+pub(crate) fn unmark_idling(id: &str) {
+    if let Ok(mut set) = idling().lock() {
+        set.remove(id);
+    }
+}
 pub(super) fn forget(id: &str) {
+    unmark_idling(id);
     let removed = pool().lock().ok().and_then(|mut p| p.remove(id));
     drop(removed);
 }
@@ -97,6 +118,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
         || live.last_full.elapsed()
             >= Duration::from_secs(u64::from(plan.settings.auto_sync_seconds.max(60)));
     let mut outcome = if full {
+        unmark_idling(&plan.account_id);
         let outcome = sync_session(
             db,
             &plan,
@@ -108,6 +130,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
         live.last_full = Instant::now();
         outcome
     } else if local_work(db, &plan)? {
+        unmark_idling(&plan.account_id);
         sync_session_mode(
             db,
             &plan,
@@ -117,6 +140,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
             false,
         )?
     } else {
+        // 空轮次：保留监听标记（跨轮含 1 秒间隙，前端不转圈）。
         SyncOutcome {
             synced_at: crate::now_utc(),
             ..Default::default()
@@ -131,6 +155,7 @@ pub(super) fn run(db: &SharedDb, mut plan: SyncPlan) -> Result<SyncOutcome, AppE
         live.session
             .examine("INBOX")
             .map_err(|e| crate::imap_limits::network(e, "无法准备收件箱通知"))?;
+        mark_idling(&plan.account_id);
         let idle = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             idle_slice(&mut live.session)
         }));

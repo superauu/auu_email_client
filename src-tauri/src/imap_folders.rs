@@ -87,7 +87,7 @@ pub(crate) fn decode_mutf7(encoded: &str) -> Option<String> {
             }
             let mut values = [0u32; 4];
             for (slot, byte) in values.iter_mut().zip(group) {
-                *slot = B64.find(|c: char| c == *byte as char)? as u32;
+                *slot = B64.find(*byte as char)? as u32;
             }
             let keep = match group.len() {
                 4 => 3,

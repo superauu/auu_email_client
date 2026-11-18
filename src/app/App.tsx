@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { CalendarDays, CircleHelp, Mail, Minus, Palette, PanelRight, RefreshCw, Search, Settings, Square, X } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { CalendarDays, CircleHelp, Mail, Minus, Palette, PanelRight, RefreshCw, Search, Settings, Square, X, PenSquare } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { Sidebar } from '../components/layout/Sidebar';
 import { Button } from '../components/ui/Button';
@@ -12,13 +13,13 @@ import { SettingsDialog } from '../features/settings/SettingsDialog';
 import { AiPanel } from '../features/ai/AiPanel';
 import { EventsView } from '../features/events/EventsView';
 import { useWorkspaceStore } from '../stores/workspaceStore';
-import { useSyncStore } from '../stores/syncStore';
+import { useSyncStore, consumeManualSync } from '../stores/syncStore';
 import { syncableAccounts, syncJobSummary, isSyncActive, type SyncJob } from '../domain/sync';
 import { useLayoutStore, MIN_LIST_WIDTH, MAX_LIST_WIDTH, MIN_READER_WIDTH, DEFAULT_LIST_WIDTH, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, DEFAULT_SIDEBAR_WIDTH } from '../stores/layoutStore';
 import { desktop, isDesktop } from '../platform/desktop';
 import { errorMessage } from '../domain/errors';
 import { replyTargets, type MailDraft, type MailMessage } from '../domain/mail';
-import { useI18n, currentLanguage } from '../i18n/react';
+import { useI18n } from '../i18n/react';
 
 export function App() {
   const t = useI18n();
@@ -51,12 +52,11 @@ export function App() {
     setMobileReading(true); // 窄屏下撰写面替代阅读面时保持可见
     if (editing && message?.draft) { setDraft({ ...message.draft }); return; }
     if (message && mode === 'forward') {
-      // 转发草稿：引用原文头与正文（超长截断，上限低于草稿 50k 校验）；仍关联原邮件便于回溯。
+      // 转发草稿：主题加前缀并关联原邮件；引用正文由 ComposePane 的 HTML 引用注入（与回复
+      // 同一路径，保留排版；无原文缓存时回退纯文本引用）。不预塞纯文本正文——replyToId
+      // 存在时会叠加 HTML 引用，预塞会产生双重引用。
       const subject = /^(fwd|转发)\s*[:：]/i.test(message.subject) ? message.subject : t('app.forwardSubjectPrefix', { subject: message.subject });
-      const header = [t('app.forwardHeader'), t('app.forwardFrom', { value: `${message.from.name} <${message.from.email}>` }), t('app.forwardDate', { value: new Intl.DateTimeFormat(currentLanguage(), { dateStyle: 'long', timeStyle: 'short' }).format(new Date(message.receivedAt)) }), t('app.forwardSubjectLine', { value: message.subject }), '', ''].join('\n');
-      const quoted = message.bodyText.slice(0, 40000);
-      const bodyText = `${header}${quoted}${message.bodyText.length > quoted.length ? `\n\n${t('app.forwardTruncated')}` : ''}`;
-      setDraft({ id: `draft-${crypto.randomUUID()}`, accountId, to: '', subject, bodyText, replyToId: message.id, updatedAt: new Date().toISOString() });
+      setDraft({ id: `draft-${crypto.randomUUID()}`, accountId, to: '', subject, bodyText: '', replyToId: message.id, updatedAt: new Date().toISOString() });
       return;
     }
     // 回复目标：普通回复优先 Reply-To；回复全部合并发件人 + To + Cc，剔除本账号地址。
@@ -76,11 +76,20 @@ export function App() {
   const { jobs, submitting, syncError, enqueue: enqueueSync } = useSyncStore(useShallow(s => ({ jobs: s.jobs, submitting: s.submitting, syncError: s.error, enqueue: s.enqueue })));
   const syncableIds = syncableAccounts(accounts).map(account => account.id);
   const anySyncing = syncableIds.some(id => submitting.includes(id) || jobs.some(job => job.accountId === id && isSyncActive(job)));
+  // 转圈只表示"正在主动同步"；IDLE 实时监听是常驻后台状态，不转圈（静默同步语义）。
+  const anyRealSyncing = syncableIds.some(id => submitting.includes(id) || jobs.some(job => job.accountId === id && isSyncActive(job) && !job.listening));
   const previousJobs = useRef<SyncJob[]>([]);
   useEffect(() => {
     for (const job of jobs) {
       const before = previousJobs.current.find(previous => previous.id === job.id);
-      if (before && isSyncActive(before) && !isSyncActive(job) && job.startedAt) setNotice(syncJobSummary(job));
+      if (before && isSyncActive(before) && !isSyncActive(job) && job.startedAt) {
+        // 静默同步：IDLE 监听续跑与自动空轮次（0 拉取、无警告）不弹完成提示；
+        // 新邮件、回写确认警告、失败重试与用户手动发起的同步才提示。
+        const outcome = job.outcome;
+        const quiet = !consumeManualSync(job.accountId) && outcome !== null
+          && outcome.fetchedMessages === 0 && !outcome.retryNeeded && !outcome.warnings.length;
+        if (!quiet) setNotice(syncJobSummary(job));
+      }
     }
     previousJobs.current = jobs;
   }, [jobs]);
@@ -112,13 +121,39 @@ export function App() {
   }, [notice]);
 
   function windowAction(action: 'minimize' | 'maximize' | 'close' | 'drag') { void desktop.windowAction(action).catch(e => setNotice(errorMessage(e))); }
+  // 左下角头像功能菜单：应用级功能集中入口（写邮件 / 搜索 / 同步 / 视图 / 设置）。
+  const primaryAccount = accounts.find(a => a.status !== 'demo');
+  const avatarMenu = (label: string, Icon: typeof Mail, action: () => void, disabled = false) => (
+    <DropdownMenu.Item className="avatar-menu-item" disabled={disabled} onSelect={() => { action(); }}>
+      <Icon size={15} /><span>{label}</span>
+    </DropdownMenu.Item>
+  );
   return <div className={`app-shell ${mobileReading ? 'mobile-reading' : ''}`} style={{ '--mail-list-width': `${displayedListWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <header className="app-header" onMouseDown={event => {
       if (!isDesktop() || event.buttons !== 1 || !(event.target instanceof Element) || event.target.closest('button, input, label, select, textarea, a, [role="button"]')) return;
       event.preventDefault();
       windowAction(event.detail === 2 ? 'maximize' : 'drag');
-    }}><div className="brand"><img src="/logo.png" alt="" draggable={false} /><strong>AuuMail</strong><span className="brand-divider" /><span className="brand-subtitle">{t('app.brandTagline')}</span></div><label className="global-search"><Search size={16} /><input ref={search} aria-label={t('app.searchAria')} type="search" placeholder={t('app.searchPlaceholder')} value={query.search} onChange={event => { setMobileReading(false); setQuery({ search: event.target.value }); }} /><kbd>Ctrl K</kbd></label><div className="header-actions"><span className="demo-badge">{isDesktop() ? t('app.badgeLocal') : t('app.badgeDemo')}</span><Button variant="ghost" iconOnly aria-label={t('app.appearanceAria')} title={t('app.appearanceAria')} onClick={() => setSettingsTab('appearance')}><Palette size={18} /></Button><Button variant="ghost" iconOnly aria-label={t('app.syncAllAria')} title={t('app.syncAllTitle')} disabled={!isDesktop() || !syncableIds.length || anySyncing} onClick={syncAll}><RefreshCw size={17} className={anySyncing ? 'spin' : ''} /></Button><Button variant="ghost" iconOnly aria-label={t('app.settingsAria')} title={t('app.settingsAria')} onClick={() => setSettingsTab('accounts')}><Settings size={18} /></Button>{isDesktop() && <div className="window-controls"><button aria-label={t('app.minimize')} onClick={() => windowAction('minimize')}><Minus size={15} /></button><button aria-label={t('app.maximizeRestore')} onClick={() => windowAction('maximize')}><Square size={12} /></button><button className="window-close" aria-label={t('app.closeWindow')} onClick={() => windowAction('close')}><X size={17} /></button></div>}</div></header>
-    <div className="app-workspace"><nav className="activity-rail" aria-label={t('app.mainNavAria')}><button className={view === 'mail' ? 'is-active' : ''} aria-label={t('app.navMailAria')} aria-current={view === 'mail' ? 'page' : undefined} onClick={() => setView('mail')}><Mail size={21} /></button><button className={view === 'events' ? 'is-active' : ''} aria-label={t('app.navEventsAria')} aria-current={view === 'events' ? 'page' : undefined} onClick={() => setView('events')}><CalendarDays size={21} /></button><div className="rail-spacer" /><button aria-label={t('app.navAboutAria')} onClick={() => setSettingsTab('about')}><CircleHelp size={20} /></button><span className="profile-avatar">A</span></nav>
+    }}><div className="brand"><img src="/logo.png" alt="" draggable={false} /><strong>AuuMail</strong><span className="brand-divider" /><span className="brand-subtitle">{t('app.brandTagline')}</span></div><label className="global-search"><Search size={16} /><input ref={search} aria-label={t('app.searchAria')} type="search" placeholder={t('app.searchPlaceholder')} value={query.search} onChange={event => { setMobileReading(false); setQuery({ search: event.target.value }); }} /><kbd>Ctrl K</kbd></label><div className="header-actions"><span className="demo-badge">{isDesktop() ? t('app.badgeLocal') : t('app.badgeDemo')}</span><Button variant="ghost" iconOnly aria-label={t('app.appearanceAria')} title={t('app.appearanceAria')} onClick={() => setSettingsTab('appearance')}><Palette size={18} /></Button><Button variant="ghost" iconOnly aria-label={t('app.syncAllAria')} title={t('app.syncAllTitle')} disabled={!isDesktop() || !syncableIds.length || anySyncing} onClick={syncAll}><RefreshCw size={17} className={anyRealSyncing ? 'spin' : ''} /></Button><Button variant="ghost" iconOnly aria-label={t('app.settingsAria')} title={t('app.settingsAria')} onClick={() => setSettingsTab('accounts')}><Settings size={18} /></Button>{isDesktop() && <div className="window-controls"><button aria-label={t('app.minimize')} onClick={() => windowAction('minimize')}><Minus size={15} /></button><button aria-label={t('app.maximizeRestore')} onClick={() => windowAction('maximize')}><Square size={12} /></button><button className="window-close" aria-label={t('app.closeWindow')} onClick={() => windowAction('close')}><X size={17} /></button></div>}</div></header>
+    <div className="app-workspace"><nav className="activity-rail" aria-label={t('app.mainNavAria')}><button className={view === 'mail' ? 'is-active' : ''} aria-label={t('app.navMailAria')} aria-current={view === 'mail' ? 'page' : undefined} onClick={() => setView('mail')}><Mail size={21} /></button><button className={view === 'events' ? 'is-active' : ''} aria-label={t('app.navEventsAria')} aria-current={view === 'events' ? 'page' : undefined} onClick={() => setView('events')}><CalendarDays size={21} /></button><div className="rail-spacer" /><button aria-label={t('app.navAboutAria')} onClick={() => setSettingsTab('about')}><CircleHelp size={20} /></button>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild><button className="profile-avatar" aria-label={t('app.menuAria')} title={t('app.menuAria')}>A</button></DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content side="right" align="end" sideOffset={10} className="avatar-menu">
+            <DropdownMenu.Label className="avatar-menu-label">{primaryAccount ? primaryAccount.email : t('app.statusLocal')}<small>{t('app.statusAccounts', { count: accounts.length })}</small></DropdownMenu.Label>
+            <DropdownMenu.Separator className="avatar-menu-separator" />
+            {avatarMenu(t('app.menuCompose'), PenSquare, () => compose(), Boolean(draft))}
+            {avatarMenu(t('app.menuSearch'), Search, () => search.current?.focus(), Boolean(draft) || Boolean(settingsTab))}
+            <DropdownMenu.Separator className="avatar-menu-separator" />
+            {avatarMenu(t('app.menuSyncAll'), RefreshCw, syncAll, !isDesktop() || !syncableIds.length || anySyncing)}
+            {avatarMenu(t('app.menuEvents'), CalendarDays, () => setView('events'))}
+            <DropdownMenu.Separator className="avatar-menu-separator" />
+            {avatarMenu(t('app.menuAppearance'), Palette, () => setSettingsTab('appearance'), Boolean(draft))}
+            {avatarMenu(t('app.menuSettings'), Settings, () => setSettingsTab('accounts'), Boolean(draft))}
+            {avatarMenu(t('app.menuAbout'), CircleHelp, () => setSettingsTab('about'), Boolean(draft))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </nav>
       <Sidebar onCompose={() => compose()} onAccounts={() => setSettingsTab('accounts')} onNavigate={() => setMobileReading(false)} />
       <ResizeHandle variant="sidebar" label={t('app.sidebarResizeLabel')} value={sidebarWidth} min={MIN_SIDEBAR_WIDTH} max={MAX_SIDEBAR_WIDTH} onResize={setSidebarWidth} onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} />
       {status === 'error' ? <EmptyState title={t('app.workspaceErrorTitle')} description={error ?? t('app.workspaceErrorFallback')} action={<Button onClick={() => void load()}>{t('app.reload')}</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">{t('app.loading')}</div> : isDesktop() && !accounts.length ? <EmptyState title={t('app.firstAccountTitle')} description={t('app.firstAccountBody')} action={<Button variant="primary" onClick={() => setSettingsTab('accounts')}>{t('app.addMailbox')}</Button>} /> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label={t('app.listResizeLabel')} value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} />{draft ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} /> : <MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />}{aiOpen && <AiPanel onClose={() => setAiOpen(false)} />}</main>}

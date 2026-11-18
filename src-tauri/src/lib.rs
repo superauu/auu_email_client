@@ -21,6 +21,7 @@ mod mail_oauth;
 mod mail_recovery;
 mod mail_store;
 mod mail_sync;
+mod mail_trust;
 mod mail_verify;
 mod message_changes;
 #[cfg(test)]
@@ -28,6 +29,7 @@ mod message_changes;
 mod oauth_build_tests;
 mod outbox;
 mod pop3;
+mod signature;
 mod skins;
 mod smtp_send;
 mod storage;
@@ -743,7 +745,70 @@ fn mail_save_imap_settings(
         .map_err(|_| AppError::storage("数据库忙"))?;
     imap_settings::save(&conn, &account_id, &settings)
 }
+#[tauri::command]
+fn mail_account_signature(
+    db: State<'_, Db>,
+    account_id: String,
+) -> Result<signature::Signature, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    signature::read(&conn, &account_id)
+}
+#[tauri::command]
+fn mail_save_account_signature(
+    db: State<'_, Db>,
+    account_id: String,
+    signature: signature::Signature,
+) -> Result<(), AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    signature::save(&conn, &account_id, &signature)
+}
+/// 签名图片选取：Rust 侧文件对话框，返回 data URI（取消返回 null）。
+#[tauri::command]
+async fn mail_compose_pick_signature_image(
+    app: tauri::AppHandle,
+) -> Result<Option<signature::PickedImage>, AppError> {
+    signature::pick_image(app).await
+}
 
+#[tauri::command]
+fn mail_trusted_senders(db: State<'_, Db>) -> Result<Vec<mail_trust::TrustedEntry>, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    mail_trust::list(&conn)
+}
+#[tauri::command]
+fn mail_trust_add(
+    db: State<'_, Db>,
+    kind: String,
+    value: String,
+) -> Result<mail_trust::TrustedEntry, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    mail_trust::add(&conn, &kind, &value)
+}
+#[tauri::command]
+fn mail_trust_remove(db: State<'_, Db>, kind: String, value: String) -> Result<(), AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    mail_trust::remove(&conn, &kind, &value)
+}
 #[tauri::command]
 async fn credential_status(provider: String, account_id: String) -> Result<bool, AppError> {
     tauri::async_runtime::spawn_blocking(move || credentials::exists(&provider, &account_id))
@@ -836,6 +901,9 @@ pub fn run() {
             mail_oauth_cancel,
             mail_imap_settings,
             mail_save_imap_settings,
+            mail_account_signature,
+            mail_save_account_signature,
+            mail_compose_pick_signature_image,
             mail_request_recovery,
             mail_update_message,
             mail_purge_message,
@@ -856,6 +924,9 @@ pub fn run() {
             mail_delete_draft,
             mail_import_legacy_drafts,
             mail_compose_pick_attachments,
+            mail_trusted_senders,
+            mail_trust_add,
+            mail_trust_remove,
             mail_verify_account,
             mail_save_account,
             mail_delete_account,

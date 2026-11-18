@@ -18,6 +18,8 @@ export interface SyncJob {
   id: string;
   accountId: string;
   status: SyncJobStatus;
+  /** 运行中的任务处于 IDLE 实时监听阶段：界面不当作"同步中"转圈。 */
+  listening?: boolean;
   queuedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -32,7 +34,7 @@ export function syncableAccounts(accounts: { id: string; status: string; provide
 }
 export function syncJobSummary(job: SyncJob): string {
   if (job.status === 'queued') return t('settings.queued');
-  if (job.status === 'running') return job.cancelRequested ? t('syncSummary.stopping') : t('settings.syncing');
+  if (job.status === 'running') return job.cancelRequested ? t('syncSummary.stopping') : job.listening ? t('syncSummary.listeningRunning') : t('settings.syncing');
   if (job.status === 'cancelled') return job.startedAt ? t('syncSummary.stopped') : t('syncSummary.cancelledQueued');
   if (job.status === 'failed') return t('syncSummary.failed', { error: job.error?.message ?? t('outbox.retryHint') });
   const outcome = job.outcome;

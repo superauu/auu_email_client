@@ -37,8 +37,8 @@ export function validateDraft(raw: unknown): MailDraft {
     if (value[field] !== undefined && (typeof value[field] !== 'string' || value[field].length > 1000)) throw new Error(t('draftErr.ccBccInvalid'));
   }
   if (value.replyToId !== undefined && (typeof value.replyToId !== 'string' || value.replyToId.length === 0 || value.replyToId.length > 200)) throw new Error(t('draftErr.invalidReply'));
-  // HTML 正文可选；上限与 Rust 侧对称（200_000 UTF-16 单元）。
-  if (value.bodyHtml !== undefined && (typeof value.bodyHtml !== 'string' || value.bodyHtml.length > 200_000)) throw new Error(t('draftErr.bodyHtmlInvalid'));
+  // HTML 正文可选；上限与 Rust 侧对称（2_000_000 UTF-16 单元，容纳签名 / 内联图片的 base64）。
+  if (value.bodyHtml !== undefined && (typeof value.bodyHtml !== 'string' || value.bodyHtml.length > 2_000_000)) throw new Error(t('draftErr.bodyHtmlInvalid'));
   const attachments = validateAttachments(value.attachments);
   const revision = value.revision ?? 0;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision > 1_000_000_000) throw new Error(t('draftErr.invalidRevision'));
