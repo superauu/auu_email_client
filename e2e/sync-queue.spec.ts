@@ -150,6 +150,15 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           message.stateRevision = (message.stateRevision ?? 0) + 1;
           return structuredClone(message);
         }
+        // 永久删除：镜像 message_changes::purge —— IMAP 账号排队（消息保留在 trash 投影），
+        // 本测试桩统一返回 queued 行为（POP3 removed 分支由 Rust 单测覆盖）。
+        case 'mail_purge_message': {
+          const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
+          if (!message || message.mailbox !== 'trash') throw new Error('邮件不在废纸篓，无法永久删除');
+          message.changes = [...(message.changes ?? []).filter(change => change.field !== 'purge'), { field: 'purge', state: 'queued', error: null }];
+          message.stateRevision = (message.stateRevision ?? 0) + 1;
+          return { outcome: 'queued', message: structuredClone(message) };
+        }
         case 'mail_keep_message_local': {
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId)!;
           message.changes = message.changes?.map(change => ({ ...change, state: 'local', error: null }));
@@ -241,6 +250,7 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       holdDraftSave() { saveGate = new Promise<void>(resolve => { releaseSave = resolve; }); },
       releaseDraftSave() { saveGate = null; releaseSave(); },
       drafts: () => [...drafts.values()],
+      messages: () => structuredClone(workspace.messages),
       failNextPick() { pickFailure = true; },
       windowCalls: () => [...windowCalls],
       openCalls: () => [...openCalls],
@@ -929,6 +939,30 @@ test('same-subject conversations fold into one row with a count, expand on click
   await expect(list.getByRole('button', { name: '阅读邮件：季度评审报告', exact: true })).toBeVisible();
   await expect(list.locator('.thread-toggle')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('subject-conversations.png') });
+});
+
+test('trash view offers permanent delete which queues expunge after confirm', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  // 删除两封到废纸篓。
+  const rows = list.locator('.mail-row');
+  await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
+  await rows.nth(1).getByRole('button', { name: /选择邮件/ }).click();
+  await list.getByRole('button', { name: '删除', exact: true }).click();
+  await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
+  await expect(list.getByRole('article')).toHaveCount(2);
+  // 批量栏出现「永久删除」；非废纸篓视图不显示（前面收件箱视图的批量栏没有该按钮）。
+  await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
+  await expect(list.getByRole('button', { name: '永久删除', exact: true })).toBeVisible();
+  // window.confirm 确认后执行：桩返回 queued，邮件保留在废纸篓（EXPUNGE 未确认前不消失）。
+  page.once('dialog', dialog => dialog.accept());
+  await list.getByRole('button', { name: '永久删除', exact: true }).click();
+  await expect(page.getByText('已选 1 封')).toHaveCount(0);
+  const purgeStates = await page.evaluate(() => (window as unknown as { __syncTest: { messages: () => Array<{ changes: Array<{ field: string; state: string }> | null }> } }).__syncTest.messages().flatMap(message => message.changes ?? []).filter(change => change.field === 'purge'));
+  expect(purgeStates.length).toBeGreaterThan(0);
+  expect(purgeStates.every(change => change.state === 'queued')).toBe(true);
+  await page.screenshot({ path: info.outputPath('mail-purge-trash.png') });
 });
 
 test('large mailbox list renders only the virtual window and pages in as it scrolls', async ({ page }, info) => {

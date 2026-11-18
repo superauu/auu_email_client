@@ -52,6 +52,8 @@ interface WorkspaceState extends WorkspaceSnapshot {
   requestBody: (id: string) => Promise<boolean>;
   archiveMessage: (id: string) => void;
   deleteMessage: (id: string) => void;
+  /** 废纸篓永久删除（IMAP 排队 EXPUNGE / POP3 本机移除）；不可逆，unknown 不自动重试。 */
+  purgeMessage: (id: string) => Promise<boolean>;
   moveMessage: (id: string, folderId: string) => void;
   /** 批量操作入口：与单封修改共用串行 / 冲突语义。 */
   applyMessagePatch: (id: string, patch: MessagePatch) => Promise<void>;
@@ -328,6 +330,40 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async requestBody(id) { return await mutateMessage(id, () => ({}), false, undefined, true) === true; },
   deleteMessage(id) {
     mutateMessage(id, message => message.mailbox === 'trash' || message.draft ? null : { delete: true });
+  },
+  async purgeMessage(id) {
+    if (!gateway.purgeMessage) return false;
+    const message = get().messages.find(item => item.id === id);
+    if (!message || message.draft || message.mailbox !== 'trash') return false;
+    set({ error: null, savingIds: [...new Set([...get().savingIds, id])] });
+    try {
+      const result = await gateway.purgeMessage(message.accountId, id);
+      if (result.outcome === 'removed') {
+        // 本机已移除（POP3 / 演示不可达；演示 UI 隐藏入口）。
+        set(state => {
+          const messages = state.messages.filter(item => item.id !== id);
+          const visible = selectMessages(messages, state.query);
+          return {
+            messages,
+            savingIds: state.savingIds.filter(value => value !== id),
+            selectedId: state.selectedId === id ? visible[0]?.id ?? null : state.selectedId,
+          };
+        });
+        scheduleCountsRefresh();
+        return true;
+      }
+      // IMAP：purge 意图已排队，邮件保留在废纸篓投影直到服务器 EXPUNGE 确认。
+      messageEpochs.set(id, ++messageMutations);
+      set(state => ({
+        messages: state.messages.map(current => current.id === id && (result.message.stateRevision ?? 0) >= (current.stateRevision ?? 0) ? result.message : current),
+        savingIds: state.savingIds.filter(value => value !== id),
+      }));
+      scheduleCountsRefresh();
+      return true;
+    } catch (error) {
+      set(state => ({ error: errorMessage(error), savingIds: state.savingIds.filter(value => value !== id) }));
+      return false;
+    }
   },
   async applyMessagePatch(id, patch) { await mutateMessage(id, () => patch); },
   moveMessage(id, folderId) {

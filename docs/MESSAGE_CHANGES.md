@@ -1,6 +1,6 @@
 # 已读、星标、归档、删除与移动
 
-状态：2026-11-11，A3.3 邮件状态基础与 A3.4 主动恢复均已实现并用脚本会话验证；2026-11-17 追加删除到废纸篓与移动到文件夹（见「删除与移动」）。恢复细节见 REMOTE_RECOVERY。尚未用真实服务器验收删除 / 移动。浏览器演示只保存演示数据，不连接 IMAP。
+状态：2026-11-11，A3.3 邮件状态基础与 A3.4 主动恢复均已实现并用脚本会话验证；2026-11-17 追加删除到废纸篓与移动到文件夹（见「删除与移动」）；2026-11-18 追加废纸篓永久删除（见「永久删除 EXPUNGE」）。恢复细节见 REMOTE_RECOVERY。真实服务器验收：2026-11-18 自建 GreenMail 全栈验收通过（UID MOVE 与 UID EXPUNGE 均在真实 IMAP 会话核对，见 STATUS 验收节）；Gmail / QQ / 163 等公网怪癖差异建议另行复验。浏览器演示只保存演示数据，不连接 IMAP。
 
 ## 用户行为与保存边界
 
@@ -31,6 +31,15 @@
 | mail_keep_message_local | accountId、messageId | 停止这些修改的远端回写，返回本机投影 |
 
 patch 必须非空，archive 只接受 true，未知字段拒绝；核对账号所有权，不操作草稿。归档通过 intent 覆盖 UI 的 mailbox 与分页文件夹筛选，确认 MOVE 后才改变真实 folder membership；保留数据库多文件夹结构。
+
+## 永久删除 EXPUNGE（2026-11-18）
+
+- **意图字段**：`purge`（v18 迁移扩展 `message_changes.field` CHECK 并重建表，既有意图原样迁移）。不走 `update()` 的 Patch 通道——独立 `purge()` 函数返回 `PurgeOutcome`：IMAP 真实账号 `queued`（排队 EXPUNGE，邮件保留在废纸篓投影直到服务器确认），POP3 / 演示 `removed`（立即移除本机行；POP3 仅收信，服务器副本不受影响，已见 UIDL 保留防重新下载）。
+- **前置守卫**：废纸篓投影成立（物理成员 = 服务器真相，或本机 delete 意图投影）；任何未终结（queued / applying / unknown / failed）移动族意图都拒绝——移入废纸篓的 MOVE 未在服务器生效前 EXPUNGE 会删错对象，提示先同步；已有 purge 排队 / applying / unknown 时拒绝重复执行。
+- **回写**：同步会话内 UID STORE `\Deleted` → UIDPLUS 服务器用 `UID EXPUNGE`（只清除目标 UID），无 UIDPLUS 回退 `EXPUNGE`（标准 IMAP 行为，会连带清除文件夹内其他 \Deleted）→ `uid_fetch` 确认 UID 消失 → `acknowledge_purge` 删除本机行（级联清理意图，事件触发器解绑）。任一环节未确认转 `unknown`，**不自动重试**（EXPUNGE 不可逆）；启动 recover 把 applying 的 purge 转 unknown。
+- **本机投影**：purge 意图与 delete 一致投影到废纸篓（EXPUNGE 确认前用户仍能看到邮件作为证据）；确认后本机行删除、邮件从所有视图消失。
+- **UI**：废纸篓视图才显示——阅读区工具栏「永久删除」图标按钮（`window.confirm` 二次确认，文案明确服务器副本也将清除）；列表多选批量栏「永久删除」逐封执行。非桌面（演示）隐藏入口。
+- **验收**：`purge_intent_really_expunges_message_on_server`（GreenMail：删除同步 → 服务器 Trash 有一封 → purge 排队 → 同步 → 服务器 Trash 空且本机行删除）通过；Rust 单测 4 个（投影前置 / queued 拦截与 POP3 本机移除 / 确认删除级联 / recover 中断转 unknown）；e2e 1 个（废纸篓批量永久删除排队，桩核对 purge 意图状态）。
 
 ## 删除与移动（2026-11-17）
 

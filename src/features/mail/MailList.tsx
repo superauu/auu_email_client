@@ -28,11 +28,11 @@ function readRowHeight(_skinId: string): number {
 
 export function MailList({ onSelect }: { onSelect: () => void }) {
   const t = useI18n();
-  const { messages, accounts, labels, query, selectedId, savingIds, folders, viewStates, viewCounts, loadMore, retryView, selectMessage, toggleStar, setQuery, applyMessagePatch } = useWorkspaceStore(useShallow(s => ({
+  const { messages, accounts, labels, query, selectedId, savingIds, folders, viewStates, viewCounts, loadMore, retryView, selectMessage, toggleStar, setQuery, applyMessagePatch, purgeMessage } = useWorkspaceStore(useShallow(s => ({
     messages: s.messages, accounts: s.accounts, labels: s.labels, query: s.query, selectedId: s.selectedId,
     savingIds: s.savingIds, folders: s.folders, viewStates: s.viewStates, viewCounts: s.viewCounts, loadMore: s.loadMore, retryView: s.retryView,
     selectMessage: s.selectMessage, toggleStar: s.toggleStar, setQuery: s.setQuery,
-    applyMessagePatch: s.applyMessagePatch,
+    applyMessagePatch: s.applyMessagePatch, purgeMessage: s.purgeMessage,
   })));
   const { jobs, submitting, enqueue } = useSyncStore(useShallow(s => ({ jobs: s.jobs, submitting: s.submitting, enqueue: s.enqueue })));
   const groupBySubject = useThreadViewStore(s => s.groupBySubject);
@@ -117,6 +117,21 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
   function toggleSelected(id: string) {
     setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
   }
+  async function runPurge() {
+    if (batchRunning || !selected.length) return;
+    setBatchRunning(true);
+    try {
+      for (const id of [...selected]) {
+        const message = useWorkspaceStore.getState().messages.find(item => item.id === id);
+        if (!message || message.draft || message.mailbox !== 'trash') continue;
+        await purgeMessage(id);
+      }
+    } finally {
+      setBatchRunning(false);
+      setSelected([]);
+      setMoveOpen(false);
+    }
+  }
   async function runBatch(patchFor: (message: MailMessage) => MessagePatch | null) {
     if (batchRunning || !selected.length) return;
     setBatchRunning(true);
@@ -144,6 +159,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(message => message.starred ? null : { starred: true })}>{t('mailList.batchStar')}</Button>
         <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(message => message.mailbox === 'archive' ? null : { archive: true })}>{t('mailList.batchArchive')}</Button>
         <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(() => ({ delete: true }))}>{t('mailList.batchDelete')}</Button>
+        {query.mailbox === 'trash' && isDesktop() && <Button variant="ghost" disabled={batchRunning} onClick={() => { if (window.confirm(t('reader.purgeConfirm'))) void runPurge(); }}>{t('mailList.batchPurge')}</Button>}
         {batchTargets.length > 0 && <div className="move-menu-wrap">
           <Button variant="ghost" disabled={batchRunning} aria-expanded={moveOpen} aria-label={t('mailList.batchMoveAria')} onClick={() => setMoveOpen(value => !value)}><FolderInput size={14} />{t('mailList.batchMove')}</Button>
           {moveOpen && <div className="move-menu" role="menu" aria-label={t('mailList.batchMoveMenuAria')}>

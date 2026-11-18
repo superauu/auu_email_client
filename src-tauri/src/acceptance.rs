@@ -821,6 +821,100 @@ Content-Transfer-Encoding: base64
         cleanup(&db, &[account]);
     }
 
+    /// ── 验收⑧：真实 EXPUNGE 永久删除 ──────────────────────────────
+    /// 意图入队 → UID STORE \Deleted + UID EXPUNGE → 独立会话核对服务器废纸篓已无
+    /// 该邮件，本机行已删除。
+    #[test]
+    fn purge_intent_really_expunges_message_on_server() {
+        if !enabled() {
+            eprintln!("skip: AUUMAIL_ACCEPTANCE 未设置");
+            return;
+        }
+        let (db, _dir) = fresh_db("purge");
+        purge_mailbox("auu", "auupass");
+        {
+            let mut session = raw_imap("auu", "auupass");
+            if session.list(Some(""), Some("Trash")).unwrap().is_empty() {
+                session.create("Trash").unwrap();
+            }
+            session.logout().unwrap();
+        }
+        let account = save_account(&db, "imap", "auu", "auupass", false);
+        let tag = marker();
+        raw_send(
+            "auu",
+            "auupass",
+            &[format!(
+                "From: sender@{DOMAIN}
+To: auu@{DOMAIN}
+Subject: {tag} 永久删除验收
+Message-ID: <{tag}@{DOMAIN}>
+Date: Sat, 7 Feb 2026 15:00:00 +0000
+
+{tag} 正文。"
+            )],
+        );
+        sync(&db, &account);
+        let find = |db: &SharedDb| {
+            inbox_subjects(db, &account)
+                .into_iter()
+                .find(|(_, subject)| subject.contains(&tag))
+                .map(|(id, _)| id)
+                .expect("被测邮件应已同步")
+        };
+        let message_id = find(&db);
+        // 删除到废纸篓并同步（服务器侧 MOVE 完成）。
+        let trash_folder = format!("{account}:folder:Trash");
+        message_changes::update(
+            &mut db.lock().unwrap(),
+            &account,
+            &message_id,
+            &message_changes::Patch {
+                delete: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        sync(&db, &account);
+        // 服务器废纸篓应有该邮件；本机投影 trash。
+        let mut session = raw_imap("auu", "auupass");
+        assert_eq!(
+            uid_search(&mut session, "Trash", &format!("<{tag}@{DOMAIN}>")).len(),
+            1,
+            "删除同步后废纸篓应有该邮件"
+        );
+        drop(session);
+        let row = {
+            let conn = db.lock().unwrap();
+            mail_store::message_by_id(&conn, &account, &message_id).unwrap()
+        };
+        assert_eq!(row.mailbox, "trash");
+        // 永久删除（此时无未终结移动意图，物理在废纸篓）→ 排队 → 同步回写 EXPUNGE。
+        match message_changes::purge(&mut db.lock().unwrap(), &account, &message_id).unwrap() {
+            message_changes::PurgeOutcome::Queued(_) => {}
+            message_changes::PurgeOutcome::Removed => panic!("IMAP 账号应排队 EXPUNGE"),
+        }
+        sync(&db, &account);
+        // 服务器废纸篓不再有该邮件；本机行已删除。
+        let mut session = raw_imap("auu", "auupass");
+        assert!(
+            uid_search(&mut session, "Trash", &format!("<{tag}@{DOMAIN}>")).is_empty(),
+            "EXPUNGE 后服务器废纸篓不应再有该邮件"
+        );
+        session.logout().unwrap();
+        let exists: bool = {
+            let conn = db.lock().unwrap();
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1 AND account_id=?2)",
+                rusqlite::params![message_id, account],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(!exists, "EXPUNGE 确认后本机行应已删除");
+        cleanup(&db, &[account]);
+    }
+
     /// ── 验收⑥：大邮箱真实同步吞吐 ─────────────────────────────────
     /// 经真实 SMTP 注入 2000 封 → IMAP 全量同步计时 → 二次增量归零。
     /// 规模边界：GreenMail 内存实现在万封级 FETCH 上会挂起（探针实测），因此本验收

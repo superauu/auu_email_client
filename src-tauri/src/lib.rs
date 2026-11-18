@@ -396,6 +396,21 @@ async fn mail_update_message(
 }
 
 #[tauri::command]
+async fn mail_purge_message(
+    db: State<'_, Db>,
+    account_id: String,
+    message_id: String,
+) -> Result<message_changes::PurgeOutcome, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        message_changes::purge(&mut conn, &account_id, &message_id)
+    })
+    .await
+    .map_err(|_| AppError::storage("永久删除任务未完成"))?
+}
+
+#[tauri::command]
 async fn mail_keep_message_local(
     db: State<'_, Db>,
     account_id: String,
@@ -781,6 +796,7 @@ pub fn run() {
             mail_save_imap_settings,
             mail_request_recovery,
             mail_update_message,
+            mail_purge_message,
             mail_keep_message_local,
             get_app_info,
             list_user_skins,

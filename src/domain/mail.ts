@@ -80,7 +80,7 @@ export interface RecoveryStatus {
 }
 
 export interface MessageChange {
-  field: 'unread' | 'starred' | 'archive' | 'delete' | 'move';
+  field: 'unread' | 'starred' | 'archive' | 'delete' | 'move' | 'purge';
   state: 'queued' | 'applying' | 'failed' | 'conflict' | 'unknown' | 'local';
   error: string | null;
 }
@@ -193,6 +193,8 @@ export interface ViewCountEntry { accountId: string; view: string; total: number
 export interface ViewPage { items: MailMessage[]; nextCursor: string | null }
 /** 撰写收件人建议（最近邮件的发件人 + 收件人，去重保序）。 */
 export interface ContactSuggestion { name: string; email: string }
+/** 废纸篓永久删除结果：removed = 本机已移除（POP3 / 演示）；queued = IMAP 已排队 EXPUNGE。 */
+export type PurgeOutcome = { outcome: 'removed' } | { outcome: 'queued'; message: MailMessage };
 
 export interface MailGateway {
   requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
@@ -226,6 +228,8 @@ export interface MailGateway {
   contactSuggestions?(accountId: string): Promise<ContactSuggestion[]>;
   saveDraft(draft: MailDraft, options?: DraftSaveOptions): Promise<MailMessage>;
   updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage>;
+  /** 废纸篓永久删除（桌面端实现；演示端不支持，UI 在非桌面隐藏入口）。 */
+  purgeMessage?(accountId: string, messageId: string): Promise<PurgeOutcome>;
   keepMessageLocal(accountId: string, messageId: string): Promise<MailMessage>;
   requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage>;
   // Add sync/send through explicit capability interfaces when a provider is implemented.

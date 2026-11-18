@@ -19,7 +19,7 @@ const KIND_PRIORITY: &str = "CASE f.kind WHEN 'inbox' THEN 0 WHEN 'sent' THEN 1 
 fn mailbox_projection_sql() -> String {
     format!(
         "CASE \
-         WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1) THEN 'trash' \
+         WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field IN ('delete','purge') AND c.value=1) THEN 'trash' \
          WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) THEN 'archive' \
          WHEN EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='move') THEN COALESCE((SELECT f.kind FROM folders f WHERE f.id=(SELECT c.target_folder FROM message_changes c WHERE c.message_id=m.id AND c.field='move' LIMIT 1)),(SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1)) \
          ELSE (SELECT f.kind FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id ORDER BY {KIND_PRIORITY} LIMIT 1) END"
@@ -651,7 +651,7 @@ pub fn page_messages(conn: &Connection, query: &MessageQuery) -> Result<MessageP
         clauses.push("m.starred = 1");
     }
     if exclude_trash {
-        clauses.push("(EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) OR (NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash') AND NOT EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='delete' AND c.value=1)))");
+        clauses.push("(EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field='archive' AND c.value=1) OR (NOT EXISTS (SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id = mf.account_id AND f.id = mf.folder_id WHERE mf.account_id = m.account_id AND mf.message_id = m.id AND f.kind = 'trash') AND NOT EXISTS(SELECT 1 FROM message_changes c WHERE c.message_id=m.id AND c.field IN ('delete','purge') AND c.value=1)))");
     }
     if let Some(label) = &query.label_id {
         clauses.push("EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = ?)");

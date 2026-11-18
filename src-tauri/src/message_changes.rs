@@ -63,7 +63,7 @@ pub fn recover(conn: &mut Connection) -> Result<(), AppError> {
         .transaction()
         .map_err(|_| AppError::storage("无法恢复邮件回写"))?;
     tx.execute("UPDATE messages SET state_revision=state_revision+1 WHERE id IN (SELECT message_id FROM message_changes WHERE state='applying')",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
-    tx.execute("UPDATE message_changes SET state=CASE WHEN field IN ('archive','delete','move') THEN 'unknown' ELSE 'queued' END,error=CASE WHEN field IN ('archive','delete','move') THEN '上次移动中断，结果待核对；不会自动再次移动。' ELSE NULL END WHERE state='applying'",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
+    tx.execute("UPDATE message_changes SET state=CASE WHEN field IN ('archive','delete','move') THEN 'unknown' WHEN field='purge' THEN 'unknown' ELSE 'queued' END,error=CASE WHEN field IN ('archive','delete','move','purge') THEN '上次永久删除中断，结果待核对；不会自动再次执行，请核对服务器废纸篓。' ELSE NULL END WHERE state='applying'",[]).map_err(|_|AppError::storage("无法恢复邮件回写"))?;
     tx.commit()
         .map_err(|_| AppError::storage("邮件回写恢复未完成"))
 }
@@ -129,6 +129,13 @@ pub fn update(
         )
         .optional()
         .map_err(|_| AppError::storage("无法检查移动状态"))?;
+    if pending_family.is_some()
+        && (patch.archive.is_some() || patch.delete.is_some() || move_to.is_some())
+    {
+        return Err(AppError::conflict(
+            "上一次移动结果待核对，请勿重复移动；可选择仅保留本机。",
+        ));
+    }
     // delete / move 的目标文件夹在入队时落库；archive 维持回写时解析唯一归档目录的既有约定。
     // 可用性在 imap_folder_state（按 remote_id 关联），不在 folders 表。
     let family_target: Option<String> = if patch.delete.is_some() {
@@ -228,6 +235,125 @@ pub fn update(
         .map_err(|_| AppError::storage("邮件状态提交未完成"))?;
     Ok(result)
 }
+/// 废纸篓永久删除结果：IMAP 真实账号排队回写（UID STORE \Deleted + UID EXPUNGE），
+/// POP3 / 演示立即移除本机行（服务器副本不受影响——POP3 仅收信约定）。
+#[derive(Serialize, Debug)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum PurgeOutcome {
+    Removed,
+    Queued(Box<MessageRow>),
+}
+
+/// 永久删除入队 / 本机移除。前置：邮件的废纸篓投影成立（物理成员 = 服务器真相；
+/// 或本机 delete 意图 = POP3 / 待同步投影），且没有待核对的移动或进行中的永久删除。
+/// EXPUNGE 不可逆：applying 中断一律转 unknown，不自动重试。
+pub fn purge(conn: &mut Connection, account: &str, id: &str) -> Result<PurgeOutcome, AppError> {
+    let tx = conn
+        .transaction()
+        .map_err(|_| AppError::storage("无法保存永久删除"))?;
+    let (provider, profile, generation): (String, Option<String>, String) = tx
+        .query_row(
+            "SELECT provider,profile_json,sync_generation FROM accounts WHERE id=?1",
+            [account],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| AppError::invalid("账号不存在"))?;
+    let profile = profile.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let real = provider == "imap" && profile.as_ref().is_none_or(|p| p["status"] != "demo");
+    let (revision, folder, validity, uid, origin, missing): (i64, Option<String>, Option<u32>, Option<u32>, Option<String>, bool) = tx
+        .query_row(
+            "SELECT state_revision,remote_folder,remote_uid_validity,remote_uid,remote_generation,remote_missing FROM messages WHERE id=?1 AND account_id=?2",
+            params![id, account],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .map_err(|_| AppError::invalid("邮件不存在或不属于此账号"))?;
+    // 废纸篓投影：物理成员（IMAP 服务器真相）或本机 delete 意图（POP3 / 待同步投影）。
+    let projected_trash: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM message_folders mf JOIN folders f ON f.account_id=mf.account_id AND f.id=mf.folder_id WHERE mf.account_id=?1 AND mf.message_id=?2 AND f.kind='trash')              OR EXISTS(SELECT 1 FROM message_changes c WHERE c.account_id=?1 AND c.message_id=?2 AND c.field='delete' AND c.value=1)",
+            params![account, id],
+            |row| row.get(0),
+        )
+        .map_err(|_| AppError::storage("无法核对废纸篓投影"))?;
+    if !projected_trash {
+        return Err(AppError::invalid("邮件不在废纸篓，无法永久删除"));
+    }
+    // 移动族意图未终结（含 queued / failed：移入废纸篓的 MOVE 尚未在服务器生效）时
+    // 不能 EXPUNGE——否则永久删除会作用在原目录而不是废纸篓。POP3 的 local 意图不拦截。
+    let pending_move: Option<String> = tx
+        .query_row(
+            "SELECT field FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field IN ('archive','delete','move') AND state IN ('queued','applying','unknown','failed') LIMIT 1",
+            params![account, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| AppError::storage("无法检查移动状态"))?;
+    if pending_move.is_some() {
+        return Err(AppError::conflict(
+            "移入废纸篓尚未同步完成，请先同步后再永久删除",
+        ));
+    }
+    let pending_purge: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM message_changes WHERE account_id=?1 AND message_id=?2 AND field='purge' AND state IN ('queued','applying','unknown'))",
+            params![account, id],
+            |row| row.get(0),
+        )
+        .map_err(|_| AppError::storage("无法检查永久删除状态"))?;
+    if pending_purge {
+        return Err(AppError::conflict(
+            "永久删除已在进行或结果待核对；不会自动重试",
+        ));
+    }
+    if real {
+        let located = !missing
+            && folder.is_some()
+            && validity.is_some_and(|v| v > 0)
+            && uid.is_some_and(|u| u > 0)
+            && origin.as_deref() == Some(&generation);
+        if !located {
+            return Err(AppError::conflict(
+                "邮件服务器定位缺失或账号已改变；永久删除需要可信定位，请先重新同步",
+            ));
+        }
+        tx.execute("INSERT INTO message_changes (account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,error,target_folder,updated_at)
+          VALUES (?1,?2,'purge',1,?3,'queued',?4,?5,?6,?7,NULL,NULL,?8)
+          ON CONFLICT(account_id,message_id,field) DO UPDATE SET value=1,revision=excluded.revision,state='queued',generation=excluded.generation,
+          source_folder=excluded.source_folder,source_validity=excluded.source_validity,source_uid=excluded.source_uid,error=NULL,target_folder=NULL,updated_at=excluded.updated_at",
+          params![account, id, revision + 1, generation, folder, validity, uid, crate::now_utc()])
+          .map_err(|_| AppError::storage("永久删除未能排队"))?;
+        tx.execute(
+            "UPDATE messages SET state_revision=state_revision+1 WHERE id=?1 AND account_id=?2",
+            params![id, account],
+        )
+        .map_err(|_| AppError::storage("邮件版本未能保存"))?;
+        let row = mail_store::message_by_id(&tx, account, id)?;
+        tx.commit()
+            .map_err(|_| AppError::storage("永久删除提交未完成"))?;
+        Ok(PurgeOutcome::Queued(Box::new(row)))
+    } else {
+        // POP3 / 演示：直接移除本机行。事件经触发器解绑；意图级联清理；
+        // POP3 已见 UIDL 集合保留，服务器副本不会被重新下载。
+        tx.execute(
+            "DELETE FROM messages WHERE id=?1 AND account_id=?2",
+            params![id, account],
+        )
+        .map_err(|_| AppError::storage("本机移除未完成"))?;
+        tx.commit()
+            .map_err(|_| AppError::storage("本机移除提交未完成"))?;
+        Ok(PurgeOutcome::Removed)
+    }
+}
+
+/// 服务器 EXPUNGE 确认后删除本机行；返回删除行数（0 = 已不存在，同样视为已确认）。
+pub fn acknowledge_purge(conn: &Connection, intent: &Intent) -> Result<usize, AppError> {
+    conn.execute(
+        "DELETE FROM messages WHERE account_id=?1 AND id=?2",
+        params![intent.account_id, intent.message_id],
+    )
+    .map_err(|_| AppError::storage("永久删除本机确认失败"))
+}
+
 pub fn keep_local(conn: &mut Connection, account: &str, id: &str) -> Result<MessageRow, AppError> {
     let tx = conn
         .transaction()
@@ -360,6 +486,165 @@ pub(crate) mod tests {
                 .unwrap();
         }
     }
+    #[test]
+    fn purge_requires_trash_projection_and_clean_move_state() {
+        let mut conn = fixture();
+        // 邮件在 INBOX（无废纸篓投影）→ 拒绝。
+        let error = purge(&mut conn, "acc", "m").unwrap_err();
+        assert_eq!(error.code, "invalid");
+        // 物理位于废纸篓目录时允许排队（IMAP 真实路径）。
+        conn.execute_batch(
+            "INSERT INTO folders VALUES ('tr','acc','Trash','Trash','trash');
+          INSERT INTO message_folders VALUES ('acc','m','tr');
+          UPDATE messages SET remote_folder='Trash' WHERE id='m';",
+        )
+        .unwrap();
+        match purge(&mut conn, "acc", "m").unwrap() {
+            PurgeOutcome::Queued(row) => {
+                assert_eq!(row.mailbox, "trash");
+                let state: String = conn
+                    .query_row(
+                        "SELECT state FROM message_changes WHERE message_id='m' AND field='purge'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(state, "queued");
+            }
+            PurgeOutcome::Removed => panic!("IMAP 账号应排队而非立即移除"),
+        }
+        // 已有 purge 排队时再次 purge → conflict（不重复 EXPUNGE）。
+        let error = purge(&mut conn, "acc", "m").unwrap_err();
+        assert_eq!(error.code, "conflict");
+        // unknown 后不自动重试：显式清理前一直 conflict。
+        conn.execute(
+            "UPDATE message_changes SET state='unknown' WHERE message_id='m' AND field='purge'",
+            [],
+        )
+        .unwrap();
+        let error = purge(&mut conn, "acc", "m").unwrap_err();
+        assert_eq!(error.code, "conflict");
+    }
+
+    #[test]
+    fn purge_blocked_until_pending_delete_move_syncs_and_removes_row_locally_for_pop3() {
+        let mut conn = fixture();
+        // queued delete 意图（服务器还没移到废纸篓）→ purge 必须先同步。
+        conn.execute_batch("INSERT INTO folders VALUES ('tr','acc','Trash','Trash','trash');
+          INSERT INTO message_folders VALUES ('acc','m','tr');
+          UPDATE messages SET remote_folder='INBOX' WHERE id='m';
+          INSERT INTO message_changes (account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,target_folder,error,updated_at)
+          VALUES ('acc','m','delete',1,1,'queued','gen','INBOX',10,1,'tr',NULL,'2026-11-11T00:00:00Z');")
+            .unwrap();
+        let error = purge(&mut conn, "acc", "m").unwrap_err();
+        assert_eq!(error.code, "conflict");
+        // POP3 路径：delete 意图为 local（本机投影），purge 直接移除本机行。
+        let mut pop3 = Connection::open_in_memory().unwrap();
+        crate::storage::migrate(&mut pop3).unwrap();
+        pop3.execute_batch("INSERT INTO accounts(id,provider,email,display_name,profile_json,created_at) VALUES ('p','pop3','p@example.test','P','{\"status\":\"offline\"}','2026-11-11T00:00:00Z');
+          INSERT INTO messages(id,account_id,remote_id,thread_id,subject,sender_name,sender_email,body_text,received_at,unread,starred,remote_folder,remote_uid_validity,remote_uid,remote_generation)
+          SELECT 'pm','p','pop3:1','pm','Test','S','s@example.test','B','2026-11-11T00:00:00Z',1,0,'INBOX',0,1,sync_generation FROM accounts WHERE id='p';
+          INSERT INTO message_changes (account_id,message_id,field,value,revision,state,generation,source_folder,source_validity,source_uid,target_folder,error,updated_at)
+          VALUES ('p','pm','delete',1,1,'local','gen','INBOX',0,1,NULL,NULL,'2026-11-11T00:00:00Z');")
+            .unwrap();
+        match purge(&mut pop3, "p", "pm").unwrap() {
+            PurgeOutcome::Removed => {
+                let exists: bool = pop3
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM messages WHERE id='pm')",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert!(!exists, "POP3 永久删除应移除本机行");
+                let intents: i64 = pop3
+                    .query_row(
+                        "SELECT COUNT(*) FROM message_changes WHERE message_id='pm'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(intents, 0, "意图应级联清理");
+            }
+            PurgeOutcome::Queued(_) => panic!("POP3 应本机移除而非排队"),
+        }
+    }
+
+    #[test]
+    fn acknowledge_purge_removes_message_row_and_cascades_intents() {
+        let mut conn = fixture();
+        conn.execute_batch(
+            "INSERT INTO folders VALUES ('tr','acc','Trash','Trash','trash');
+          INSERT INTO message_folders VALUES ('acc','m','tr');
+          UPDATE messages SET remote_folder='Trash' WHERE id='m';",
+        )
+        .unwrap();
+        let intent = purge(&mut conn, "acc", "m").unwrap();
+        let PurgeOutcome::Queued(_) = intent else {
+            panic!("IMAP 应排队");
+        };
+        let intents = Intent {
+            account_id: "acc".into(),
+            message_id: "m".into(),
+            field: "purge".into(),
+            value: true,
+            revision: 2,
+            generation: "gen".into(),
+            folder: "Trash".into(),
+            validity: 10,
+            uid: 1,
+            target: None,
+        };
+        let removed = acknowledge_purge(&conn, &intents).unwrap();
+        assert_eq!(removed, 1);
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE id='m')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message_changes WHERE message_id='m'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "意图应级联清理");
+    }
+
+    #[test]
+    fn recover_marks_interrupted_purge_unknown() {
+        let mut conn = fixture();
+        conn.execute_batch(
+            "INSERT INTO folders VALUES ('tr','acc','Trash','Trash','trash');
+          INSERT INTO message_folders VALUES ('acc','m','tr');
+          UPDATE messages SET remote_folder='Trash' WHERE id='m';",
+        )
+        .unwrap();
+        purge(&mut conn, "acc", "m").unwrap();
+        conn.execute(
+            "UPDATE message_changes SET state='applying' WHERE message_id='m' AND field='purge'",
+            [],
+        )
+        .unwrap();
+        recover(&mut conn).unwrap();
+        let (state, error): (String, Option<String>) = conn
+            .query_row(
+                "SELECT state,error FROM message_changes WHERE message_id='m' AND field='purge'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            state, "unknown",
+            "中断的 EXPUNGE 必须转 unknown，不自动重试"
+        );
+        assert!(error.is_some());
+    }
+
     #[test]
     fn offline_changes_survive_reopen_and_are_isolated_by_account() {
         let path =

@@ -3,7 +3,7 @@ import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { SkinCatalog } from '../themes/contract';
 import type { SyncQueueSnapshot, SyncOutcome } from '../domain/sync';
 export type { SyncOutcome } from '../domain/sync';
-import type { MailAccount, MailDraft, DraftSaveOptions, MailEvent, MailLabel, MailMessage, MessagePatch, RecoveryAction, ProviderKind, WorkspaceSnapshot } from '../domain/mail';
+import type { MailAccount, MailDraft, DraftSaveOptions, MailEvent, MailLabel, MailMessage, MessagePatch, PurgeOutcome, RecoveryAction, ProviderKind, WorkspaceSnapshot } from '../domain/mail';
 import { t } from '../i18n/core';
 
 export interface AppInfo {
@@ -87,6 +87,8 @@ export const desktopMail = {
   async exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean> { return invoke('mail_export_attachment', { accountId, messageId, index }); },
   async requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage> { return invoke('mail_request_recovery', { accountId, messageId, revision, action }); },
   async updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage> { return invoke('mail_update_message', { accountId, messageId, patch }); },
+  /** 废纸篓永久删除：IMAP 排队 EXPUNGE（queued 返回更新行），POP3 / 演示立即本机移除（removed）。 */
+  async purgeMessage(accountId: string, messageId: string): Promise<PurgeOutcome> { return invoke('mail_purge_message', { accountId, messageId }); },
   async keepMessageLocal(accountId: string, messageId: string): Promise<MailMessage> { return invoke('mail_keep_message_local', { accountId, messageId }); },
   /** Idempotently writes the demo dataset into SQLite; leaves any other rows untouched. */
   async seed(snapshot: WorkspaceSnapshot): Promise<void> { await invoke('mail_seed_workspace', { seed: snapshot }); },

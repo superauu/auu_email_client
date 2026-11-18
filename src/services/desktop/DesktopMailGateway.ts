@@ -57,5 +57,6 @@ export const desktopMailGateway: MailGateway = {
     return desktopMail.pickAttachments(draftId, current);
   },
   async updateMessage(accountId, messageId, patch) { return desktopMail.updateMessage(accountId, messageId, patch); },
+  async purgeMessage(accountId, messageId) { return desktopMail.purgeMessage(accountId, messageId); },
   async keepMessageLocal(accountId, messageId) { return desktopMail.keepMessageLocal(accountId, messageId); },
 };

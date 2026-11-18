@@ -343,7 +343,78 @@ pub fn flush<S: Read + Write>(
                 continue;
             }
         }
-        if !is_move_family {
+        if intent.field == "purge" {
+            // 永久删除：UID STORE \Deleted → UID EXPUNGE（UIDPLUS）或 EXPUNGE 兜底
+            // → 确认 UID 消失 → 删除本机行。任一环节未确认都转 unknown，不自动重试
+            //（EXPUNGE 不可逆，重复执行可能删错对象）。
+            if session
+                .uid_store(intent.uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                .is_err()
+            {
+                state(
+                    db,
+                    &intent,
+                    "unknown",
+                    Some("永久删除已发出但未确认；不会自动重试，请核对服务器废纸篓。"),
+                    None,
+                )?;
+                return Err(AppError::network("永久删除标记未确认；本机保留"));
+            }
+            let expunge_result = if session
+                .capabilities()
+                .map_err(|error| crate::imap_limits::network(error, "无法读取回写能力"))?
+                .has_str("UIDPLUS")
+            {
+                session.uid_expunge(intent.uid.to_string()).map(|_| ())
+            } else {
+                // 无 UIDPLUS 时 EXPUNGE 清除文件夹内全部 \Deleted（标准 IMAP 行为，
+                // 可能连带清除其他客户端标记删除的邮件）。
+                session.expunge().map(|_| ())
+            };
+            match expunge_result {
+                Ok(()) => {
+                    let remaining = session
+                        .uid_fetch(intent.uid.to_string(), "(UID FLAGS)")
+                        .map_err(|error| {
+                            crate::imap_limits::network(error, "无法核对永久删除结果")
+                        })?;
+                    if !remaining.is_empty() {
+                        state(
+                            db,
+                            &intent,
+                            "conflict",
+                            Some("服务器仍返回该邮件，永久删除未生效；请核对。"),
+                            None,
+                        )?;
+                        warnings.push("永久删除未生效，保留本机。".into());
+                        continue;
+                    }
+                    let conn = db.lock().map_err(|_| AppError::storage("数据库忙"))?;
+                    let removed = message_changes::acknowledge_purge(&conn, &intent);
+                    drop(conn);
+                    if let Err(error) = removed {
+                        state(
+                            db,
+                            &intent,
+                            "unknown",
+                            Some("服务器已永久删除，但本机确认失败；请重新同步核对。"),
+                            None,
+                        )?;
+                        return Err(error);
+                    }
+                }
+                Err(_) => {
+                    state(
+                        db,
+                        &intent,
+                        "unknown",
+                        Some("永久删除已发出但未确认；不会自动重试，请核对服务器废纸篓。"),
+                        None,
+                    )?;
+                    return Err(AppError::network("永久删除结果未确认；本机保留"));
+                }
+            }
+        } else if !is_move_family {
             let (flag, add) = if intent.field == "unread" {
                 ("\\Seen", !intent.value)
             } else {
