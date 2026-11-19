@@ -6,7 +6,16 @@ use imap::types::Flag;
 use rusqlite::{params, OptionalExtension};
 
 /// 草稿行投影（revision / 主题 / 正文 / 收件人 / 附件元数据 JSON）。
-type DraftRow = (u32, String, String, Option<String>, String, String, String, String);
+type DraftRow = (
+    u32,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+);
 
 #[derive(Debug)]
 struct DraftFolder {
@@ -15,7 +24,10 @@ struct DraftFolder {
 }
 
 /// 唯一可用的草稿目录：0 个明确报错，多个不猜（与 trash 解析同一保守策略）。
-fn resolve_draft_folder(conn: &rusqlite::Connection, account: &str) -> Result<DraftFolder, AppError> {
+fn resolve_draft_folder(
+    conn: &rusqlite::Connection,
+    account: &str,
+) -> Result<DraftFolder, AppError> {
     let rows: Vec<(String, String)> = conn
         .prepare(
             "SELECT f.remote_id,f.name FROM folders f \
@@ -112,7 +124,9 @@ pub(crate) fn upload(
                 )
                 .optional()
                 .map_err(|_| AppError::storage("无法读取草稿附件"))?;
-            row.ok_or_else(|| AppError::storage(format!("附件「{}」缺失，请重新添加后再上传。", item.name)))?
+            row.ok_or_else(|| {
+                AppError::storage(format!("附件「{}」缺失，请重新添加后再上传。", item.name))
+            })?
         };
         if stored_sha != item.sha256 || content.len() != item.size {
             return Err(AppError::storage(format!(
@@ -154,17 +168,17 @@ pub(crate) fn upload(
         attachments: &attachments,
     });
     // ── 锁外阶段：独立短会话 APPEND（\Draft \Seen） ──────────────────
-    let _secret_guard = credentials::with_account("imap", account, || credentials::secret_for("imap", account))?;
+    let _secret_guard =
+        credentials::with_account("imap", account, || credentials::secret_for("imap", account))?;
     let mut session = imap_folders::open_session(db, account)?;
     let result = session.append_with_flags(
         &folder.remote_id,
         content.as_bytes(),
         &[Flag::Draft, Flag::Seen],
     );
-    let uploaded =
-        result
-            .map(|_| content.len())
-            .map_err(|error| crate::imap_limits::network(error, "上传到服务器草稿目录失败"));
+    let uploaded = result
+        .map(|_| content.len())
+        .map_err(|error| crate::imap_limits::network(error, "上传到服务器草稿目录失败"));
     let _ = session.logout();
     uploaded.map(|bytes| (bytes, folder.display_name))
 }
@@ -229,14 +243,33 @@ mod tests {
     #[test]
     fn draft_folder_resolution_requires_exactly_one_available_folder() {
         let shared = fresh();
-        seed(&shared, "imap", &[("Drafts", "Drafts"), ("草稿", "草稿副本")]);
+        seed(
+            &shared,
+            "imap",
+            &[("Drafts", "Drafts"), ("草稿", "草稿副本")],
+        );
         {
             let conn = shared.lock().unwrap();
-            assert!(resolve_draft_folder(&conn, "acc").unwrap_err().message.contains("多个草稿目录"));
-            conn.execute("DELETE FROM folders WHERE name='草稿副本'", []).unwrap();
-            conn.execute("UPDATE imap_folder_state SET available=0 WHERE remote_id='Drafts'", []).unwrap();
-            assert!(resolve_draft_folder(&conn, "acc").unwrap_err().message.contains("没有可用的草稿目录"));
-            conn.execute("UPDATE imap_folder_state SET available=1 WHERE remote_id='Drafts'", []).unwrap();
+            assert!(resolve_draft_folder(&conn, "acc")
+                .unwrap_err()
+                .message
+                .contains("多个草稿目录"));
+            conn.execute("DELETE FROM folders WHERE name='草稿副本'", [])
+                .unwrap();
+            conn.execute(
+                "UPDATE imap_folder_state SET available=0 WHERE remote_id='Drafts'",
+                [],
+            )
+            .unwrap();
+            assert!(resolve_draft_folder(&conn, "acc")
+                .unwrap_err()
+                .message
+                .contains("没有可用的草稿目录"));
+            conn.execute(
+                "UPDATE imap_folder_state SET available=1 WHERE remote_id='Drafts'",
+                [],
+            )
+            .unwrap();
         }
         let conn = shared.lock().unwrap();
         let folder = resolve_draft_folder(&conn, "acc").unwrap();

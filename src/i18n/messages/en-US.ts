@@ -720,6 +720,26 @@ export const enUS: Record<MessageId, string> = {
   'ui.errorBoundaryBody': 'Copy any unsaved content before reopening.',
   'errors.fallback': 'The operation did not complete — please try again.',
 
+  // ── User-created labels (local annotations only) ────────────
+  'store.labelsDesktopOnly': 'Label management is available in the desktop app only.',
+  'labels.nameRequired': 'Label name cannot be empty',
+  'labels.nameTooLong': 'Label name is too long (64 characters max)',
+  'tags.manageAria': 'Manage labels',
+  'tags.title': 'Manage labels',
+  'tags.description': 'Labels are local annotations for filtering and organizing mail; they are never written to the server.',
+  'tags.createAria': 'New label name',
+  'tags.createPlaceholder': 'Label name',
+  'tags.createButton': 'Create',
+  'tags.empty': 'No labels yet. Create the first one to organize your mail.',
+  'tags.renameAria': 'Rename label {name}',
+  'tags.renameSave': 'Save',
+  'tags.deleteAria': 'Delete label {name}',
+  'tags.deleteConfirm': 'Delete label "{name}"? It will be removed from all messages; the messages themselves are not affected.',
+  'tags.colorTeal': 'Teal',
+  'tags.colorBlue': 'Blue',
+  'tags.colorAmber': 'Amber',
+  'reader.labelMenuAria': 'Message labels',
+
   // ── Demo services ───────────────────────────────────────────
   'demo.draftConflict': 'The draft was modified in another window — keep your current content and reopen the draft.',
   'demo.draftSaveFailed': 'The draft could not be saved — keep the content in this window and try again.',

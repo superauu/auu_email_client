@@ -338,8 +338,9 @@ fn snapshot(queue: &Queue) -> QueueSnapshot {
                     .clone();
                 // 运行中的任务若正处于 IDLE 实时监听片段（含轮间续跑间隙），标记 listening：
                 // 前端不把实时监听当主动同步转圈，摘要显示监听状态。
-                snapshot.listening = matches!(snapshot.status, JobStatus::Running | JobStatus::Queued)
-                    && crate::mail_sync::is_idling(&snapshot.account_id);
+                snapshot.listening =
+                    matches!(snapshot.status, JobStatus::Running | JobStatus::Queued)
+                        && crate::mail_sync::is_idling(&snapshot.account_id);
                 snapshot
             })
             .collect(),

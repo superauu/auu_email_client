@@ -179,6 +179,41 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           folderList.splice(index, 1);
           return structuredClone(folderList.filter(folder => folder.accountId === input.accountId));
         }
+        // 用户自建标签：镜像 mail_labels —— 全局本地标签（lbl: 前缀），纯本机注解。
+        case 'mail_create_label': {
+          const name = String(input.name).trim();
+          const color = String(input.color);
+          if (!name || !['teal', 'blue', 'amber'].includes(color)) throw new Error('标签名称或颜色无效');
+          if (workspace.labels.some(label => label.id.startsWith('lbl:') && label.name === name)) throw new Error('已存在同名标签');
+          const label = { id: `lbl:harness-${++sequence}`, name, color: color as 'teal' | 'blue' | 'amber', scope: 'local' as const };
+          workspace.labels.push(label);
+          return structuredClone(label);
+        }
+        case 'mail_rename_label': {
+          const label = workspace.labels.find(label => label.id === input.id);
+          if (!label || !label.id.startsWith('lbl:')) throw new Error('标签不存在');
+          const name = String(input.name).trim();
+          if (!name) throw new Error('标签名称不能为空');
+          if (workspace.labels.some(other => other.id !== label.id && other.id.startsWith('lbl:') && other.name === name)) throw new Error('已存在同名标签');
+          label.name = name;
+          if (typeof input.color === 'string' && ['teal', 'blue', 'amber'].includes(input.color)) label.color = input.color as 'teal' | 'blue' | 'amber';
+          return structuredClone(label);
+        }
+        case 'mail_delete_label': {
+          const index = workspace.labels.findIndex(label => label.id === input.id);
+          if (index < 0 || !workspace.labels[index].id.startsWith('lbl:')) throw new Error('标签不存在');
+          workspace.labels.splice(index, 1);
+          for (const message of workspace.messages) message.labelIds = (message.labelIds ?? []).filter(id => id !== input.id);
+          return;
+        }
+        case 'mail_set_message_labels': {
+          const ids = input.labelIds as string[];
+          if (ids.some(id => !workspace.labels.some(label => label.id === id && label.id.startsWith('lbl:')))) throw new Error('标签不存在');
+          const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
+          if (!message) throw new Error('邮件不存在');
+          message.labelIds = [...new Set(ids)];
+          return structuredClone(message);
+        }
         // 永久删除：镜像 message_changes::purge —— IMAP 账号排队（消息保留在 trash 投影），
         // 本测试桩统一返回 queued 行为（POP3 removed 分支由 Rust 单测覆盖）。
         case 'mail_purge_message': {
@@ -1247,4 +1282,56 @@ test('compose uploads the draft to the server drafts folder on demand', async ({
   await upload.click();
   await expect(page.getByText('已上传到服务器草稿')).toBeVisible();
   await page.screenshot({ path: info.outputPath('compose-upload.png') });
+});
+
+
+test('user labels: manage dialog creates renames recolors and deletes; reader tags and sidebar filter follow', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  const tagsNav = page.getByRole('navigation', { name: '邮件标签' });
+  const manage = page.getByRole('button', { name: '管理标签' });
+  // 桌面端无标签也显示标签区与入口；历史演示标签不出现。
+  await expect(manage).toBeVisible();
+  await expect(tagsNav).toHaveCount(0);
+  await manage.click();
+  const dialog = page.getByRole('dialog', { name: '管理标签' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('还没有标签，创建第一个来整理邮件。')).toBeVisible();
+  // 新建（琥珀色）：对话框内先断言（模态下侧栏 aria-hidden），关闭后再看侧栏。
+  await dialog.getByRole('textbox', { name: '新标签名称' }).fill('重要');
+  await dialog.getByRole('button', { name: '琥珀', exact: true }).click();
+  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  await expect(dialog.locator('li').filter({ hasText: '重要' })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭对话框' }).click();
+  await expect(tagsNav.getByRole('button', { name: '重要' })).toBeVisible();
+  // 打标签：阅读区标签菜单勾选，标签行出现。
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  await page.getByRole('button', { name: '邮件标签' }).click();
+  await page.getByRole('menuitemcheckbox', { name: '重要' }).click();
+  await expect(page.locator('.reader-labels').getByText('重要')).toBeVisible();
+  // 侧栏按标签筛选：只剩打了标签的邮件。
+  await tagsNav.getByRole('button', { name: '重要' }).click();
+  await expect(page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true })).toHaveCount(0);
+  // 改名 + 换色：id 不变，筛选与已打标邮件跟随新名字。
+  await manage.click();
+  await dialog.getByRole('button', { name: '重命名标签 重要' }).click();
+  const row = dialog.locator('li').filter({ has: page.getByRole('textbox', { name: '重命名标签 重要' }) });
+  await row.getByRole('button', { name: '蓝', exact: true }).click();
+  await row.getByRole('textbox', { name: '重命名标签 重要' }).fill('重要标签');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog.locator('li').filter({ hasText: '重要标签' })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭对话框' }).click();
+  await expect(tagsNav.getByRole('button', { name: '重要标签' })).toBeVisible();
+  await expect(page.locator('.reader-labels').getByText('重要标签')).toBeVisible();
+  await expect(page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true })).toHaveCount(0);
+  // 删除标签（确认对话框）：筛选解除，邮件上的标签一并移除。
+  page.once('dialog', handler => handler.accept());
+  await manage.click();
+  await dialog.getByRole('button', { name: '删除标签 重要标签' }).click();
+  await expect(dialog.getByText('还没有标签，创建第一个来整理邮件。')).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭对话框' }).click();
+  await expect(tagsNav).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('user-labels.png') });
 });

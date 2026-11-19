@@ -6,9 +6,9 @@ mod credentials;
 mod drafts;
 mod error;
 mod imap_body;
-mod imap_drafts;
 mod imap_condstore;
 mod imap_download;
+mod imap_drafts;
 mod imap_folders;
 mod imap_jobs;
 mod imap_limits;
@@ -18,6 +18,7 @@ mod imap_writeback;
 mod mail_attachments;
 mod mail_cache;
 mod mail_html;
+mod mail_labels;
 mod mail_oauth;
 mod mail_recovery;
 mod mail_store;
@@ -440,6 +441,65 @@ async fn mail_delete_folder(
     .map_err(|_| AppError::storage("删除目录任务未完成"))?
 }
 
+// 用户自建标签：纯本机注解（labels 表 scope='local' 无账号），无 IMAP 回写。
+#[tauri::command]
+async fn mail_create_label(
+    db: State<'_, Db>,
+    name: String,
+    color: String,
+) -> Result<mail_store::LabelRow, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_labels::create(&conn, &name, &color)
+    })
+    .await
+    .map_err(|_| AppError::storage("新建标签任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_rename_label(
+    db: State<'_, Db>,
+    id: String,
+    name: String,
+    color: Option<String>,
+) -> Result<mail_store::LabelRow, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_labels::rename(&conn, &id, &name, color.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::storage("标签重命名任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_delete_label(db: State<'_, Db>, id: String) -> Result<(), AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_labels::delete(&conn, &id)
+    })
+    .await
+    .map_err(|_| AppError::storage("删除标签任务未完成"))?
+}
+
+#[tauri::command]
+async fn mail_set_message_labels(
+    db: State<'_, Db>,
+    account_id: String,
+    message_id: String,
+    label_ids: Vec<String>,
+) -> Result<mail_store::MessageRow, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        mail_labels::set_for_message(&mut conn, &account_id, &message_id, &label_ids)
+    })
+    .await
+    .map_err(|_| AppError::storage("保存邮件标签任务未完成"))?
+}
+
 #[tauri::command]
 async fn mail_purge_message(
     db: State<'_, Db>,
@@ -584,9 +644,11 @@ async fn mail_upload_draft(
     revision: u32,
 ) -> Result<(usize, String), AppError> {
     let conn = db.inner().0.clone();
-    tauri::async_runtime::spawn_blocking(move || imap_drafts::upload(&conn, &account_id, &draft_id, revision))
-        .await
-        .map_err(|_| AppError::storage("草稿上传任务未完成"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_drafts::upload(&conn, &account_id, &draft_id, revision)
+    })
+    .await
+    .map_err(|_| AppError::storage("草稿上传任务未完成"))?
 }
 
 #[tauri::command]
@@ -925,6 +987,10 @@ pub fn run() {
             mail_create_folder,
             mail_rename_folder,
             mail_delete_folder,
+            mail_create_label,
+            mail_rename_label,
+            mail_delete_label,
+            mail_set_message_labels,
             mail_keep_message_local,
             get_app_info,
             list_user_skins,

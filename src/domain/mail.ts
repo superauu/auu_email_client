@@ -235,6 +235,13 @@ export interface MailGateway {
   updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage>;
   /** 废纸篓永久删除（桌面端实现；演示端不支持，UI 在非桌面隐藏入口）。 */
   purgeMessage?(accountId: string, messageId: string): Promise<PurgeOutcome>;
+  /** 用户自建标签 CRUD（桌面端实现；演示端不支持，UI 在非桌面禁用入口）。 */
+  createLabel?(name: string, color: MailLabel['color']): Promise<MailLabel>;
+  /** color 缺省 = 仅改名。 */
+  renameLabel?(id: string, name: string, color?: MailLabel['color']): Promise<MailLabel>;
+  deleteLabel?(id: string): Promise<void>;
+  /** 整体替换一封邮件的标签集合（传全量；空集合清除）。 */
+  setMessageLabels?(accountId: string, messageId: string, labelIds: string[]): Promise<MailMessage>;
   keepMessageLocal(accountId: string, messageId: string): Promise<MailMessage>;
   requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage>;
   // Add sync/send through explicit capability interfaces when a provider is implemented.

@@ -182,6 +182,14 @@ export const desktopFolders = {
   async remove(accountId: string, folderId: string): Promise<import('../domain/mail').MailFolder[]> { return invoke('mail_delete_folder', { accountId, folderId }); },
 };
 
+/** 用户自建标签 CRUD：纯本机注解（labels 表 scope='local' 无账号），无 IMAP 回写。 */
+export const desktopLabels = {
+  async create(name: string, color: 'teal' | 'blue' | 'amber'): Promise<MailLabel> { return invoke('mail_create_label', { name, color }); },
+  async rename(id: string, name: string, color?: 'teal' | 'blue' | 'amber'): Promise<MailLabel> { return invoke('mail_rename_label', { id, name, color: color ?? null }); },
+  async remove(id: string): Promise<void> { await invoke('mail_delete_label', { id }); },
+  async setMessageLabels(accountId: string, messageId: string, labelIds: string[]): Promise<MailMessage> { return invoke('mail_set_message_labels', { accountId, messageId, labelIds }); },
+};
+
 /** Real-account lifecycle: verify a connection, persist it, or remove it. */
 export const desktopAccounts = {
   async configuration(id: string): Promise<RealAccountInput> { return invoke('mail_account_config', { id }); },

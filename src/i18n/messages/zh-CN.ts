@@ -700,6 +700,7 @@ export const zhCN = {
   'store.signatureDesktopOnly': '签名设置仅在桌面版可用。',
   'store.trustDesktopOnly': '信任设置仅在桌面版可用。',
   'store.uploadDesktopOnly': '服务器草稿上传仅桌面版 IMAP 账号可用。',
+  'store.labelsDesktopOnly': '标签管理仅桌面版可用。',
   'trust.invalidData': '信任数据无效',
   'store.noRichBody': '当前环境不支持富文本正文。',
   'store.noQuoteFragment': '当前环境无法引用原文。',
@@ -721,6 +722,25 @@ export const zhCN = {
   'ui.errorBoundaryTitle': '工作区暂时无法显示',
   'ui.errorBoundaryBody': '重新打开前，请先复制尚未保存的内容。',
   'errors.fallback': '操作未完成，请重试。',
+
+  // ── 用户自建标签（纯本机注解） ──────────────────────────────
+  'labels.nameRequired': '标签名称不能为空',
+  'labels.nameTooLong': '标签名称过长（最多 64 字符）',
+  'tags.manageAria': '管理标签',
+  'tags.title': '管理标签',
+  'tags.description': '标签是本机注解，用于筛选整理邮件；不会写入服务器。',
+  'tags.createAria': '新标签名称',
+  'tags.createPlaceholder': '标签名称',
+  'tags.createButton': '创建',
+  'tags.empty': '还没有标签，创建第一个来整理邮件。',
+  'tags.renameAria': '重命名标签 {name}',
+  'tags.renameSave': '保存',
+  'tags.deleteAria': '删除标签 {name}',
+  'tags.deleteConfirm': '删除标签「{name}」？邮件上的该标签会一并移除，邮件本身不受影响。',
+  'tags.colorTeal': '青绿',
+  'tags.colorBlue': '蓝',
+  'tags.colorAmber': '琥珀',
+  'reader.labelMenuAria': '邮件标签',
 
   // ── 演示服务 ────────────────────────────────────────────────
   'demo.draftConflict': '草稿已在其他窗口修改，请保留当前内容并重新打开草稿。',

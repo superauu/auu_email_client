@@ -1,5 +1,5 @@
 import type { MailGateway, MailMessage, MailQuery } from '../../domain/mail';
-import { desktopMail, isDesktop } from '../../platform/desktop';
+import { desktopLabels, desktopMail, isDesktop } from '../../platform/desktop';
 import { realWorkspace } from '../../domain/workspace';
 import { t } from '../../i18n/core';
 
@@ -60,4 +60,8 @@ export const desktopMailGateway: MailGateway = {
   async updateMessage(accountId, messageId, patch) { return desktopMail.updateMessage(accountId, messageId, patch); },
   async purgeMessage(accountId, messageId) { return desktopMail.purgeMessage(accountId, messageId); },
   async keepMessageLocal(accountId, messageId) { return desktopMail.keepMessageLocal(accountId, messageId); },
+  async createLabel(name, color) { return desktopLabels.create(name, color); },
+  async renameLabel(id, name, color) { return desktopLabels.rename(id, name, color); },
+  async deleteLabel(id) { return desktopLabels.remove(id); },
+  async setMessageLabels(accountId, messageId, labelIds) { return desktopLabels.setMessageLabels(accountId, messageId, labelIds); },
 };

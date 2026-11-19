@@ -1,6 +1,7 @@
 import { Archive, ChevronDown, ChevronRight, FilePenLine, Folder, Inbox, Pin, PinOff, Plus, Send, Star, Trash2 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
+import { TagManagerDialog } from '../../features/mail/TagManagerDialog';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { Button } from '../ui/Button';
 import { Avatar } from '../ui/Avatar';
@@ -88,7 +89,7 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
       <div className="sidebar-section-title"><span>{t('sidebar.accountsSection')}</span><button title={t('sidebar.manageAccounts')} aria-label={t('sidebar.manageAccountsAria')} onClick={onAccounts}><Plus size={14} /></button></div>
       {!accounts.length && <p className="navigation-empty">{t('sidebar.noAccounts')}</p>}
       <ul className="account-tree">{accounts.map(accountTree)}</ul>
-      {labels.length > 0 && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>{t('sidebar.labelsSection')}</span></div><nav className="folder-list" aria-label={t('sidebar.labelsNavAria')}>{labels.map(label => <button key={label.id} title={label.name} className={query.labelId === label.id && view === 'mail' ? 'is-active' : ''} aria-current={query.labelId === label.id && view === 'mail' ? 'page' : undefined} onClick={() => { setQuery({ accountId: label.accountId ?? null, folderId: null, draftSource: null, labelId: label.id, search: '' }); onNavigate?.(); }}><span className={`label-dot tone-${label.color}`} /><span>{label.name}</span></button>)}</nav></>}
+      {(labels.length > 0 || isDesktop()) && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>{t('sidebar.labelsSection')}</span><TagManagerDialog /></div>{labels.length > 0 && <nav className="folder-list" aria-label={t('sidebar.labelsNavAria')}>{labels.map(label => <button key={label.id} title={label.name} className={query.labelId === label.id && view === 'mail' ? 'is-active' : ''} aria-current={query.labelId === label.id && view === 'mail' ? 'page' : undefined} onClick={() => { setQuery({ accountId: label.accountId ?? null, folderId: null, draftSource: null, labelId: label.id, search: '' }); onNavigate?.(); }}><span className={`label-dot tone-${label.color}`} /><span>{label.name}</span></button>)}</nav>}</>}
       {error && <p className="navigation-error" role="status">{error}</p>}
     </div>
     <div className="sidebar-note"><span className="status-dot" /><div><strong>{t('sidebar.localFirst')}</strong><p>{isDesktop() ? accounts.length ? t('sidebar.mailboxCount', { count: accounts.length }) : t('sidebar.noMailbox') : t('sidebar.demoNote')}</p></div></div>

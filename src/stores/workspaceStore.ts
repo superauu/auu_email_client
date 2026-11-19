@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { ContactSuggestion, DraftAttachment, DraftSaveOptions, MailDraft, MailMessage, MailQuery, MessagePatch, RecoveryAction, ViewCountEntry, WorkspaceSnapshot } from '../domain/mail';
+import type { ContactSuggestion, DraftAttachment, DraftSaveOptions, MailDraft, MailLabel, MailMessage, MailQuery, MessagePatch, RecoveryAction, ViewCountEntry, WorkspaceSnapshot } from '../domain/mail';
+import type { LabelColor } from '../domain/labels';
 import { errorMessage } from '../domain/errors';
 import { isDesktop } from '../platform/desktop';
 import { demoMailGateway } from '../services/demo/DemoMailGateway';
@@ -54,6 +55,12 @@ interface WorkspaceState extends WorkspaceSnapshot {
   deleteMessage: (id: string) => void;
   /** 废纸篓永久删除（IMAP 排队 EXPUNGE / POP3 本机移除）；不可逆，unknown 不自动重试。 */
   purgeMessage: (id: string) => Promise<boolean>;
+  /** 用户自建标签 CRUD（桌面端；演示端诚实拒绝）。 */
+  createLabel: (name: string, color: LabelColor) => Promise<MailLabel>;
+  renameLabel: (id: string, name: string, color?: LabelColor) => Promise<void>;
+  deleteLabel: (id: string) => Promise<void>;
+  /** 整体替换一封邮件的标签集合；返回是否成功。 */
+  setMessageLabels: (accountId: string, messageId: string, labelIds: string[]) => Promise<boolean>;
   moveMessage: (id: string, folderId: string) => void;
   /** 批量操作入口：与单封修改共用串行 / 冲突语义。 */
   applyMessagePatch: (id: string, patch: MessagePatch) => Promise<void>;
@@ -141,6 +148,10 @@ function mutateMessage(id: string, patch: (message: MailMessage) => MessagePatch
   });
   pendingMessages.set(id, task);
   return task;
+}
+/** 标签数组按 (name, id) 排序，镜像 Rust load_workspace 的 ORDER BY name, id。 */
+function sortLabels(labels: MailLabel[]): MailLabel[] {
+  return [...labels].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   accounts: [], messages: [], labels: [], events: [], status: 'idle', error: null, savingIds: [], clearError: () => set({ error: null }),
@@ -396,6 +407,45 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
   async applyMessagePatch(id, patch) { await mutateMessage(id, () => patch); },
+  async createLabel(name, color) {
+    if (!gateway.createLabel) throw new Error(t('store.labelsDesktopOnly'));
+    set({ error: null });
+    const label = await gateway.createLabel(name, color);
+    set(state => ({ labels: sortLabels([...state.labels.filter(item => item.id !== label.id), label]) }));
+    return label;
+  },
+  async renameLabel(id, name, color) {
+    if (!gateway.renameLabel) throw new Error(t('store.labelsDesktopOnly'));
+    set({ error: null });
+    const label = await gateway.renameLabel(id, name, color);
+    set(state => ({ labels: sortLabels([...state.labels.filter(item => item.id !== id), label]) }));
+  },
+  async deleteLabel(id) {
+    if (!gateway.deleteLabel) throw new Error(t('store.labelsDesktopOnly'));
+    set({ error: null });
+    await gateway.deleteLabel(id);
+    const wasFiltering = get().query.labelId === id;
+    set(state => ({
+      labels: state.labels.filter(label => label.id !== id),
+      messages: state.messages.map(message => message.labelIds.includes(id) ? { ...message, labelIds: message.labelIds.filter(item => item !== id) } : message),
+      ...(wasFiltering ? { query: { ...state.query, labelId: null, folderId: null, draftSource: null } } : {}),
+    }));
+    if (wasFiltering) void get().loadView(get().query);
+  },
+  async setMessageLabels(accountId, messageId, labelIds) {
+    if (!gateway.setMessageLabels) throw new Error(t('store.labelsDesktopOnly'));
+    set({ error: null });
+    try {
+      const saved = await gateway.setMessageLabels(accountId, messageId, labelIds);
+      messageEpochs.set(messageId, ++messageMutations);
+      set(state => {
+        const messages = state.messages.map(current => current.id === messageId && (saved.stateRevision ?? 0) >= (current.stateRevision ?? 0) ? saved : current);
+        const visible = selectMessages(messages, state.query);
+        return { messages, selectedId: visible.some(m => m.id === state.selectedId) ? state.selectedId : visible[0]?.id ?? null };
+      });
+      return true;
+    } catch (error) { set({ error: errorMessage(error) }); return false; }
+  },
   moveMessage(id, folderId) {
     mutateMessage(id, message => message.draft ? null : { moveTo: folderId });
   },
