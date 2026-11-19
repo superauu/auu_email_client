@@ -534,9 +534,10 @@ fn sync_session_mode<S: Read + Write>(
         let pending:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM message_recovery WHERE account_id=?1 AND state='queued') OR EXISTS(SELECT 1 FROM imap_body_requests WHERE account_id=?1 AND state='queued')",[&plan.account_id],|r|r.get(0)).map_err(|_|AppError::storage("无法读取剩余只读请求"))?;
         outcome.has_more |= pending;
     }
-    // IDLE 实时监听轮（listening）也会置 has_more——那是常驻后台机制而非"待续同步"，
-    // 不生成这条警告（前端对空轮次静默，见 SYNCHRONIZATION.md）。
-    if outcome.has_more && !outcome.listening {
+    // has_more 本身是内部调度信号（监听轮 / 本地工作轮 / 分批轮次都会置位）：对外警告
+    // 仅在确实拉取了邮件且仍有待续范围时生成——空轮次对界面静默（SYNCHRONIZATION.md），
+    // 否则卡住的 queued 意图会让每轮都弹"仍有邮件范围等待继续同步"。
+    if outcome.has_more && outcome.fetched_messages > 0 && !outcome.listening {
         outcome
             .warnings
             .push("本轮完整批次已保存，仍有邮件范围等待继续同步。".into());

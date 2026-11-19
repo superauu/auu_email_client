@@ -70,6 +70,8 @@ syncStore 在 App 层活动每 750ms、空闲每 5 秒读进度，发现后台�
 
 自动同步 / IDLE 的空轮次对界面完全不可见：`SyncOutcome.refresh_needed` 为诚实语义——只有**拉取到新邮件**（fetched_messages > 0）或**确认了本机回写**（flush 确认数 > 0，含 EXPUNGE / MOVE / 标记 ack 与冲突 / unknown 状态写入）才为 true；`imap_writeback::flush` 返回 (warnings, 确认数)。恢复保护暂停、并发更新抢输、applying 转移失败的跳过不计入。前端 syncStore 另按账号比对 outcome.folders 与上一轮值——远端目录结构变化（0 拉取轮次）同样触发刷新；本机目录 CRUD 自带即时刷新，不经此路径。运行中的任务不再按固定间隔重建工作区（移除原 2 秒节流渐进刷新）：新邮件在轮次终态进入列表（长回填按 has_more 分轮，每轮终态即刷新），阅读界面在无真实变化时零重渲染。失败任务的 outcome 为空，仍按可刷新处理（部分提交的批次需要上屏）。
 
+**挂死修复与提示收敛（2026-11-19 追加）**：实测发现一轮同步在 IDLE DONE 应答读取上无限阻塞——`TracedStream::set_read_timeout` 把库恢复默认的 None 透传成无限读（半开连接永不返回），任务永久 running、flush 停摆、卡住的 queued 意图让每轮 `local_work` 都生成 has_more 警告并弹提示。修复：① TracedStream 的读超时有界（None → 10s，显式值上限 30s）——挂死轮次 10s 内以网络错误结束并自动退避重试；② has_more 警告仅在确实拉取邮件且仍有待续范围时生成（空轮次纯内部调度信号）；③ 快照 listening 覆盖续跑的 queued 间隙（粘性标记跨轮）。
+
 **监听不是"同步中"（2026-11-19）**：IDLE 账号的任务按 5 秒监听片段 + 1 秒续跑无限循环（新邮件到达时 dirty 立即转真实同步轮）——队列快照为这类运行标记 `listening`（live 会话注册表 `IDLING` 置位，真实同步轮清除，`forget` 注销）。前端转圈（顶栏 / 列表工具栏）与"同步中"摘要只对真实同步阶段生效；监听阶段摘要显示"已连接 · 实时监听中…"，同步按钮的禁用逻辑不变（队列语义）。
 
 mail_imap_settings / mail_save_imap_settings 读写账号选项；mail_request_body 只登记原文请求；mail_export_attachment 调系统保存窗口。OAuth 生命周期与连接重配见 [OAUTH_SETUP](OAUTH_SETUP.md)。

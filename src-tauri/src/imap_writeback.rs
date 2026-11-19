@@ -64,7 +64,14 @@ impl<S: imap::extensions::idle::SetReadTimeout> imap::extensions::idle::SetReadT
         &mut self,
         timeout: Option<std::time::Duration>,
     ) -> imap::error::Result<()> {
-        self.inner.set_read_timeout(timeout)
+        // None（无限读，imap 库在 IDLE done 后会恢复默认）必须有界——半开连接上的
+        // DONE 应答读取曾无限阻塞，导致同步轮永久卡死（SYNCHRONIZATION.md 静默同步）。
+        self.inner.set_read_timeout(Some(
+            timeout
+                .unwrap_or(std::time::Duration::from_secs(10))
+                .min(std::time::Duration::from_secs(30))
+                .max(std::time::Duration::from_millis(1)),
+        ))
     }
 }
 fn single_uid(text: &str) -> Option<u32> {
