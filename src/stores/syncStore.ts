@@ -37,9 +37,12 @@ interface SyncState {
   monitor: () => () => void;
 }
 
-/** 用户手动发起同步的账号（本轮终态消费一次）：完成提示只对手动 / 有结果的轮次弹出，
- *  IDLE 监听续跑与自动空轮次静默（SYNCHRONIZATION.md）。 */
+/** 用户手动发起同步的账号（本轮终态消费一次）：完成提示与工具栏转圈只对手动轮次显示，
+ *  IDLE 监听续跑与自动空轮次对界面不可见（SYNCHRONIZATION.md）。 */
 const manualAccounts = new Set<string>();
+export function isManualSync(accountId: string): boolean {
+  return manualAccounts.has(accountId);
+}
 export function consumeManualSync(accountId: string): boolean {
   return manualAccounts.delete(accountId);
 }

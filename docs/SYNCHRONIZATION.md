@@ -76,6 +76,10 @@ syncStore 在 App 层活动每 750ms、空闲每 5 秒读进度，发现后台�
 
 mail_imap_settings / mail_save_imap_settings 读写账号选项；mail_request_body 只登记原文请求；mail_export_attachment 调系统保存窗口。OAuth 生命周期与连接重配见 [OAUTH_SETUP](OAUTH_SETUP.md)。
 
+## reload 非破坏化（2026-11-20）
+
+后台 reload 不再整表丢弃消息缓存（旧行为：每次 reload 列表塌陷重灌、选中被拽回首封）。现在：缓存行保留（DB 行 stateRevision 新者胜、同 revision 保对象身份，未变化行零重渲染）；**当前视图首页总是重取**（增量合并，拉取同步造成的行更新与删除）；全部视图分页仅在消息集合结构性变化（新行/删行）时作废；选中保持——正在阅读的消息仍在缓存中即不重置；视图完整加载后清理已不在服务器的幽灵行（EXPUNGE 确认的废纸篓邮件、被移动的邮件）。工具栏同步状态（转圈 / "同步中…"）只对**用户手动发起**的同步显示，自动同步与 IDLE 监听完全不可见；失败任务仍以"重试"状态可见。
+
 ## 测试与维护
 
 运行 npm run check、npm run check:native、npm run test:ui。脚本覆盖 DB try_lock、两账号队列、取消 / 重排竞争、generation / revision、事务回滚、v8 升级 / 重开、密集分段、跨目录重复、IDLE DONE / 不完整行、CONDSTORE 回退、17 MiB 分块、配额与 keyring 补偿。浏览器仅 test-only IPC harness，不等同原生 WebView / 真实服务端成功。当前前端 gateway 仍拼接全部分页结果，大邮箱列表虚拟化和按视图加载属于后续 UI 性能工程。

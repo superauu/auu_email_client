@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Check, ChevronDown, ChevronRight, FolderInput, ListChecks, RefreshCw, Star, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
-import { useSyncStore } from '../../stores/syncStore';
+import { useSyncStore, isManualSync } from '../../stores/syncStore';
 import { useThemeStore } from '../../stores/themeStore';
 import { useThreadViewStore } from '../../stores/threadViewStore';
 import { mailboxName, selectMessages } from './selectors';
@@ -96,12 +96,12 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
   // 指定账号视图同步该账号；全部账号视图同步所有可同步账号（IMAP + Gmail OAuth）。
   const syncTarget = realAccount;
   const syncable = syncableAccounts(accounts);
-  const syncingAll = syncable.some(({ id }) => submitting.includes(id) || jobs.some(job => job.accountId === id && isSyncActive(job)));
-  const accountSyncing = syncTarget ? submitting.includes(syncTarget.id) || (jobsByAccount.get(syncTarget.id) ? isSyncActive(jobsByAccount.get(syncTarget.id)!) : false) : false;
-  // 转圈只表示"正在主动同步"；IDLE 实时监听是常驻后台状态，不转圈（静默同步语义）。
-  const realSyncing = (id: string) => submitting.includes(id) || (jobsByAccount.get(id) ? isSyncActive(jobsByAccount.get(id)!) && !jobsByAccount.get(id)!.listening : false);
-  const spinningAll = syncable.some(({ id }) => realSyncing(id));
-  const spinningAccount = syncTarget ? realSyncing(syncTarget.id) : false;
+  // 自动同步（含 IDLE 监听）对工具栏不可见：转圈与"同步中…"只在用户手动发起时显示。
+  const manualActive = (id: string) => submitting.includes(id) || (isManualSync(id) && jobs.some(job => job.accountId === id && isSyncActive(job)));
+  const syncingAll = syncable.some(({ id }) => manualActive(id));
+  const accountSyncing = syncTarget ? manualActive(syncTarget.id) : false;
+  const spinningAll = syncingAll;
+  const spinningAccount = accountSyncing;
   function syncCurrent() {
     if (!isDesktop()) return;
     const ids = syncTarget ? [syncTarget.id] : syncable.map(({ id }) => id);
@@ -179,7 +179,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         <button aria-pressed={Boolean(query.unreadOnly)} onClick={() => setQuery({ unreadOnly: true })}>{t('mailList.filterUnread')}</button>
         {query.mailbox !== 'drafts' && <button aria-pressed={threadsEnabled} title={t('mailList.threadToggleTitle')} onClick={toggleThreadView}>{t('mailList.threadToggle')}</button>}
       </div>
-      <div className="list-actions"><span className="list-order" title={t('mailList.orderByDateTitle')}>{t('mailList.orderByDate')}<ArrowDown size={12} /></span><Button variant="ghost" aria-label={t('mailList.selectAllAria')} title={t('mailList.selectAll')} disabled={!visible.length} onClick={() => setSelected(visible.map(message => message.id))}><ListChecks size={14} /></Button><Button variant="ghost" className="account-sync" aria-label={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} title={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? spinningAccount : spinningAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? t('settings.queuing') : jobsByAccount.get(syncTarget.id)?.status === 'queued' ? t('settings.queued') : jobsByAccount.get(syncTarget.id)?.status === 'running' ? (jobsByAccount.get(syncTarget.id)?.listening ? t('syncSummary.listeningRunning') : t('settings.syncing')) : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? t('settings.retry') : t('settings.sync') : syncingAll ? t('settings.syncing') : t('settings.sync')}</Button></div>
+      <div className="list-actions"><span className="list-order" title={t('mailList.orderByDateTitle')}>{t('mailList.orderByDate')}<ArrowDown size={12} /></span><Button variant="ghost" aria-label={t('mailList.selectAllAria')} title={t('mailList.selectAll')} disabled={!visible.length} onClick={() => setSelected(visible.map(message => message.id))}><ListChecks size={14} /></Button><Button variant="ghost" className="account-sync" aria-label={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} title={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? spinningAccount : spinningAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? t('settings.queuing') : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? t('settings.retry') : accountSyncing ? t('settings.syncing') : t('settings.sync') : syncingAll ? t('settings.syncing') : t('settings.sync')}</Button></div>
     </header>}
     <div className="mail-list-scroll" ref={scrollRef}>
       {visible.length === 0 && state?.loading ? <div className="list-loading" role="status">{t('mailList.loadingView')}</div>

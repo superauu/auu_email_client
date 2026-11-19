@@ -97,13 +97,14 @@ function scheduleCountsRefresh() {
   countsTimer = setTimeout(() => { countsTimer = null; void useWorkspaceStore.getState().refreshCounts(); }, 250);
 }
 
-/** 分页行并入缓存：本机草稿不被分页行覆盖，其余按 stateRevision 新者胜。 */
+/** 分页行并入缓存：本机草稿不被分页行覆盖，其余按 stateRevision 新者胜；
+ *  同 revision 保留既有对象身份（未变化行零重渲染）。 */
 function mergeMessages(existing: MailMessage[], incoming: MailMessage[]): MailMessage[] {
   const map = new Map(existing.map(message => [message.id, message]));
   for (const item of incoming) {
     const current = map.get(item.id);
     if (current?.draft && !item.draft) continue;
-    if (!current || (item.stateRevision ?? 0) >= (current.stateRevision ?? 0)) map.set(item.id, item);
+    if (!current || (item.stateRevision ?? 0) > (current.stateRevision ?? 0)) map.set(item.id, item);
   }
   return [...map.values()];
 }
@@ -200,13 +201,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       try {
         const snapshot = await gateway.loadWorkspace();
         const accountIds = new Set(snapshot.accounts.map(account => account.id));
+        // 缓存行保留（此前整表丢弃会让列表塌陷重灌、选中被拽回首封）：
+        // DB 行 stateRevision 新者胜，同 revision 保留既有对象身份（未变化行零重渲染）。
         const merged = new Map(snapshot.messages.map(message => [message.id, message]));
         for (const current of get().messages) {
+          if (current.draft || !accountIds.has(current.accountId)) continue;
           const incoming = merged.get(current.id);
           const changedDuringRead = (messageEpochs.get(current.id) ?? 0) > messageVersion;
-          if (!current.draft && accountIds.has(current.accountId) &&
-            ((incoming && (current.stateRevision ?? 0) > (incoming.stateRevision ?? 0)) ||
-              (changedDuringRead && (!incoming || (current.stateRevision ?? 0) >= (incoming.stateRevision ?? 0))))) merged.set(current.id, current);
+          if (!incoming || (current.stateRevision ?? 0) >= (incoming.stateRevision ?? 0)) merged.set(current.id, current);
+          else if (changedDuringRead) merged.set(current.id, current);
         }
         snapshot.messages = [...merged.values()];
         if (version !== draftMutations) {
@@ -217,6 +220,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           }
           snapshot.messages = [...messages.values()];
         }
+        // 结构变化检测（新行 / 删行）：决定是否作废全部视图分页。仅 revision 变化
+        // （标记回写、正文补齐）不走全量作废——当前视图首页重取即可增量拉到更新行。
+        const previousIds = new Set(get().messages.map(message => message.id));
+        const idSetChanged = previousIds.size !== snapshot.messages.length
+          || snapshot.messages.some(message => !previousIds.has(message.id));
         const query = { ...get().query };
         if (query.accountId && !accountIds.has(query.accountId)) {
           query.accountId = null; query.folderId = null; query.draftSource = null; query.mailbox = 'inbox'; query.labelId = null;
@@ -229,10 +237,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         } else {
           viewCounts = computeViewCounts(snapshot.messages);
         }
+        // 选中保持：正在阅读的消息仍在缓存中即不重置（不再被拽回首封）；
+        // 无选中（首次加载 / 原消息已删除）时回落到当前视图第一封。
         const visible = selectMessages(snapshot.messages, query);
-        const selectedId = visible.some(message => message.id === get().selectedId) ? get().selectedId : visible[0]?.id ?? null;
-        // 全部视图的加载状态作废（服务器数据可能已变），随后立即重载当前视图首页。
-        set({ ...snapshot, folders: snapshot.folders ?? [], query, selectedId, status: 'ready', viewCounts, viewStates: {} });
+        const selectedId = snapshot.messages.some(message => message.id === get().selectedId) ? get().selectedId : visible[0]?.id ?? null;
+        // 结构变化才作废全部视图分页；否则仅重置当前视图首页状态——reload 总会重取
+        // 当前视图首页（增量合并拉取同步造成的行更新），但不再整表丢弃缓存。
+        const currentKey = viewKey(query);
+        const viewStates = idSetChanged ? {} : {
+          ...get().viewStates,
+          [currentKey]: { loading: false, cursor: null, done: false, error: null },
+        };
+        set({ ...snapshot, folders: snapshot.folders ?? [], query, selectedId, status: 'ready', viewCounts, viewStates });
         void get().loadView(get().query);
       } catch (error) { set({ status: wasReady ? 'ready' : 'error', error: errorMessage(error) }); throw error; }
       finally { reloadPending = null; }
@@ -253,7 +269,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       const page = await gateway.loadView(query, null);
       set(state => {
-        const messages = mergeMessages(state.messages, page.items);
+        let messages = mergeMessages(state.messages, page.items);
+        // 视图完整加载（无下页）时，清理视图中已不在服务器的行（如 EXPUNGE 确认后的
+        // 废纸篓邮件、被移动的邮件）——缓存不再残留幽灵行。
+        if (!page.nextCursor) {
+          const pageIds = new Set(page.items.map(item => item.id));
+          const ghosts = selectMessages(state.messages, query).filter(message => !pageIds.has(message.id)).map(message => message.id);
+          if (ghosts.length) messages = messages.filter(message => !ghosts.includes(message.id));
+        }
         const update: Partial<WorkspaceState> = { messages, viewStates: { ...state.viewStates, [key]: { loading: false, cursor: page.nextCursor, done: !page.nextCursor, error: null } } };
         if (viewKey(state.query) === key && !isStillVisible(messages, state.query, state.selectedId)) update.selectedId = selectMessages(messages, state.query)[0]?.id ?? null;
         return update;
