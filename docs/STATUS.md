@@ -7,6 +7,7 @@
 - **正文插图按钮**：撰写格式栏新增「插入图片」（复用 Rust 文件图片选取命令，更名为通用 `mail_compose_pick_image`）——选图以 data URI 插入光标处，与 Ctrl+V 粘贴共用同一条发送管道（outbox data URI → cid + multipart/related）；能力栏文案更新为"支持插入与 Ctrl+V 粘贴图片"。
 - **服务器草稿上传（IMAP APPEND）**：撰写页新增「上传到服务器」（仅桌面 IMAP 账号）——先自动保存核对修订，再以独立短会话把当前草稿 APPEND 到服务器唯一可用草稿目录（\Draft \Seen 标志，收件人允许为空，附件随副本完整上传并核对 sha256；副本 Message-ID 独立生成）。目录解析保守：0 个明确报错、多个不猜；POP3 / 演示端不提供入口（POP3 无服务器草稿目录语义）。上传的是新副本——本机草稿继续独立编辑，同步后服务器草稿区可见副本。
 - **验证**：`cargo test` **280 项全绿**（imap_drafts：修订冲突 / 草稿缺失 / 目录缺失 / POP3 拒绝 / 目录解析 0-1-多与 mUTF-7 显示名）；`npm run check` **87 个 TS**；完整 UI 回归 **83 个 Chromium 用例**（新增：插入图片按钮出图、上传按钮 → 完成提示）。
+- **打包验证（阶段 D 首项）**：`npm run desktop:build` 完整打包通过——NSIS 安装包 `AuuMail_0.1.0_x64-setup.exe`（5.31 MiB）产出至 `src-tauri/target/release/bundle/nsis/`；安装包未入库（构建输出按约定忽略）。
 
 ## 最新增量：远程图片信任发件人 / 发件域名（2026-11-19）
 
