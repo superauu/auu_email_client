@@ -5,11 +5,16 @@ import type { SyncJob } from '../src/domain/sync';
 import type { OutboxEntry } from '../src/domain/outbox';
 
 /** Test-only IPC harness. Validates UI behavior, not a real server or the Rust queue. */
-async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[]; huge?: number; threads?: boolean } = {}) {
+async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'legacy' | 'unknown' | 'queued' | 'paged' | 'fingerprint' | 'unanchored' | 'segmented', completion = false, navigation = false, realAccounts = true, options: { pop3?: boolean; outbox?: OutboxEntry[]; huge?: number; threads?: boolean; ics?: boolean } = {}) {
   const accounts: MailAccount[] = (realAccounts ? [1, 2, 3] : []).map(index => ({ ...demoWorkspace.accounts[0], id: `real-${index}`, name: `测试邮箱 ${index}`, email: `test${index}@mail.example`, provider: 'imap', status: 'offline', capabilities: { ...demoWorkspace.accounts[0].capabilities, send: true } }));
   if (options.pop3) accounts[2] = { ...accounts[2], provider: 'pop3' };
   await page.addInitScript(({ fixture, accounts, messageChanges, recoveryMode, completion, navigation, options }) => {
     const workspace = { ...fixture, accounts: [...fixture.accounts, ...accounts] };
+    if (options.ics) {
+      // ICS 邀请事件：明确时区与 floating（无时区后缀）各一，验证事件视图渲染与徽标。
+      workspace.events.push({ id: 'ics-event-1', accountId: 'real-1', messageId: 'real-message', title: '季度评审会（邀请）', startsAt: '2026-03-01T01:00:00Z', timeZone: 'Asia/Shanghai', completed: false, source: 'ics' });
+      workspace.events.push({ id: 'ics-event-2', accountId: 'real-1', title: '全天训练日', startsAt: '2026-03-15T00:00:00', timeZone: 'floating', completed: false, source: 'ics' });
+    }
     if (messageChanges || completion) workspace.messages.unshift({ ...fixture.messages[0], id: 'real-message', accountId: 'real-1', labelIds: [], unread: false, subject: '离线状态测试', stateRevision: 1, changes: [{ field: 'starred', state: 'conflict', error: 'UIDVALIDITY 已改变，请核对服务器。' }], cc: ['copy@mail.example'], replyTo: ['replies@mail.example'] });
     if (options.huge) {
       const base = workspace.messages[0];
@@ -1334,4 +1339,21 @@ test('user labels: manage dialog creates renames recolors and deletes; reader ta
   await expect(tagsNav).toHaveCount(0);
   await expect(page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('user-labels.png') });
+});
+
+test('ics invitations surface as events with a source badge and floating time zone survives rendering', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, false, false, true, { ics: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '事件与待办', exact: true }).click();
+  const view = page.locator('.events-view');
+  const icsCard = view.locator('.event-card').filter({ hasText: '季度评审会（邀请）' });
+  await expect(icsCard).toBeVisible();
+  await expect(icsCard.locator('.event-source')).toHaveText('来自邮件');
+  await expect(icsCard).toContainText('Asia/Shanghai');
+  await expect(icsCard.getByRole('button', { name: '查看邮件' })).toBeVisible();
+  // floating（无时区）事件按查看者本地时间渲染且不崩溃，时区列显示「按本地时间」。
+  const floatingCard = view.locator('.event-card').filter({ hasText: '全天训练日' });
+  await expect(floatingCard).toBeVisible();
+  await expect(floatingCard).toContainText('按本地时间');
+  await page.screenshot({ path: info.outputPath('events-ics.png') });
 });

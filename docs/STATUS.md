@@ -2,6 +2,14 @@
 
 更新时间：2026-11-19（静默同步）。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**此前完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化；第五批：大邮箱按视图懒加载（启动不再全量分页灌入，Rust 视图计数聚合，搜索改 LIKE 并移除 FTS，v17 迁移）；第六批：同标题会话折叠（列表「对话」开关，默认关闭）。第七批（本轮）：真实协议验收——自建 GreenMail 全栈服务器（IMAP / POP3 / SMTP，TLS + 用户信任库）驱动真实 Rust 协议路径完成六项验收，并修复验收发现的多段 RFC 2231 附件名损坏问题（发送端改单段参数；接收端对 Thunderbird 风格多段续行自行解码覆盖）**。自建服务器验收通过的项目在公网邮箱（Gmail / QQ / 163）上仍建议复验怪癖差异（IMAP 扩展、限速、垃圾过滤）；5 万封级吞吐受 GreenMail 内存实现限制定在 2000 封规模。**第八批：废纸篓永久删除（v18 迁移，UID EXPUNGE 不可逆语义 / unknown 不自动重试 / POP3 仅本机移除），自建服务器验收⑧通过；第九批：IMAP 自定义目录管理（新建 / 重命名 / 删除，设置面板入口，独立短会话执行，目录名按 RFC 3501 modified UTF-7 编码——验收发现服务器拒绝原始 UTF-8 目录名并修复），自建服务器验收⑨通过；第十批：会话增强——对话归组升级为引用链（In-Reply-To / References，随行返回 UI）∪ 归一化标题的并查集连通（覆盖回复中途改主题的会话），阅读区新增会话内上一封 / 下一封导航与位置徽标（仅对话模式且展开会话可见）；第十一批：中文检索升级——v19 迁移重建 FTS5 trigram 分词索引（3 字符滑动窗口，子串语义中英文一致，≥3 字符查询走索引、更短回退 LIKE；UPDATE 触发器限定 OF subject/sender/body 列，未读星标更新不再重索引正文——吸取 017 移除旧 FTS 的写放大教训）；第十二批（本轮）：每账号邮件签名（Outlook 式自动追加，HTML + 内嵌图片，v20 迁移）与发送侧内联图片管道（data URI → cid + multipart/related），自建服务器验收⑩通过；同日静默同步——`SyncOutcome.refresh_needed` 改为诚实语义（仅拉取到邮件或确认了本机回写才刷新，IDLE / 自动同步空轮次界面零感知），移除运行中任务的 2 秒节流渐进刷新，列表筛选按钮禁止 CJK 竖排换行；同日头像功能菜单（Radix DropdownMenu：写邮件 / 搜索 / 同步 / 视图 / 设置集中入口）、Ctrl+V 粘贴剪贴板图片进正文（data URI → cid 管道复用）、远程图片信任发件人 / 发件域名（v21 迁移，信任后自动加载）**。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)、[SYNCHRONIZATION](SYNCHRONIZATION.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
 
+## 最新增量：ICS 日历邀请解析（2026-11-20）
+
+- **范围**：同步收信时从 `text/calendar`（或 .ics 兜底）附件解析 VEVENT 入事件视图（`mail_events` source='ics'，v1 表已预留枚举，无迁移）。IMAP 与 POP3 提交路径一致：`commit_batch` / `commit_pop3` 事务内按 `ics:{message_id}:{序号}` 幂等 upsert——同一邮件重复同步不产生重复事件，用户勾选的完成态不被覆盖；邮件行删除时既有触发器解绑关联。新增依赖 chrono-tz（纯 Rust IANA 时区库）。
+- **解析（`mail_ics`）**：RFC 5545 行折叠展开、SUMMARY 转义还原、DTSTART 支持 UTC（Z）/ TZID（经 chrono-tz 转 UTC ISO，DST 正确）/ 全天 DATE / floating（无时区）——floating 与未知 TZID 存无时区后缀的墙上时间并标记 `floating`，事件视图按查看者本地时区展示，不做错误换算。守护限制：单附件 256 KiB、每封 8 个日历附件 / 20 个事件，超限跳过不伪造；无 DTSTART 或无标题的 VEVENT 跳过。VALARM / RSVP 不解析（边界明确）。
+- **UI**：事件视图 ics 事件显示「来自邮件」徽标；时区格式化容错（floating / 非法时区回退查看者本地），展示语言改用当前界面语言（此前硬编码 zh-CN 的既有缺口顺带修复）。
+- **验证**：`cargo test` **291 项全绿**（新增 7：UTC / TZID 含 DST / floating / 全天、折叠与转义、不完整 VEVENT 跳过与上限、未知时区、commit 幂等与完成态保留、合成 MIME → parse_raw → commit_pop3 端到端、日历附件判定）；`npm run check` 95 个 TS 测试；完整 UI 回归 **87 个 Chromium 用例**（新增 1：ics 事件渲染 + 来源徽标 + floating 时区不崩）。
+- **边界**：只读解析——不做 RSVP 回复、不做提醒通知、不做日历双向同步；DTEND / DURATION / 重复规则（RRULE）未存（事件视图为单时刻卡片）；floating 事件的时刻语义是「查看者本地时间」，非邀请方时区。GreenMail 真实服务器验收（Thunderbird 风格邀请注入 → 同步 → 事件入库）待下轮验收环境运行。
+
 ## 最新增量：保存的搜索（2026-11-20）
 
 - **范围**：当前查询条件（搜索词 + 账号 / 目录 / 标签 / 未读 / 草稿源筛选）的命名快照，存 localStorage `auumail.ui.searches.v1`（纯 UI 偏好，与固定入口同级；桌面与演示通用，无迁移、无 Rust 改动）。上限 30 条。

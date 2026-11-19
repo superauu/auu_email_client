@@ -605,6 +605,8 @@ export const enUS: Record<MessageId, string> = {
   'events.complete': 'Complete',
   'events.markUncompleted': 'Mark as not completed',
   'events.openMessage': 'Open mail',
+  'events.icsBadge': 'From mail',
+  'events.floatingZone': 'local time',
   'events.emptyTitle': 'No events for this account yet',
   'events.emptyBody': 'To-dos and reminders linked to mail will appear here.',
 

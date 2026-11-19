@@ -18,6 +18,7 @@ mod imap_writeback;
 mod mail_attachments;
 mod mail_cache;
 mod mail_html;
+mod mail_ics;
 mod mail_labels;
 mod mail_oauth;
 mod mail_recovery;

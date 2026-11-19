@@ -607,6 +607,8 @@ export const zhCN = {
   'events.complete': '完成',
   'events.markUncompleted': '标记未完成',
   'events.openMessage': '查看邮件',
+  'events.icsBadge': '来自邮件',
+  'events.floatingZone': '按本地时间',
   'events.emptyTitle': '这个账号还没有事件',
   'events.emptyBody': '与邮件关联的待办和提醒会显示在这里。',
 

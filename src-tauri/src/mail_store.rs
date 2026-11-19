@@ -801,7 +801,7 @@ pub fn message_by_id(conn: &Connection, account: &str, id: &str) -> Result<Messa
 
 pub(crate) fn label_ids_for(conn: &Connection, message_id: &str) -> Result<Vec<String>, AppError> {
     let mut stmt = conn
-        .prepare("SELECT label_id FROM message_labels WHERE message_id = ?1")
+        .prepare("SELECT label_id FROM message_labels WHERE message_id = ?1 ORDER BY label_id")
         .map_err(|e| AppError::storage(e.to_string()))?;
     let rows = stmt
         .query_map(params![message_id], |row| row.get(0))

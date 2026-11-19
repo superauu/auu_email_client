@@ -460,6 +460,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .event-check.is-completed { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
 .event-card > div { flex: 1; }
 .event-card h2 { font-size: 13px; font-weight: 500; }
+/* ICS 邀请事件来源徽标。 */
+.event-source { display: inline-flex; margin-left: 7px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; color: var(--text-subtle); vertical-align: 1px; }
 .event-card p { color: var(--text-muted); display: flex; align-items: center; gap: 6px; font-size: 10px; margin-top: 7px; }
 .completed-text { text-decoration: line-through; color: var(--text-subtle); }
 .ai-panel { width: 255px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--canvas); overflow-y: auto; }

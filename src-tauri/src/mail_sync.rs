@@ -93,6 +93,8 @@ pub(crate) struct ParsedMessage {
     starred: bool,
     pub(crate) raw_cache_key: Option<String>,
     pub(crate) attachments: Vec<Attachment>,
+    /// 日历附件中解析出的邀请事件（同步提交时 upsert 事件视图）。
+    pub(crate) ics_events: Vec<crate::mail_ics::IcsEvent>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -754,6 +756,26 @@ pub(crate) fn parse_raw(
                 .collect()
         })
         .unwrap_or_default();
+    // 日历邀请：text/calendar（或 .ics 兜底）附件解析 VEVENT，随消息入库事件视图。
+    let ics_events: Vec<crate::mail_ics::IcsEvent> = parsed
+        .as_ref()
+        .map(|mail| {
+            mail.attachments()
+                .filter_map(|part| {
+                    let name = part.attachment_name().unwrap_or("");
+                    let media_type = part
+                        .content_type()
+                        .map(|t| format!("{}/{}", t.ctype(), t.subtype().unwrap_or("octet-stream")))
+                        .unwrap_or_default();
+                    crate::mail_ics::is_calendar_attachment(&media_type, name)
+                        .then(|| part.contents().to_vec())
+                })
+                .take(crate::mail_ics::MAX_CALENDAR_ATTACHMENTS)
+                .flat_map(|bytes| crate::mail_ics::parse_events(&bytes))
+                .take(crate::mail_ics::MAX_EVENTS_PER_MESSAGE)
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(mail) = parsed.as_ref() {
         // 多段 RFC 2231 续行损坏修复：用自行解码的正确文件名覆盖（附件序号对齐）。
         for (index, name) in rfc2231_attachment_name_fixes(raw, mail) {
@@ -765,6 +787,7 @@ pub(crate) fn parse_raw(
     Ok(ParsedMessage {
         raw_cache_key: None,
         attachments,
+        ics_events,
         content_hash: mail_recovery::hash(raw),
         header_message_id: parsed
             .as_ref()
@@ -1268,6 +1291,7 @@ fn commit_batch(
             params![plan.account_id, id, folder_id],
         )
         .map_err(|_| AppError::storage("邮件文件夹关联未能保存"))?;
+        crate::mail_ics::commit_events(&tx, &plan.account_id, &id, &message.ics_events)?;
     }
     tx.execute("INSERT INTO sync_states (account_id,scope,cursor,updated_at) VALUES (?1,?2,?3,?4)
       ON CONFLICT(account_id,scope) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at",
@@ -1371,6 +1395,7 @@ pub(crate) fn commit_pop3(
             params![account_id, row_id, folder_id],
         )
         .map_err(|_| AppError::storage("邮件文件夹关联未能保存"))?;
+        crate::mail_ics::commit_events(&tx, account_id, &row_id, &message.ics_events)?;
     }
     tx.execute(
         "INSERT INTO sync_states (account_id,scope,cursor,updated_at) VALUES (?1,?2,?3,?4)
@@ -2238,6 +2263,7 @@ aGVsbG8=
         let message = ParsedMessage {
             raw_cache_key: None,
             attachments: vec![],
+            ics_events: Vec::new(),
             content_hash: String::new(),
             header_message_id: None,
             header_references: None,
@@ -2308,6 +2334,7 @@ aGVsbG8=
         let body = ParsedMessage {
             raw_cache_key: None,
             attachments: vec![],
+            ics_events: Vec::new(),
             uid: 1001,
             subject: "Do not replace".into(),
             sender_name: "Sender".into(),

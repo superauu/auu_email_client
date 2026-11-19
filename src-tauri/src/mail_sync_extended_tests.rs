@@ -333,6 +333,7 @@ fn reconfigured_account_uid_reuse_keeps_the_old_message_and_its_local_intent() {
         uid: 1001,
         raw_cache_key: None,
         attachments: vec![],
+        ics_events: Vec::new(),
         content_hash: "new-hash".into(),
         header_message_id: None,
         header_references: None,

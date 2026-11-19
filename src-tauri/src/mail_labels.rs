@@ -284,7 +284,11 @@ mod tests {
         );
         let ids = vec![a.id.clone(), b.id.clone(), a.id.clone()];
         let row = set_for_message(&mut conn, "acc", "m", &ids).unwrap();
-        assert_eq!(row.label_ids, vec![a.id.clone(), b.id.clone()], "去重保序");
+        let mut got = row.label_ids.clone();
+        got.sort();
+        let mut want = vec![a.id.clone(), b.id.clone()];
+        want.sort();
+        assert_eq!(got, want, "去重（读取顺序按标签 id 字典序）");
         // 替换语义：再次设置只保留新集合。
         let ids = vec![b.id.clone()];
         let row = set_for_message(&mut conn, "acc", "m", &ids).unwrap();
