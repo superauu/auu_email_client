@@ -63,6 +63,8 @@ interface WorkspaceState extends WorkspaceSnapshot {
   /** Register a persisted draft into the outbox queue (docs/SENDING.md). */
   messageHtmlFragment: (accountId: string, messageId: string) => Promise<string>;
   sendDraft: (draftId: string, revision: number) => Promise<import('../domain/outbox').OutboxEntry>;
+  /** 服务器草稿上传（IMAP APPEND，返回字节）；演示端明确拒绝。 */
+  uploadDraft: (accountId: string, draftId: string, revision: number) => Promise<number>;
   /** Explicitly discard a local draft (deletes the persisted row). */
   deleteDraft: (draftId: string) => Promise<void>;
   /** 撰写附件选取（Rust 对话框 + 暂存）；演示环境诚实拒绝。 */
@@ -162,6 +164,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!gateway.sendDraft) throw new Error(t('store.noSend'));
     set({ error: null });
     return gateway.sendDraft(draftId, revision);
+  },
+  async uploadDraft(accountId, draftId, revision) {
+    if (!gateway.uploadDraft) throw new Error(t('store.uploadDesktopOnly'));
+    set({ error: null });
+    return gateway.uploadDraft(accountId, draftId, revision);
   },
   async deleteDraft(draftId) {
     if (!gateway.deleteDraft) throw new Error(t('store.noDeleteDraft'));

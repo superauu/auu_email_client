@@ -6,6 +6,7 @@ mod credentials;
 mod drafts;
 mod error;
 mod imap_body;
+mod imap_drafts;
 mod imap_condstore;
 mod imap_download;
 mod imap_folders;
@@ -574,6 +575,20 @@ async fn mail_compose_pick_attachments(
     .await
 }
 
+/// 服务器草稿上传：本机草稿 → IMAP 草稿目录副本（\Draft \Seen，独立短会话，锁外网络）。
+#[tauri::command]
+async fn mail_upload_draft(
+    db: State<'_, Db>,
+    account_id: String,
+    draft_id: String,
+    revision: u32,
+) -> Result<(usize, String), AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || imap_drafts::upload(&conn, &account_id, &draft_id, revision))
+        .await
+        .map_err(|_| AppError::storage("草稿上传任务未完成"))?
+}
+
 #[tauri::command]
 async fn mail_verify_account(
     endpoints: mail_verify::Endpoints,
@@ -772,7 +787,7 @@ fn mail_save_account_signature(
 }
 /// 签名图片选取：Rust 侧文件对话框，返回 data URI（取消返回 null）。
 #[tauri::command]
-async fn mail_compose_pick_signature_image(
+async fn mail_compose_pick_image(
     app: tauri::AppHandle,
 ) -> Result<Option<signature::PickedImage>, AppError> {
     signature::pick_image(app).await
@@ -903,7 +918,7 @@ pub fn run() {
             mail_save_imap_settings,
             mail_account_signature,
             mail_save_account_signature,
-            mail_compose_pick_signature_image,
+            mail_compose_pick_image,
             mail_request_recovery,
             mail_update_message,
             mail_purge_message,
@@ -925,6 +940,7 @@ pub fn run() {
             mail_import_legacy_drafts,
             mail_compose_pick_attachments,
             mail_trusted_senders,
+            mail_upload_draft,
             mail_trust_add,
             mail_trust_remove,
             mail_verify_account,

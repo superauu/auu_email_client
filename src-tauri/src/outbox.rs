@@ -108,10 +108,10 @@ pub(crate) fn parse_recipients(raw: &str) -> Result<Vec<String>, AppError> {
 }
 
 #[derive(Default)]
-struct Recipients {
-    to: Vec<String>,
-    cc: Vec<String>,
-    bcc: Vec<String>,
+pub(crate) struct Recipients {
+    pub(crate) to: Vec<String>,
+    pub(crate) cc: Vec<String>,
+    pub(crate) bcc: Vec<String>,
 }
 
 impl Recipients {
@@ -281,23 +281,23 @@ fn fold_references(value: &str) -> String {
 
 /// 回复草稿的会话关联头（仅回复且原邮件有 Message-ID 时存在）。
 #[derive(Debug, PartialEq, Eq)]
-struct ReplyHeaders {
+pub(crate) struct ReplyHeaders {
     in_reply_to: String,
     references: Option<String>,
 }
 
 /// MIME 组装输入：与账号连接 / 信封无关的草稿内容。
-struct MimeInput<'a> {
-    from_name: &'a str,
-    from_email: &'a str,
-    recipients: &'a Recipients,
-    subject: &'a str,
-    body_text: &'a str,
-    body_html: Option<&'a str>,
-    message_id: &'a str,
-    reply: Option<&'a ReplyHeaders>,
+pub(crate) struct MimeInput<'a> {
+    pub(crate) from_name: &'a str,
+    pub(crate) from_email: &'a str,
+    pub(crate) recipients: &'a Recipients,
+    pub(crate) subject: &'a str,
+    pub(crate) body_text: &'a str,
+    pub(crate) body_html: Option<&'a str>,
+    pub(crate) message_id: &'a str,
+    pub(crate) reply: Option<&'a ReplyHeaders>,
     /// 撰写附件：非空时正文外包一层 multipart/mixed（parts 顺序 = 草稿元数据顺序）。
-    attachments: &'a [AttachmentPayload],
+    pub(crate) attachments: &'a [AttachmentPayload],
 }
 
 /// RFC 2231 扩展参数值转义：attribute-char 安全集合之外的字节全部百分号编码。
@@ -497,7 +497,7 @@ fn inline_image_headers(image: &InlineImage) -> String {
     )
 }
 
-fn assemble(input: &MimeInput<'_>) -> String {
+pub(crate) fn assemble(input: &MimeInput<'_>) -> String {
     let (
         from_name,
         from_email,

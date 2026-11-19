@@ -214,10 +214,11 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_account_signature': return signatures.get(input.accountId as string) ?? { html: '', useNew: true, useReply: true };
         case 'mail_save_account_signature': signatures.set(input.accountId as string, input.signature as { html: string; useNew: boolean; useReply: boolean }); return;
         // 远程图片信任列表：镜像 mail_trust —— add/remove 幂等，列表按 kind:value 记忆。
+        case 'mail_upload_draft': return 2048;
         case 'mail_trusted_senders': return [...trusted.entries()].map(([key, value]) => ({ kind: key.split(':')[0], value, createdAt: '2026-11-19T00:00:00Z' }));
         case 'mail_trust_add': { const kind = String(input.kind); const value = String(input.value).toLowerCase(); trusted.set(`${kind}:${value}`, value); return { kind, value, createdAt: '2026-11-19T00:00:00Z' }; }
         case 'mail_trust_remove': trusted.delete(`${String(input.kind)}:${String(input.value).toLowerCase()}`); return;
-        case 'mail_compose_pick_signature_image': return { dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', name: '签名图片.png', size: 70 };
+        case 'mail_compose_pick_image': return { dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', name: '签名图片.png', size: 70 };
         case 'mail_account_config': {const account=accounts.find(account=>account.id===input.id)!; return {id:account.id,provider:account.provider,name:account.name,email:account.email,imapHost:account.provider === 'pop3' ? 'pop.example.test' : 'imap.example.test',imapPort:account.provider === 'pop3' ? 995 : 993,imapSecurity:'tls',smtpHost:'',smtpPort:465,receiveOnly:true,authUser:account.email,avatar:'T',color:'teal'};}
         case 'mail_verify_account': accountInputs.push({ command, provider: (input.endpoints as { provider?: string }).provider }); return {imap:{ok:true,skipped:false,error:null,code:null},smtp:{ok:false,skipped:true,error:null,code:null},folderCount:2};
         case 'mail_save_account': accountInputs.push({ command, provider: (input.account as { provider?: string }).provider }); return 'real-3';
@@ -1233,4 +1234,16 @@ test('trusted senders auto-load remote images and can be untrusted', async ({ pa
   await expect(frame).toHaveAttribute('srcdoc', /img-src https: data:/);
   await expect(page.getByRole('status').filter({ hasText: '已拦截远程图片' })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('reader-trust-sender.png') });
+});
+
+test('compose uploads the draft to the server drafts folder on demand', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  await page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' }).fill('上传正文');
+  const upload = page.getByRole('button', { name: '上传到服务器', exact: true });
+  await expect(upload).toBeVisible();
+  await upload.click();
+  await expect(page.getByText('已上传到服务器草稿')).toBeVisible();
+  await page.screenshot({ path: info.outputPath('compose-upload.png') });
 });

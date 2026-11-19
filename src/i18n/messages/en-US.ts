@@ -399,7 +399,11 @@ export const enUS: Record<MessageId, string> = {
   'compose.deleting': 'Deleting…',
   'compose.discardTitle': 'Delete this draft and close the compose pane',
   'compose.capabilityFrom': 'Sending from {email}',
-  'compose.imagePasteNote': ' · Paste images with Ctrl+V',
+  'compose.imagePasteNote': ' · Insert or paste images (Ctrl+V)',
+  'compose.uploadToServer': 'Upload to server',
+  'compose.uploading': 'Uploading…',
+  'compose.uploadTitle': 'Upload the current draft as a server draft copy (IMAP APPEND)',
+  'compose.uploadedNotice': 'Uploaded to server drafts; sync to see the copy under Server drafts.',
   'compose.attachDesktopLimitNote': ' · Attachments are desktop-only',
 
   // ── Rich text editor ────────────────────────────────────────
@@ -693,6 +697,7 @@ export const enUS: Record<MessageId, string> = {
   'store.imapOptionsDesktopOnly': 'Sync settings are only available in the desktop app.',
   'store.signatureDesktopOnly': 'Signature settings are only available in the desktop app.',
   'store.trustDesktopOnly': 'Trust settings are only available in the desktop app.',
+  'store.uploadDesktopOnly': 'Uploading server drafts is available for desktop IMAP accounts only.',
   'trust.invalidData': 'Invalid trust data',
   'store.noRichBody': 'Rich-text bodies are not supported in this environment.',
   'store.noQuoteFragment': 'Quoting the original message is not available in this environment.',

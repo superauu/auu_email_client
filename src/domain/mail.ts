@@ -207,6 +207,8 @@ export interface MailGateway {
   /** Persist event completion state (desktop: SQLite; demo: localStorage overlay). */
   updateEvent?(id: string, completed: boolean): Promise<void>;
   /** Sanitized HTML fragment for reply/forward quoting; rejects when no verified raw cache exists. */
+  /** 服务器草稿上传（IMAP APPEND）；演示端与 POP3 缺省（store 明确拒绝 / 隐藏入口）。 */
+  uploadDraft?(accountId: string, draftId: string, revision: number): Promise<number>;
   messageHtmlFragment?(accountId: string, messageId: string): Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md); rejects honestly. */
   sendDraft?(draftId: string, revision: number): Promise<import('./outbox').OutboxEntry>;

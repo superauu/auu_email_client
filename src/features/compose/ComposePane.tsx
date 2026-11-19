@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowLeft, Check, Loader2, Save, Send, Maximize2, Minimize2, Paperclip, Type, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Check, CloudUpload, Loader2, Save, Send, Maximize2, Minimize2, Paperclip, Type, Trash2, X } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import type { MailDraft } from '../../domain/mail';
 import { errorMessage } from '../../domain/errors';
-import { desktop, isDesktop } from '../../platform/desktop';
+import { desktop, desktopMail, isDesktop } from '../../platform/desktop';
 import { DraftSession } from './DraftSession';
 import { RichEditor, escapeHtml } from './RichEditor';
 import { useSignatureStore } from '../../stores/signatureStore';
@@ -26,6 +26,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const messageHtmlFragment = useWorkspaceStore(s => s.messageHtmlFragment);
   const deleteDraft = useWorkspaceStore(s => s.deleteDraft);
   const pickAttachments = useWorkspaceStore(s => s.pickAttachments);
+  const uploadDraftAction = useWorkspaceStore(s => s.uploadDraft);
   const [session] = useState(() => new DraftSession(initial, saveDraft));
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const { draft } = state;
@@ -44,6 +45,7 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
   const [closing, setClosing] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
   const busy = sending || discarding || closing;
+  const [uploading, setUploading] = useState(false);
   const attachments = draft.attachments ?? [];
   // 收件人建议：桌面端由 Rust 聚合最近邮件（大邮箱不再要求全量消息进内存）；失败回退到已缓存消息。
   const contactSuggestions = useWorkspaceStore(s => s.contactSuggestions);
@@ -265,12 +267,17 @@ export function ComposePane({ initial, onClose, onNotice }: { initial: MailDraft
         </li>)}
       </ul>}
       {quoteLoading && <p className="compose-quote-loading" role="status">{t('compose.quoteLoading')}</p>}
-      <RichEditor initialHtml={initial.bodyHtml ?? ''} initialText={initial.replyToId && !initial.revision && !initial.bodyHtml ? '' : initial.bodyText} quoteHtml={quoteHtml} signatureHtml={signatureHtml} disabled={busy} formatting={formatting} onChange={(html, text) => session.update({ bodyHtml: html, bodyText: text })} />
+      <RichEditor initialHtml={initial.bodyHtml ?? ''} initialText={initial.replyToId && !initial.revision && !initial.bodyHtml ? '' : initial.bodyText} quoteHtml={quoteHtml} signatureHtml={signatureHtml} disabled={busy} formatting={formatting} onPickImage={isDesktop() ? async () => { try { return await desktopMail.pickImage(); } catch (error) { setPlatformError(errorMessage(error)); return null; } } : null} onChange={(html, text) => session.update({ bodyHtml: html, bodyText: text })} />
     </div>
     {(state.error || platformError) && <p className="compose-feedback inline-error" role="alert">{state.error || platformError}</p>}
     {confirmSend && <div className="discard-prompt" role="alert"><span>{t('compose.emptySubjectConfirm')}</span><Button disabled={busy} onClick={() => void performSend()}>{t('compose.sendAnyway')}</Button><Button variant="ghost" onClick={() => { setConfirmSend(false); document.getElementById('compose-subject')?.focus(); }}>{t('compose.fillSubject')}</Button></div>}
     {closeTarget && <div className="discard-prompt" role="alert"><span>{t('compose.autosaveFailed')}</span><Button onClick={() => void save(true)} disabled={state.saving || busy}>{closeTarget === 'window' ? t('compose.saveAndExit') : t('compose.saveAndClose')}</Button><Button variant="ghost" disabled={state.saving || busy} onClick={() => void discard()}>{t('compose.discardDraft')}</Button><Button variant="ghost" onClick={() => { setCloseTarget(null); session.resume(); }}>{t('compose.keepEditing')}</Button></div>}
-    <footer className="compose-pane-footer"><span role="status">{state.saving ? <Loader2 size={13} className="spin" /> : state.saved && !state.dirty ? <Check size={13} /> : <Save size={13} />}{status}</span><Button variant="ghost" className="button-danger-ghost" disabled={state.saving || busy} title={t('compose.discardTitle')} onClick={() => void discard()}><Trash2 size={15} />{discarding ? t('compose.deleting') : t('compose.discardDraft')}</Button></footer>
+    <footer className="compose-pane-footer"><span role="status">{state.saving ? <Loader2 size={13} className="spin" /> : state.saved && !state.dirty ? <Check size={13} /> : <Save size={13} />}{status}</span>{isDesktop() && account?.provider === 'imap' && <Button variant="ghost" disabled={busy || uploading || state.saving} title={t('compose.uploadTitle')} onClick={() => void (async () => {
+      setUploading(true);
+      try { await session.flush(); await uploadDraftAction(draft.accountId, draft.id, session.currentRevision); onNotice?.(t('compose.uploadedNotice')); }
+      catch (error) { setPlatformError(errorMessage(error)); }
+      setUploading(false);
+    })()}><CloudUpload size={15} />{uploading ? t('compose.uploading') : t('compose.uploadToServer')}</Button>}<Button variant="ghost" className="button-danger-ghost" disabled={state.saving || busy} title={t('compose.discardTitle')} onClick={() => void discard()}><Trash2 size={15} />{discarding ? t('compose.deleting') : t('compose.discardDraft')}</Button></footer>
     <div className="compose-capability">{canSend ? t('compose.capabilityFrom', { email: account?.email ?? '' }) : sendBlockReason}{isDesktop() ? t('compose.imagePasteNote') : t('compose.attachDesktopLimitNote')}</div>
   </section>;
 }

@@ -30,6 +30,7 @@ export const desktopMailGateway: MailGateway = {
     });
   },
   async viewCounts() { return desktopMail.folderCounts(); },
+  async uploadDraft(accountId: string, draftId: string, revision: number): Promise<number> { return desktopMail.uploadDraft(accountId, draftId, revision); },
   async contactSuggestions(accountId) { return desktopMail.contactSuggestions(accountId); },
   /**
    * 工作区基座：账号 / 目录 / 标签 / 事件 / 同步状态 + 全量本机草稿（数量少且撰写必需）。

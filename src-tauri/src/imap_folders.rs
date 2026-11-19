@@ -164,7 +164,7 @@ fn account_endpoints(
 }
 
 /// 独立短会话：不持有 DB 锁；失败映射为诚实的网络 / 认证错误。
-fn open_session(
+pub(crate) fn open_session(
     db: &SharedDb,
     account: &str,
 ) -> Result<imap::Session<native_tls::TlsStream<std::net::TcpStream>>, AppError> {

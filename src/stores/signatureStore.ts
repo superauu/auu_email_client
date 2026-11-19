@@ -20,6 +20,6 @@ export const useSignatureStore = create<{
   },
   pickImage() {
     if (!isDesktop()) return Promise.reject(new Error(t('store.signatureDesktopOnly')));
-    return desktopMail.pickSignatureImage();
+    return desktopMail.pickImage();
   },
 }));

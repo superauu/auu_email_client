@@ -88,7 +88,9 @@ export const desktopMail = {
   async accountSignature(accountId: string): Promise<import('../domain/signature').AccountSignature> { return invoke('mail_account_signature', { accountId }); },
   async saveAccountSignature(accountId: string, signature: import('../domain/signature').AccountSignature): Promise<void> { return invoke('mail_save_account_signature', { accountId, signature }); },
   /** 签名图片选取：Rust 文件对话框，返回 data URI（取消返回 null）。 */
-  async pickSignatureImage(): Promise<{ dataUri: string; name: string; size: number } | null> { return invoke('mail_compose_pick_signature_image'); },
+  async pickImage(): Promise<{ dataUri: string; name: string; size: number } | null> { return invoke('mail_compose_pick_image'); },
+  /** 服务器草稿上传：IMAP APPEND 到草稿目录副本，返回字节数。 */
+  async uploadDraft(accountId: string, draftId: string, revision: number): Promise<number> { return invoke('mail_upload_draft', { accountId, draftId, revision }); },
   /** 远程图片信任列表（v21）：读取 / 添加 / 移除（kind='sender'|'domain'，value 小写）。 */
   async trustedSenders(): Promise<unknown[]> { return invoke('mail_trusted_senders'); },
   async trustAdd(kind: 'sender' | 'domain', value: string): Promise<unknown> { return invoke('mail_trust_add', { kind, value }); },

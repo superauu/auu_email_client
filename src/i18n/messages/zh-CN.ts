@@ -401,7 +401,11 @@ export const zhCN = {
   'compose.deleting': '正在删除…',
   'compose.discardTitle': '删除这份草稿并关闭撰写面',
   'compose.capabilityFrom': '发件账号：{email}',
-  'compose.imagePasteNote': ' · 支持 Ctrl+V 粘贴图片',
+  'compose.imagePasteNote': ' · 支持插入与 Ctrl+V 粘贴图片',
+  'compose.uploadToServer': '上传到服务器',
+  'compose.uploading': '上传中…',
+  'compose.uploadTitle': '把当前草稿上传为服务器草稿副本（IMAP APPEND）',
+  'compose.uploadedNotice': '已上传到服务器草稿；同步后可在「服务器草稿」查看副本。',
   'compose.attachDesktopLimitNote': ' · 附件仅桌面版可用',
 
   // ── 富文本编辑器 ────────────────────────────────────────────
@@ -695,6 +699,7 @@ export const zhCN = {
   'store.imapOptionsDesktopOnly': '同步设置仅在桌面版可用。',
   'store.signatureDesktopOnly': '签名设置仅在桌面版可用。',
   'store.trustDesktopOnly': '信任设置仅在桌面版可用。',
+  'store.uploadDesktopOnly': '服务器草稿上传仅桌面版 IMAP 账号可用。',
   'trust.invalidData': '信任数据无效',
   'store.noRichBody': '当前环境不支持富文本正文。',
   'store.noQuoteFragment': '当前环境无法引用原文。',
