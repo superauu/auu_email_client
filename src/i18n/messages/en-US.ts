@@ -79,6 +79,7 @@ export const enUS: Record<MessageId, string> = {
   'app.brandTagline': 'Keep your mail in order',
   'app.searchAria': 'Search mail',
   'app.searchPlaceholder': 'Search mail, contacts or keywords',
+  'app.saveSearchAria': 'Save this search',
   'app.badgeLocal': 'Local workspace',
   'app.badgeDemo': 'Demo preview',
   'app.appearanceAria': 'Appearance and skins',
@@ -719,6 +720,21 @@ export const enUS: Record<MessageId, string> = {
   'ui.errorBoundaryTitle': 'The workspace cannot be displayed right now',
   'ui.errorBoundaryBody': 'Copy any unsaved content before reopening.',
   'errors.fallback': 'The operation did not complete — please try again.',
+
+  // ── Saved searches (local preference only) ──────────────────
+  'searches.section': 'Saved searches',
+  'searches.navAria': 'Saved searches',
+  'searches.dialogTitle': 'Save search',
+  'searches.dialogDescription': 'Save the current search term and filters as a one-click entry in the sidebar; stored on this device only.',
+  'searches.nameAria': 'Search name',
+  'searches.namePlaceholder': 'Name this search',
+  'searches.save': 'Save',
+  'searches.savedNotice': 'Saved search "{name}"',
+  'searches.deleteAria': 'Delete saved search {name}',
+  'searches.nameRequired': 'Search name cannot be empty',
+  'searches.nameTooLong': 'Search name is too long (64 characters max)',
+  'searches.limit': 'Up to 30 saved searches — remove an unused one first.',
+  'searches.prefNotSaved': 'Saved searches could not be written right now; they still apply for this session.',
 
   // ── User-created labels (local annotations only) ────────────
   'store.labelsDesktopOnly': 'Label management is available in the desktop app only.',

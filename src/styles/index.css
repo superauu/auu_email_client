@@ -136,6 +136,12 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .folder-list button.is-active { color: var(--accent); background: var(--surface-selected); font-weight: 600; }
 .folder-list button:hover:not(.is-active) { background: var(--surface-hover); }
 .label-dot { height: 7px; width: 7px; border: 1.5px solid var(--tone); border-radius: 50%; margin: 0 5px; }
+/* 已保存搜索：条目 + 悬停可见的删除按钮。 */
+.folder-list .saved-search-row { display: flex; align-items: center; }
+.folder-list .saved-search-row > button:first-child { flex: 1; min-width: 0; }
+.folder-list .saved-search-remove { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 2px; border-radius: 6px; color: var(--text-subtle); }
+.folder-list .saved-search-remove:hover { color: var(--danger); background: var(--surface-hover); }
+.global-search .button { flex-shrink: 0; }
 .local-hint { font-size: 9px; }
 .sidebar-note { border-top: 1px solid var(--border); padding: 18px 2px; display: flex; gap: 9px; align-items: flex-start; margin-top: 16px; }
 .sidebar-note .status-dot { margin-top: 6px; }

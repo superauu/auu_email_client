@@ -81,6 +81,7 @@ export const zhCN = {
   'app.brandTagline': '让邮件井然有序',
   'app.searchAria': '搜索邮件',
   'app.searchPlaceholder': '搜索邮件、联系人或关键词',
+  'app.saveSearchAria': '保存当前搜索',
   'app.badgeLocal': '本地工作区',
   'app.badgeDemo': '演示预览',
   'app.appearanceAria': '外观与皮肤',
@@ -722,6 +723,21 @@ export const zhCN = {
   'ui.errorBoundaryTitle': '工作区暂时无法显示',
   'ui.errorBoundaryBody': '重新打开前，请先复制尚未保存的内容。',
   'errors.fallback': '操作未完成，请重试。',
+
+  // ── 保存的搜索（纯本机偏好） ────────────────────────────────
+  'searches.section': '已保存搜索',
+  'searches.navAria': '已保存搜索',
+  'searches.dialogTitle': '保存搜索',
+  'searches.dialogDescription': '保存当前搜索词与筛选范围，随时从侧栏一键应用；仅存在本机。',
+  'searches.nameAria': '搜索名称',
+  'searches.namePlaceholder': '给这个搜索起个名字',
+  'searches.save': '保存',
+  'searches.savedNotice': '已保存搜索「{name}」',
+  'searches.deleteAria': '删除已保存搜索 {name}',
+  'searches.nameRequired': '搜索名称不能为空',
+  'searches.nameTooLong': '搜索名称过长（最多 64 字符）',
+  'searches.limit': '保存的搜索最多 30 个，请先删除不再使用的。',
+  'searches.prefNotSaved': '保存的搜索暂未写入本机存储，当前会话仍可使用。',
 
   // ── 用户自建标签（纯本机注解） ──────────────────────────────
   'labels.nameRequired': '标签名称不能为空',

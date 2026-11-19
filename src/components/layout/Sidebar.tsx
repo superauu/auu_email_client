@@ -1,6 +1,8 @@
-import { Archive, ChevronDown, ChevronRight, FilePenLine, Folder, Inbox, Pin, PinOff, Plus, Send, Star, Trash2 } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, FilePenLine, Folder, Inbox, Pin, PinOff, Plus, Search, Send, Star, Trash2, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
+import { useSavedSearchStore } from '../../stores/savedSearchStore';
+import { sanitizeSavedQuery, sameQuery, type SavedSearch } from '../../domain/savedSearch';
 import { TagManagerDialog } from '../../features/mail/TagManagerDialog';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { Button } from '../ui/Button';
@@ -39,6 +41,17 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
   const { accounts, messages, folders, labels, query, viewCounts, setQuery, view } = useWorkspaceStore(useShallow(s => ({ accounts: s.accounts, messages: s.messages, folders: s.folders ?? emptyFolders, labels: s.labels, query: s.query, viewCounts: s.viewCounts, setQuery: s.setQuery, view: s.view })));
   const { pinned, expanded, setExpanded, togglePinned, error } = useNavigationStore(useShallow(s => ({ pinned: s.pinned, expanded: s.expanded, setExpanded: s.setExpanded, togglePinned: s.togglePinned, error: s.error })));
   const openIds = expanded ?? (accounts[0] ? [accounts[0].id] : []);
+  const { savedSearches, remove: removeSavedSearch } = useSavedSearchStore(useShallow(s => ({ savedSearches: s.searches, remove: s.remove })));
+  /** 应用保存的搜索：失效引用（账号 / 目录 / 标签已删除）就地重置，不猜测归属。 */
+  function applySavedSearch(entry: SavedSearch) {
+    const sanitized = sanitizeSavedQuery(entry.query, {
+      accountIds: new Set(accounts.map(account => account.id)),
+      folders: folders.map(folder => ({ id: folder.id, accountId: folder.accountId })),
+      labelIds: new Set(labels.map(label => label.id)),
+    });
+    setQuery({ ...sanitized, ...(sanitized.unreadOnly ? { unreadOnly: true } : { unreadOnly: false }), ...(sanitized.draftSource ? { draftSource: sanitized.draftSource } : { draftSource: null }) });
+    onNavigate?.();
+  }
   // 计数来自 store.viewCounts（桌面端 Rust 聚合，演示端全量计算）；账号目录的可见性旗标同源。
   const resolveCount = (target: NavigationTarget): ViewCountEntry | null => countForView(viewCounts, target);
   const directories = new Map(accounts.map(account => [account.id, accountDirectories(account, folders, directoryFlags(account, messages, viewCounts))]));
@@ -90,6 +103,7 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
       {!accounts.length && <p className="navigation-empty">{t('sidebar.noAccounts')}</p>}
       <ul className="account-tree">{accounts.map(accountTree)}</ul>
       {(labels.length > 0 || isDesktop()) && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>{t('sidebar.labelsSection')}</span><TagManagerDialog /></div>{labels.length > 0 && <nav className="folder-list" aria-label={t('sidebar.labelsNavAria')}>{labels.map(label => <button key={label.id} title={label.name} className={query.labelId === label.id && view === 'mail' ? 'is-active' : ''} aria-current={query.labelId === label.id && view === 'mail' ? 'page' : undefined} onClick={() => { setQuery({ accountId: label.accountId ?? null, folderId: null, draftSource: null, labelId: label.id, search: '' }); onNavigate?.(); }}><span className={`label-dot tone-${label.color}`} /><span>{label.name}</span></button>)}</nav>}</>}
+      {savedSearches.length > 0 && <><div className="sidebar-divider" /><div className="sidebar-section-title"><span>{t('searches.section')}</span></div><nav className="folder-list" aria-label={t('searches.navAria')}>{savedSearches.map(entry => <div key={entry.id} className="saved-search-row"><button title={entry.name} className={view === 'mail' && sameQuery(query, entry.query) ? 'is-active' : ''} aria-current={view === 'mail' && sameQuery(query, entry.query) ? 'page' : undefined} onClick={() => applySavedSearch(entry)}><Search size={13} /><span>{entry.name}</span></button><button type="button" className="saved-search-remove" aria-label={t('searches.deleteAria', { name: entry.name })} title={t('searches.deleteAria', { name: entry.name })} onClick={() => removeSavedSearch(entry.id)}><X size={12} /></button></div>)}</nav></>}
       {error && <p className="navigation-error" role="status">{error}</p>}
     </div>
     <div className="sidebar-note"><span className="status-dot" /><div><strong>{t('sidebar.localFirst')}</strong><p>{isDesktop() ? accounts.length ? t('sidebar.mailboxCount', { count: accounts.length }) : t('sidebar.noMailbox') : t('sidebar.demoNote')}</p></div></div>
