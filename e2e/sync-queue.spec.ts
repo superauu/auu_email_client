@@ -921,6 +921,7 @@ test('list multi-select batches mark-read and delete into trash', async ({ page 
   await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
   await rows.nth(1).getByRole('button', { name: /选择邮件/ }).click();
   await expect(page.getByText('已选 2 封')).toBeVisible();
+  await page.screenshot({ path: info.outputPath('mail-batch-bar.png') });
   await list.getByRole('button', { name: '标为已读' }).click();
   await expect(page.getByText('已选 2 封')).toHaveCount(0);
   // 批量删除：全部收件箱移除，废纸篓出现两封。

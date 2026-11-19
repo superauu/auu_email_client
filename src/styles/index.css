@@ -154,7 +154,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .mail-row { position: relative; border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent); }
 .mail-row:hover { background: var(--surface-hover); }
 .mail-row.is-selected { background: var(--surface-selected); box-shadow: inset 3px 0 var(--accent); }
-.mail-row-main { display: block; width: 100%; padding: 7px 14px 7px 20px; min-height: var(--list-row-height); text-align: left; }
+.mail-row-main { display: block; width: 100%; padding: 7px 14px 7px 24px; min-height: var(--list-row-height); text-align: left; }
 .mail-row-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; gap: 8px; line-height: 18px; }
 .sender { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; }
 .sender > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -168,7 +168,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .row-star.is-starred { color: var(--warning); }
 /* 多选：行首选择框默认收起，悬停或选中态展开；16px 框完全落在行首 20px 预留槽内，
    不遮盖发件人 / 主题文字（此前 20px 框跨到 26px，压住内容）。 */
-.row-select { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border); color: transparent; background: var(--surface); opacity: 0; }
+.row-select { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border); color: transparent; background: var(--surface); opacity: 0; }
 .mail-row:hover .row-select, .row-select:focus-visible, .row-select.is-on { opacity: 1; }
 .row-select.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
 .mail-row.is-checked { background: var(--surface-selected); }
@@ -186,8 +186,10 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .thread-child::before { content: ''; position: absolute; left: 26px; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--border) 80%, transparent); }
 /* 批量操作栏与移动目标菜单（阅读区与列表共用）。 */
 .batch-bar { gap: 8px; }
-.batch-count { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
-.batch-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.batch-count { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; flex-shrink: 0; }
+/* 单行布局：按钮不换行不挤压（44px 工具栏装不下两行），过窄时操作区横向滚动。 */
+.batch-actions { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto; min-width: 0; padding-bottom: 2px; }
+.batch-actions button { white-space: nowrap; flex-shrink: 0; }
 .move-menu-wrap { position: relative; display: inline-flex; }
 .move-menu { position: absolute; top: calc(100% + 4px); inset-inline-end: 0; z-index: 30; min-width: 180px; max-height: 260px; overflow: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); padding: 4px; display: flex; flex-direction: column; }
 .move-menu button { display: block; width: 100%; text-align: start; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: var(--text); }
