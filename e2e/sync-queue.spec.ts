@@ -281,6 +281,12 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'mail_oauth_start': oauthState='waiting';return 'flow-test';
         case 'mail_oauth_status': return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
         case 'mail_oauth_cancel': oauthState='cancelled';return {id:'flow-test',state:oauthState,accountId:null,error:null,folderCount:null};
+        // 附件预览：镜像 mail_preview_attachment —— 文本预览（truncated 标记）。
+        case 'mail_preview_attachment': {
+          const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
+          if (!message || !(message.attachments ?? []).some(attachment => attachment.index === input.index)) throw new Error('附件不存在');
+          return { kind: 'text', dataUri: null, text: '季度报告内容第一行\n第二行：数据与结论。', truncated: false };
+        }
         case 'mail_export_attachment': exportCalls++;if(exportCalls===2) throw new Error('原文缓存已被清理，请重新下载');return exportCalls>2;
         case 'mail_send_draft': {
           const draft = drafts.get(input.draftId as string);
@@ -1424,4 +1430,17 @@ test('reader font size re-renders the HTML sandbox with the chosen size', async 
   const requests = await page.evaluate(() => (window as unknown as { __syncTest: { htmlRequests: () => Array<{ id: string; allow: boolean; font?: number }> } }).__syncTest.htmlRequests());
   expect(requests.at(-1)?.font).toBe(17);
   await page.screenshot({ path: info.outputPath('reader-font-sandbox.png') });
+});
+
+test('attachment preview expands inline for text and can be collapsed', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  const list = page.getByRole('region', { name: '邮件附件' });
+  await list.getByRole('button', { name: '预览附件 report.txt' }).click();
+  await expect(list.locator('.attachment-preview-text')).toContainText('季度报告内容第一行');
+  await expect(list.getByRole('button', { name: '收起附件 report.txt 的预览' })).toHaveAttribute('aria-expanded', 'true');
+  await list.getByRole('button', { name: '收起附件 report.txt 的预览' }).click();
+  await expect(list.locator('.attachment-preview-text')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('attachment-preview.png') });
 });

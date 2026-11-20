@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useShallow } from 'zustand/react/shallow';
 import { replyTargets, type MailMessage, type RecoveryAction } from '../../domain/mail';
+import { isPreviewableAttachment } from '../../domain/attachments';
 import { linkifyText } from '../../domain/linkify';
 import { senderDomain } from '../../domain/trust';
 import { errorMessage } from '../../domain/errors';
@@ -15,7 +16,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { selectMessages } from './selectors';
 import { useSyncStore } from '../../stores/syncStore';
-import { desktop, isDesktop } from '../../platform/desktop';
+import { desktop, desktopMail, isDesktop } from '../../platform/desktop';
 import { useThemeStore } from '../../stores/themeStore';
 import { useReaderFontStore } from '../../stores/readerFontStore';
 import { readerFontPx as readerFontPxOf } from '../../domain/readerFont';
@@ -259,17 +260,36 @@ function AttachmentList({ message }: { message: MailMessage }) {
   const exportAttachment = useWorkspaceStore(state => state.exportAttachment);
   const [busy, setBusy] = useState<number | null>(null);
   const [saved, setSaved] = useState('');
+  /** 内联预览：每附件独立展开；图片为 Rust 白名单 data URI，文本为转义安全的纯文本。 */
+  const [previews, setPreviews] = useState<Record<number, import('../../domain/attachments').AttachmentPreview | null>>({});
+  const [previewError, setPreviewError] = useState('');
   async function save(index: number, name: string) {
     setBusy(index); setSaved('');
     if (await exportAttachment(message.id, index)) setSaved(t('reader.savedAttachment', { name }));
+    setBusy(null);
+  }
+  async function togglePreview(attachment: { index: number }) {
+    const existing = previews[attachment.index];
+    setPreviewError('');
+    if (existing) { setPreviews(current => ({ ...current, [attachment.index]: null })); return; }
+    setBusy(attachment.index);
+    try {
+      const preview = await desktopMail.previewAttachment(message.accountId, message.id, attachment.index);
+      setPreviews(current => ({ ...current, [attachment.index]: preview }));
+    } catch (error) { setPreviewError(errorMessage(error)); }
     setBusy(null);
   }
   return <section aria-label={t('reader.attachmentsAria')} className="message-change-status">
     <strong>{t('reader.attachments')}</strong>
     {message.attachments?.map(attachment => <div key={attachment.index}>
       <span>{attachment.name} · {new Intl.NumberFormat(currentLanguage(), { maximumFractionDigits: 1 }).format(attachment.size / 1024)} KB</span>
+      {isDesktop() && !message.draft && isPreviewableAttachment(attachment.mediaType, attachment.name) && <Button variant="ghost" disabled={busy !== null} aria-expanded={Boolean(previews[attachment.index])} aria-label={previews[attachment.index] ? t('reader.previewHideAria', { name: attachment.name }) : t('reader.previewAria', { name: attachment.name })} onClick={() => void togglePreview(attachment)}>{previews[attachment.index] ? t('reader.previewHide') : busy === attachment.index ? t('reader.previewLoading') : t('reader.preview')}</Button>}
       <Button variant="ghost" disabled={busy !== null} aria-label={t('reader.saveAttachmentAria', { name: attachment.name })} onClick={() => void save(attachment.index, attachment.name)}>{busy === attachment.index ? t('reader.saving') : t('reader.saveAs')}</Button>
+      {previews[attachment.index]?.kind === 'image' && <img className="attachment-preview" src={previews[attachment.index]!.dataUri ?? ''} alt={attachment.name} />}
+      {previews[attachment.index]?.kind === 'text' && <pre className="attachment-preview-text">{previews[attachment.index]!.text}</pre>}
+      {previews[attachment.index]?.truncated && <span className="muted" role="status">{t('reader.previewTruncated')}</span>}
     </div>)}
+    {previewError && <p className="inline-error" role="alert">{previewError}</p>}
     <span role="status" aria-live="polite">{saved}</span>
   </section>;
 }

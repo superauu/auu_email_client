@@ -186,6 +186,27 @@ async fn mail_export_attachment(
     mail_attachments::export(app, db.inner().0.clone(), account_id, message_id, index).await
 }
 
+/// 附件内联预览：图片返回 data URI（白名单媒体类型），文本返回截断安全的纯文本；
+/// 锁内读元数据、锁外解析原文，与其他附件路径同一核对纪律。
+#[tauri::command]
+async fn mail_preview_attachment(
+    db: State<'_, Db>,
+    account_id: String,
+    message_id: String,
+    index: usize,
+) -> Result<mail_attachments::AttachmentPreview, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (root, key, attachment) = {
+            let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+            mail_attachments::load(&conn, &account_id, &message_id, index)?
+        };
+        mail_attachments::preview_content(root, key, &attachment)
+    })
+    .await
+    .map_err(|_| AppError::storage("附件预览任务未完成"))?
+}
+
 /// UTC ISO-8601 timestamp for seeding bookkeeping; message times come from the payload.
 fn now_utc() -> String {
     // No chrono dependency: build from the Unix epoch with the std library.
@@ -1033,6 +1054,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             mail_export_attachment,
+            mail_preview_attachment,
             mail_message_html,
             mail_message_html_fragment,
             mail_update_event,

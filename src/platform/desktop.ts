@@ -96,6 +96,8 @@ export const desktopMail = {
   async trustAdd(kind: 'sender' | 'domain', value: string): Promise<unknown> { return invoke('mail_trust_add', { kind, value }); },
   async trustRemove(kind: 'sender' | 'domain', value: string): Promise<void> { return invoke('mail_trust_remove', { kind, value }); },
   async exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean> { return invoke('mail_export_attachment', { accountId, messageId, index }); },
+  /** 附件内联预览：图片返回 data URI（Rust 白名单），文本返回截断安全的纯文本。 */
+  async previewAttachment(accountId: string, messageId: string, index: number): Promise<import('../domain/attachments').AttachmentPreview> { return invoke('mail_preview_attachment', { accountId, messageId, index }); },
   async requestRecovery(accountId: string, messageId: string, revision: number, action: RecoveryAction): Promise<MailMessage> { return invoke('mail_request_recovery', { accountId, messageId, revision, action }); },
   async updateMessage(accountId: string, messageId: string, patch: MessagePatch): Promise<MailMessage> { return invoke('mail_update_message', { accountId, messageId, patch }); },
   /** 废纸篓永久删除：IMAP 排队 EXPUNGE（queued 返回更新行），POP3 / 演示立即本机移除（removed）。 */
