@@ -36,7 +36,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'microsoft',
     labelKey: 'provider.microsoft.label',
     descriptionKey: 'provider.microsoft.desc',
-    available: false,
+    available: true,
     oauth: true,
   },
   {

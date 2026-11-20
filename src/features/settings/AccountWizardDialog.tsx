@@ -160,9 +160,9 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     setSaving(false);
   }
 
-  async function startGmailAuth() {
-    if (!emailReady) return;
-    await oauth.begin({ ...toInput(form, tone, initial?.id), authUser: form.authUser.trim() || form.email.trim() }, { provider: 'google', clientId: '', tenant: 'common' });
+  async function startOAuthAuth() {
+    if (!preset || !emailReady) return;
+    await oauth.begin({ ...toInput(form, tone, initial?.id), authUser: form.authUser.trim() || form.email.trim() }, { provider: preset.id === 'microsoft' ? 'microsoft' : 'google', clientId: '', tenant: 'common' });
   }
 
   async function finishSaved() {
@@ -191,15 +191,15 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     </>}
     {!providerStep && preset && <>
       {oauthOnly && <div className="oauth-hero">
-        <span className="provider-icon-slot provider-icon-slot-lg"><ProviderIcon provider="gmail" /></span>
+        <span className="provider-icon-slot provider-icon-slot-lg"><ProviderIcon provider={preset.id} /></span>
         <div>
-          <h3>{t('wizard.oauthHeading')}</h3>
-          <p>{t('wizard.oauthIntro')}</p>
+          <h3>{t(preset.id === 'microsoft' ? 'wizard.oauthHeadingMicrosoft' : 'wizard.oauthHeading')}</h3>
+          <p>{t(preset.id === 'microsoft' ? 'wizard.oauthIntroMicrosoft' : 'wizard.oauthIntro')}</p>
         </div>
       </div>}
       <fieldset className="wizard-fields" disabled={dialogBusy}>
         <label><span>{t('wizard.nameLabel')}</span><input value={form.name} onChange={update('name')} onBlur={touch('name')} placeholder={t('wizard.namePlaceholder')} autoComplete="off" aria-invalid={shown('name') ? 'true' : undefined} aria-describedby={shown('name') ? 'wizard-err-name' : undefined} />{shown('name') && <span className="field-error" id="wizard-err-name">{t(fieldErrorKey(form, 'name')!)}</span>}</label>
-        <label><span>{t('wizard.emailLabel')}</span><input value={form.email} onChange={update('email')} onBlur={touch('email')} type="email" placeholder={oauthOnly ? 'you@gmail.com' : 'you@example.com'} autoComplete="off" aria-invalid={shown('email') ? 'true' : undefined} aria-describedby={shown('email') ? 'wizard-err-email' : undefined} />{shown('email') && <span className="field-error" id="wizard-err-email">{t(fieldErrorKey(form, 'email')!)}</span>}</label>
+        <label><span>{t('wizard.emailLabel')}</span><input value={form.email} onChange={update('email')} onBlur={touch('email')} type="email" placeholder={oauthOnly ? preset.id === 'microsoft' ? 'you@outlook.com' : 'you@gmail.com' : 'you@example.com'} autoComplete="off" aria-invalid={shown('email') ? 'true' : undefined} aria-describedby={shown('email') ? 'wizard-err-email' : undefined} />{shown('email') && <span className="field-error" id="wizard-err-email">{t(fieldErrorKey(form, 'email')!)}</span>}</label>
         {!oauthOnly && <>
           <label><span>{t('wizard.serverLabel', { protocol: providerId === 'pop3' ? 'POP3' : 'IMAP' })}</span><input value={form.imapHost} onChange={update('imapHost')} onBlur={touch('imapHost')} placeholder={providerId === 'pop3' ? 'pop3.example.com' : 'imap.example.com'} autoComplete="off" aria-invalid={shown('imapHost') ? 'true' : undefined} aria-describedby={shown('imapHost') ? 'wizard-err-imapHost' : undefined} />{shown('imapHost') && <span className="field-error" id="wizard-err-imapHost">{t(fieldErrorKey(form, 'imapHost')!)}</span>}</label>
           <label><span>{t('wizard.portLabel', { protocol: providerId === 'pop3' ? 'POP3' : 'IMAP' })}</span><input value={form.imapPort} onChange={update('imapPort')} onBlur={touch('imapPort')} inputMode="numeric" autoComplete="off" aria-invalid={shown('imapPort') ? 'true' : undefined} aria-describedby={shown('imapPort') ? 'wizard-err-imapPort' : undefined} />{shown('imapPort') && <span className="field-error" id="wizard-err-imapPort">{t(fieldErrorKey(form, 'imapPort')!)}</span>}</label>
@@ -231,7 +231,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
             ? <Button variant="primary" onClick={() => void finishSaved()}>{t('wizard.refreshAccounts')}</Button>
             : oauth.running
               ? <Button variant="secondary" onClick={() => void oauth.stop()}>{t('wizard.cancelAuth')}</Button>
-              : <Button variant="primary" disabled={!emailReady} onClick={() => void startGmailAuth()}>{oauth.flow?.state === 'failed' || oauth.flow?.state === 'cancelled' ? t('settings.reauthorize') : t('wizard.authorizeBrowser')}</Button>}
+              : <Button variant="primary" disabled={!emailReady} onClick={() => void startOAuthAuth()}>{oauth.flow?.state === 'failed' || oauth.flow?.state === 'cancelled' ? t('settings.reauthorize') : t('wizard.authorizeBrowser')}</Button>}
         </> : <>
           {!initial && <Button onClick={backToProviders}><ArrowLeft size={15} />{t('wizard.back')}</Button>}
           <Button variant="secondary" onClick={() => void runTest()} disabled={testing || !valid}>{testing ? <Loader2 size={15} className="spin" /> : null}{testing ? t('wizard.testing') : t('wizard.testConnection')}</Button>

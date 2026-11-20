@@ -489,6 +489,8 @@ export const enUS: Record<MessageId, string> = {
   'wizard.stepNote': 'Gmail authorizes through the system browser with no server details; QQ / 163 log in with an auth code; POP3 and other mailboxes are configured manually. Passwords go only into the system credential store.',
   'wizard.oauthHeading': 'Authorize with your Google account',
   'wizard.oauthIntro': 'Only a name and address are needed to identify the account. Authorization happens in the system browser; AuuMail uses its built-in public app identity (no registration or Client ID required) and only requests mail read access. The refresh token is stored in the system credential store and never leaves this device.',
+  'wizard.oauthHeadingMicrosoft': 'Authorize with your Microsoft account',
+  'wizard.oauthIntroMicrosoft': 'For personal Microsoft accounts such as Outlook / Hotmail / Live. Authorization happens in the system browser; AuuMail uses its built-in public app identity (no registration or Client ID required) and only requests IMAP read access. The refresh token is stored in the system credential store and never leaves this device.',
   'wizard.nameLabel': 'Account name',
   'wizard.namePlaceholder': 'e.g. Work mailbox',
   'wizard.emailLabel': 'Email address',
@@ -677,7 +679,7 @@ export const enUS: Record<MessageId, string> = {
   // ── Provider presets ────────────────────────────────────────
   'provider.gmail.desc': 'Google mail — authorize in the system browser',
   'provider.microsoft.label': 'Outlook / Microsoft 365',
-  'provider.microsoft.desc': 'Available once OAuth app registration completes',
+  'provider.microsoft.desc': 'Personal Outlook / Hotmail / Live mail — authorize in the system browser',
   'provider.qq.label': 'QQ Mail',
   'provider.qq.desc': 'Sign in with an IMAP/SMTP auth code',
   'provider.qq.authHint': 'Enable IMAP in the QQ Mail web version and use the generated auth code (not your QQ password).',

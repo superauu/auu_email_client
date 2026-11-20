@@ -13,8 +13,8 @@ export function OAuthDialog({ account, initial, lockedProvider, onClose, onSaved
   const oauth = useOAuthFlow();
   const running = oauth.running;
   const saved = oauth.flow?.state === 'saved';
-  // Google 空 Client ID 时由后端使用内置公共应用标识；其余提供商仍需显式填写。
-  const builtin = config.provider === 'google' && !config.clientId;
+  // Google / Microsoft 空 Client ID 时由后端使用内置公共应用标识；自定义值优先于内置兜底。
+  const builtin = (config.provider === 'google' || config.provider === 'microsoft') && !config.clientId;
   const finish = async () => { try { oauth.savedRef.current = true; await onSaved(); onClose(); } catch (error) { oauth.setError(t('wizard.savedRefreshFailed', { error: errorMessage(error) })); } };
   const close = async () => { if (oauth.flow?.state === 'committing') return; if (saved) { await finish(); return; } if (running) { await oauth.stop(); return; } onClose(); };
   return <Dialog open onOpenChange={value => { if (!value) void close(); }} title={account.id ? t('oauth.titleReauthorize') : t('oauth.titleAdd')} description={t('oauth.description')}>

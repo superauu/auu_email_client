@@ -37,13 +37,20 @@ pub(crate) struct Config {
     #[serde(default = "common")]
     pub tenant: String,
 }
+/// 内置的 Microsoft 公共桌面应用标识（Entra 应用注册，重定向 http://localhost/callback，
+/// 允许公共客户端流）。公共桌面应用无需 secret；个人账户的 IMAP 委托权限在首次
+/// 登录同意页动态授权（与 Thunderbird 相同的方式），门户无需预配 API 权限。
+pub(crate) const MICROSOFT_BUILTIN_CLIENT_ID: &str = "8ff50577-7f96-40cc-91fe-c9790c471070";
 impl Config {
-    /// 公共桌面客户端允许省略 Client ID：Google 使用内置应用标识兜底，
-    /// Microsoft 仍需显式配置。归一化必须发生在持久化之前，使 profile 与
-    /// keyring Secret 携带同一份配置（见 start 的存储路径）。
+    /// 公共桌面客户端允许省略 Client ID：Google 与 Microsoft 均使用内置应用标识兜底。
+    /// 归一化必须发生在持久化之前，使 profile 与 keyring Secret 携带同一份配置
+    /// （见 start 的存储路径）。
     pub(crate) fn with_builtin_client_id(mut self) -> Self {
-        if self.provider == Provider::Google && self.client_id.trim().is_empty() {
-            self.client_id = GOOGLE_BUILTIN_CLIENT_ID.into();
+        if self.client_id.trim().is_empty() {
+            match self.provider {
+                Provider::Google => self.client_id = GOOGLE_BUILTIN_CLIENT_ID.into(),
+                Provider::Microsoft => self.client_id = MICROSOFT_BUILTIN_CLIENT_ID.into(),
+            }
         }
         self
     }
@@ -438,10 +445,18 @@ mod tests {
             tenant: "common".into(),
         }
         .with_builtin_client_id();
-        assert!(
-            microsoft.validate().is_err(),
-            "Microsoft 空 Client ID 仍应报错"
+        assert_eq!(
+            microsoft.client_id, MICROSOFT_BUILTIN_CLIENT_ID,
+            "Microsoft 空 Client ID 回落到内置公共应用"
         );
+        microsoft.validate().expect("内置 Microsoft Client ID 应通过校验");
+        let microsoft_explicit = Config {
+            provider: Provider::Microsoft,
+            client_id: "explicit-public-id".into(),
+            tenant: "common".into(),
+        }
+        .with_builtin_client_id();
+        assert_eq!(microsoft_explicit.client_id, "explicit-public-id");
     }
     #[test]
     fn token_validation_and_sasl_errors_never_echo_credentials() {

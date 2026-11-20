@@ -491,6 +491,8 @@ export const zhCN = {
   'wizard.stepNote': 'Gmail 通过系统浏览器授权，无需填写服务器信息；QQ / 163 使用授权码登录；POP3 与其他邮箱手动填写服务器。密码只写入系统凭据库。',
   'wizard.oauthHeading': '使用 Google 账号授权',
   'wizard.oauthIntro': '只需名称和地址用于识别账号。授权在系统浏览器完成，AuuMail 使用内置的公共应用标识（无需注册或填写 Client ID），只请求邮件读取权限；刷新令牌保存到系统凭据库，不会离开本机。',
+  'wizard.oauthHeadingMicrosoft': '使用 Microsoft 账户授权',
+  'wizard.oauthIntroMicrosoft': '适用于 Outlook / Hotmail / Live 等个人 Microsoft 账户。授权在系统浏览器完成，AuuMail 使用内置的公共应用标识（无需注册或填写 Client ID），只请求 IMAP 读取权限；刷新令牌保存到系统凭据库，不会离开本机。',
   'wizard.nameLabel': '账号名称',
   'wizard.namePlaceholder': '例如：工作邮箱',
   'wizard.emailLabel': '邮箱地址',
@@ -679,7 +681,7 @@ export const zhCN = {
   // ── 提供商预设 ──────────────────────────────────────────────
   'provider.gmail.desc': 'Google 邮箱，授权在系统浏览器完成',
   'provider.microsoft.label': 'Outlook / Microsoft 365',
-  'provider.microsoft.desc': 'OAuth 应用注册完成后开放',
+  'provider.microsoft.desc': '个人 Outlook / Hotmail / Live 邮箱，授权在系统浏览器完成',
   'provider.qq.label': 'QQ 邮箱',
   'provider.qq.desc': '使用 IMAP/SMTP 授权码登录',
   'provider.qq.authHint': '需要在 QQ 邮箱网页版开启 IMAP 服务，并使用生成的授权码（不是 QQ 密码）。',

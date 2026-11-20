@@ -615,11 +615,17 @@ test('OAuth configuration waits for actual authorization and can be cancelled wi
   await expect(gmail.getByLabel('邮箱地址',{exact:true})).toHaveValue('oauth@gmail.test');
 });
 
-test('provider picker disables unregistered platforms and prefills password IMAP presets', async ({page},info) => {
+test('provider picker enables OAuth providers and prefills password IMAP presets', async ({page},info) => {
   await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('button',{name:'添加账号',exact:true}).click();
   const wizard=page.getByRole('dialog',{name:'添加邮箱账号'});
-  await expect(wizard.getByRole('button',{name:'Outlook / Microsoft 365，即将支持',exact:true})).toBeDisabled();
+  const outlook=wizard.getByRole('button',{name:'添加 Outlook / Microsoft 365 账号',exact:true});
+  await expect(outlook).toBeEnabled();
+  await outlook.click();
+  const ms=page.getByRole('dialog',{name:'添加 Outlook / Microsoft 365 账号'});
+  await expect(ms.getByRole('heading',{name:'使用 Microsoft 账户授权'})).toBeVisible();
+  await expect(ms.getByLabel('邮箱地址',{exact:true})).toHaveAttribute('placeholder','you@outlook.com');
+  await ms.getByRole('button',{name:'返回',exact:true}).click();
   await wizard.getByRole('button',{name:'添加 QQ 邮箱 账号',exact:true}).click();
   const qq=page.getByRole('dialog',{name:'添加 QQ 邮箱 账号'});
   await expect(qq.getByLabel('IMAP 服务器')).toHaveValue('imap.qq.com');
