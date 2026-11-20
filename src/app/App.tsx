@@ -11,7 +11,7 @@ import { SaveSearchDialog } from '../features/mail/SaveSearchDialog';
 import { MailReader } from '../features/mail/MailReader';
 import { ComposePane } from '../features/compose/ComposePane';
 import { SettingsDialog } from '../features/settings/SettingsDialog';
-import { AiPanel } from '../features/ai/AiPanel';
+import { AiPanelGate } from '../features/ai/AiPanel';
 import { EventsView } from '../features/events/EventsView';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { useSyncStore, consumeManualSync, isManualSync } from '../stores/syncStore';
@@ -38,7 +38,7 @@ export function App() {
     return () => observer.disconnect();
   }, [mailArea]);
   const displayedListWidth = Math.min(listWidth, listMax);
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'accounts' | 'about' | null>(null);
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'accounts' | 'ai' | 'about' | null>(null);
   const [draft, setDraft] = useState<MailDraft | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [mobileReading, setMobileReading] = useState(false);
@@ -47,7 +47,7 @@ export function App() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => useSyncStore.getState().monitor(), []);
 
-  function compose(message?: MailMessage, editing = false, mode: 'reply' | 'reply-all' | 'forward' = 'reply') {
+  function compose(message?: MailMessage, editing = false, mode: 'reply' | 'reply-all' | 'forward' = 'reply', aiBodyText?: string) {
     const accountId = message?.accountId ?? query.accountId ?? accounts[0]?.id;
     if (!accountId) return;
     setMobileReading(true); // 窄屏下撰写面替代阅读面时保持可见
@@ -63,11 +63,17 @@ export function App() {
     // 回复目标：普通回复优先 Reply-To；回复全部合并发件人 + To + Cc，剔除本账号地址。
     const accountEmail = accounts.find(a => a.id === accountId)?.email ?? '';
     const targets = message && !editing && mode !== 'forward' ? replyTargets(message, accountEmail, mode) : null;
+    // AI 起草的回复正文走 bodyHtml 通道（escape 后段落化）：reply 草稿的纯文本正文会被
+    // 引用注入规则清空（见 ComposePane initialText），AI 内容是用户确认后的意图文本。
+    const aiHtml = aiBodyText
+      ? aiBodyText.split(/\r?\n/).map(line => `<p>${(line || '<br>').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`).join('')
+      : '';
     setDraft({
       id: `draft-${crypto.randomUUID()}`, accountId,
       to: editing ? message?.to.join(', ') ?? '' : targets ? targets.to.join(', ') : '',
       subject: editing ? message?.subject ?? '' : message ? /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}` : '',
-      bodyText: editing ? message?.bodyText ?? '' : '',
+      bodyText: editing ? message?.bodyText ?? '' : aiBodyText ?? '',
+      ...(aiHtml ? { bodyHtml: aiHtml } : {}),
       ...(targets?.cc.length ? { cc: targets.cc.join(', ') } : {}),
       ...(!editing && message ? { replyToId: message.id } : {}), updatedAt: new Date().toISOString(),
     });
@@ -156,7 +162,7 @@ export function App() {
     </nav>
       <Sidebar onCompose={() => compose()} onAccounts={() => setSettingsTab('accounts')} onNavigate={() => setMobileReading(false)} />
       <ResizeHandle variant="sidebar" label={t('app.sidebarResizeLabel')} value={sidebarWidth} min={MIN_SIDEBAR_WIDTH} max={MAX_SIDEBAR_WIDTH} onResize={setSidebarWidth} onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} />
-      {status === 'error' ? <EmptyState title={t('app.workspaceErrorTitle')} description={error ?? t('app.workspaceErrorFallback')} action={<Button onClick={() => void load()}>{t('app.reload')}</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">{t('app.loading')}</div> : isDesktop() && !accounts.length ? <EmptyState title={t('app.firstAccountTitle')} description={t('app.firstAccountBody')} action={<Button variant="primary" onClick={() => setSettingsTab('accounts')}>{t('app.addMailbox')}</Button>} /> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label={t('app.listResizeLabel')} value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} />{draft ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} /> : <MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />}{aiOpen && <AiPanel onClose={() => setAiOpen(false)} />}</main>}
+      {status === 'error' ? <EmptyState title={t('app.workspaceErrorTitle')} description={error ?? t('app.workspaceErrorFallback')} action={<Button onClick={() => void load()}>{t('app.reload')}</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">{t('app.loading')}</div> : isDesktop() && !accounts.length ? <EmptyState title={t('app.firstAccountTitle')} description={t('app.firstAccountBody')} action={<Button variant="primary" onClick={() => setSettingsTab('accounts')}>{t('app.addMailbox')}</Button>} /> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label={t('app.listResizeLabel')} value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} />{draft ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} /> : <MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />}{aiOpen && <AiPanelGate onClose={() => setAiOpen(value => !value)} onOpenSettings={() => setSettingsTab('ai')} onComposeWithText={(replyTarget, bodyText) => { compose(replyTarget, false, 'reply', bodyText); setAiOpen(false); setMobileReading(true); }} />}</main>}
     </div><footer className="app-statusbar"><span><span className="status-dot" />{isDesktop() ? t('app.statusLocal') : t('app.statusDemo')} · {t('app.statusAccounts', { count: accounts.length })}</span><span><PanelRight size={12} />{isDesktop() ? t('app.statusDesktop') : t('app.statusBrowser')}<span className="status-version">AuuMail 0.1.0</span></span></footer>
     {settingsTab && <SettingsDialog key={settingsTab} open initialTab={settingsTab} onClose={() => setSettingsTab(null)} />}
     {error && status === 'ready' ? <div className="toast" role="alert">{error}<Button variant="ghost" onClick={() => useWorkspaceStore.getState().clearError()}>{t('app.dismissToast')}</Button></div> : notice && <div className="toast" role="status">{notice}</div>}

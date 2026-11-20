@@ -58,6 +58,9 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       workspace.messages.find(message => message.id === 'server-draft')!.folderIds = ['drafts-1'];
     }
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
+    let aiConfig: { baseUrl: string; model: string } | null = null;
+    const credentialKeys = new Set<string>();
+    const aiRuns: Array<{ task: string; messageIds: unknown }> = [];
     const signatures = new Map<string,{html:string;useNew:boolean;useReply:boolean}>();
     const trusted = new Map<string,string>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting'; let pickFailure = false;
@@ -249,6 +252,19 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           return picked.slice(0, 20 - currentCount);
         }
         case 'mail_imap_settings': return imapSettings.get(input.accountId as string) ?? {syncAllFolders:true,historyEnabled:false,autoSyncSeconds:0};
+        // 凭据（含 AI Key）：只存不回读，与 Rust credentials 纪律一致。
+        case 'credential_status': return credentialKeys.has(`${String(input.provider)}:${String(input.accountId)}`);
+        case 'credential_save': credentialKeys.add(`${String(input.provider)}:${String(input.accountId)}`); return;
+        case 'credential_delete': credentialKeys.delete(`${String(input.provider)}:${String(input.accountId)}`); return;
+        // AI：配置存 harness 内存，Key 走 credential_save（只存不回读）；run 按任务返回固定文本并记录调用。
+        case 'ai_get_config': return aiConfig ? { ...aiConfig, keySaved: true } : null;
+        case 'ai_save_config': aiConfig = { baseUrl: String(input.baseUrl), model: String(input.model) }; return;
+        case 'ai_test_connection': return { text: '3', model: aiConfig?.model ?? '' };
+        case 'ai_run': {
+          aiRuns.push({ task: String(input.task), messageIds: input.messageIds });
+          const text = String(input.task) === 'draft-reply' ? '亲爱的同事：\n谢谢你的邮件，我会在周五前给出详细方案。' : String(input.task) === 'extract-events' ? '2026-03-06 - 提交季度报告（负责人：我）' : '这是当前邮件的摘要要点。';
+          return { text, model: aiConfig?.model ?? 'test-model' };
+        }
         case 'mail_save_imap_settings': if(settingFails){settingFails=false;throw new Error('设置暂时未保存');} imapSettings.set(input.accountId as string,input.settings as {syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number});return;
         // 签名：镜像 signature.rs —— 未设置返回默认值（开关全开、空签名），保存后按账号记忆。
         case 'mail_account_signature': return signatures.get(input.accountId as string) ?? { html: '', useNew: true, useReply: true };
@@ -1356,4 +1372,38 @@ test('ics invitations surface as events with a source badge and floating time zo
   await expect(floatingCard).toBeVisible();
   await expect(floatingCard).toContainText('按本地时间');
   await page.screenshot({ path: info.outputPath('events-ics.png') });
+});
+
+test('AI panel: configure service, summarize, draft a reply and hand it to the compose pane', async ({ page }, info) => {
+  test.setTimeout(90000);
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  // 设置 → AI 助手：保存服务地址 / 模型与 Key（Key 经凭据命令，不回显）。
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: 'AI 助手' }).click();
+  const aiTab = page.getByRole('tabpanel', { name: 'AI 助手' });
+  await aiTab.getByRole('textbox', { name: 'AI 服务地址' }).fill('http://127.0.0.1:9/v1');
+  await aiTab.getByRole('textbox', { name: 'AI 模型名称' }).fill('test-model');
+  await aiTab.getByRole('button', { name: '保存配置' }).click();
+  await expect(aiTab.getByText('AI 配置已保存')).toBeVisible();
+  await aiTab.getByRole('textbox', { name: 'AI API Key' }).fill('sk-test-key');
+  await aiTab.getByRole('button', { name: '保存 Key' }).click();
+  await expect(aiTab.getByText('Key 已保存到系统凭据库')).toBeVisible();
+  await page.keyboard.press('Escape');
+  // 阅读邮件 → AI 面板 → 摘要出结果。
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 助手', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'AI 助手' });
+  await expect(panel.getByText('将分析当前邮件：离线状态测试')).toBeVisible();
+  await panel.getByRole('button', { name: '概括邮件内容' }).click();
+  await expect(panel.getByText('这是当前邮件的摘要要点。')).toBeVisible();
+  // 起草回复 → 交给撰写面预填，AI 文本不直接发送。
+  await panel.getByRole('button', { name: '起草回复' }).click();
+  await expect(panel.getByText('谢谢你的邮件，我会在周五前给出详细方案。')).toBeVisible();
+  await panel.getByRole('button', { name: '用此内容写回复' }).click();
+  const compose = page.locator('.compose-pane');
+  await expect(compose).toBeVisible();
+  await expect(compose.getByRole('textbox', { name: '邮件正文' })).toContainText('周五前给出详细方案');
+  await expect(compose.getByRole('combobox', { name: '收件人' })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('ai-reply-draft.png') });
 });

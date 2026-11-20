@@ -19,9 +19,10 @@ import { SignatureOptions } from './SignatureOptions';
 import { useSyncStore } from '../../stores/syncStore';
 import { isSyncActive, syncJobSummary, syncableAccounts } from '../../domain/sync';
 import { OutboxPanel } from './OutboxPanel';
+import { AiOptions } from './AiOptions';
 import { useI18n, useLanguage, currentLanguage, languageLabel, setLanguage, languages } from '../../i18n/react';
 
-export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; onClose: () => void; initialTab: 'appearance' | 'accounts' | 'about' }) {
+export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; onClose: () => void; initialTab: 'appearance' | 'accounts' | 'ai' | 'about' }) {
   const t = useI18n();
   const language = useLanguage();
   const { skins, skinId, mode, warnings, loading, setAppearance, rescan } = useThemeStore(useShallow(s => ({ skins: s.skins, skinId: s.skinId, mode: s.mode, warnings: s.warnings, loading: s.loading, setAppearance: s.setAppearance, rescan: s.rescan })));
@@ -54,7 +55,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
   const lastSync = (id: string) => syncStates?.[id] ? new Intl.DateTimeFormat(currentLanguage(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(syncStates[id])) : null;
   const statusLabel = (status: string) => status === 'demo' ? t('settings.statusDemo') : status === 'connected' ? t('settings.statusConnected') : status === 'offline' ? t('settings.statusOffline') : t('settings.statusReauth');
   return <Dialog open={open} onOpenChange={value => { if (!value) onClose(); }} title={t('settings.title')} description={t('settings.description')} className="settings-dialog">
-    <Tabs.Root defaultValue={initialTab} className="settings-tabs"><Tabs.List className="tab-list" aria-label={t('settings.tabsAria')}><Tabs.Trigger value="appearance">{t('settings.tabAppearance')}</Tabs.Trigger><Tabs.Trigger value="accounts">{t('settings.tabAccounts')}</Tabs.Trigger><Tabs.Trigger value="about">{t('settings.tabAbout')}</Tabs.Trigger></Tabs.List>
+    <Tabs.Root defaultValue={initialTab} className="settings-tabs"><Tabs.List className="tab-list" aria-label={t('settings.tabsAria')}><Tabs.Trigger value="appearance">{t('settings.tabAppearance')}</Tabs.Trigger><Tabs.Trigger value="accounts">{t('settings.tabAccounts')}</Tabs.Trigger><Tabs.Trigger value="ai">{t('settings.tabAi')}</Tabs.Trigger><Tabs.Trigger value="about">{t('settings.tabAbout')}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value="appearance" className="settings-body"><div className="setting-heading"><h3>{t('settings.pickSkin')}</h3><span>{t('settings.skinHint')}</span></div><div className="skin-grid">{skins.map(skin => {
         const sample = resolveSkin([skin], skin.manifest.id, mode, window.matchMedia('(prefers-color-scheme: dark)').matches);
         const selected = skinId === skin.manifest.id;
@@ -72,6 +73,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
       {reauthorizing && <OAuthDialog account={reauthorizing.account} initial={reauthorizing.config} onClose={() => setReauthorizing(null)} onSaved={reload} />}
       {wizardOpen && <AccountWizardDialog open initial={editing} tone={nextTone} onClose={() => setWizardOpen(false)} onSaved={reload} />}
       </Tabs.Content>
+      <Tabs.Content value="ai" className="settings-body"><AiOptions /></Tabs.Content>
       <Tabs.Content value="about" className="settings-body"><div className="about-brand"><img src="/logo.png" alt="" /><div><h3>AuuMail</h3><p>{t('about.tagline')}</p></div><span className="label">v{info?.version ?? '0.1.0'}</span></div><div className="info-card"><h3>{t('about.infraHeading')}</h3><p>{t('about.infraBody')}</p><p>{info ? t('about.dbStatus', { state: info.databaseReady ? t('about.dbStateReady') : t('about.dbStateStopped') }) : t('about.browserInfo')}</p></div></Tabs.Content>
     </Tabs.Root>{error && <p className="inline-error" role="alert">{error}</p>}
   </Dialog>;

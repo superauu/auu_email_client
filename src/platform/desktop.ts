@@ -129,11 +129,23 @@ export const desktopMail = {
   async importLegacyDrafts(drafts: MailDraft[]): Promise<void> { await invoke('mail_import_legacy_drafts', { drafts }); },
 };
 
+/** AI 助手：OpenAI 兼容服务配置（Key 经 desktopCredentials provider 'ai' 单独保存）与任务执行。 */
+export const desktopAi = {
+  async config(): Promise<import('../domain/ai').AiConfig | null> { return invoke<import('../domain/ai').AiConfig | null>('ai_get_config'); },
+  async saveConfig(baseUrl: string, model: string): Promise<void> { await invoke('ai_save_config', { baseUrl, model }); },
+  /** 连通性测试：GET {base}/models，返回模型数量文本。 */
+  async test(): Promise<import('../domain/ai').AiOutcome> { return invoke('ai_test_connection'); },
+  async run(task: 'summarize' | 'draft-reply' | 'extract-events', accountId: string, messageIds: string[], instruction?: string): Promise<import('../domain/ai').AiOutcome> {
+    return invoke('ai_run', { task, accountId, messageIds, instruction: instruction ?? null });
+  },
+};
+
 /** OS credential storage. Secrets travel in only; nothing here ever returns one. */
+/** provider 'ai' 是 AI 服务 Key 的命名空间（固定 account 'global'），不对应邮箱账号。 */
 export const desktopCredentials = {
-  async status(provider: ProviderKind, accountId: string): Promise<boolean> { return invoke('credential_status', { provider, accountId }); },
-  async save(provider: ProviderKind, accountId: string, secret: string): Promise<void> { await invoke('credential_save', { provider, accountId, secret }); },
-  async delete(provider: ProviderKind, accountId: string): Promise<void> { await invoke('credential_delete', { provider, accountId }); },
+  async status(provider: ProviderKind | 'ai', accountId: string): Promise<boolean> { return invoke('credential_status', { provider, accountId }); },
+  async save(provider: ProviderKind | 'ai', accountId: string, secret: string): Promise<void> { await invoke('credential_save', { provider, accountId, secret }); },
+  async delete(provider: ProviderKind | 'ai', accountId: string): Promise<void> { await invoke('credential_delete', { provider, accountId }); },
 };
 
 export interface MailEndpoints {

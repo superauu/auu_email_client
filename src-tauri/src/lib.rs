@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod acceptance;
 mod account_service;
+mod ai_service;
 mod compose_attach;
 mod credentials;
 mod drafts;
@@ -501,6 +502,67 @@ async fn mail_set_message_labels(
     .map_err(|_| AppError::storage("保存邮件标签任务未完成"))?
 }
 
+// AI 助手：OpenAI 兼容服务配置（Key 经凭据命令单独保存，provider 'ai'）与任务执行。
+#[tauri::command]
+async fn ai_get_config(db: State<'_, Db>) -> Result<Option<ai_service::AiConfig>, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        ai_service::read_config(&conn)
+    })
+    .await
+    .map_err(|_| AppError::storage("AI 配置读取任务未完成"))?
+}
+
+#[tauri::command]
+async fn ai_save_config(
+    db: State<'_, Db>,
+    base_url: String,
+    model: String,
+) -> Result<(), AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        ai_service::save_config(&mut conn, &base_url, &model)
+    })
+    .await
+    .map_err(|_| AppError::storage("AI 配置保存任务未完成"))?
+}
+
+#[tauri::command]
+async fn ai_test_connection(db: State<'_, Db>) -> Result<ai_service::AiOutcome, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        ai_service::test_connection(&conn)
+    })
+    .await
+    .map_err(|_| AppError::storage("AI 连接测试任务未完成"))?
+}
+
+#[tauri::command]
+async fn ai_run(
+    db: State<'_, Db>,
+    task: String,
+    account_id: String,
+    message_ids: Vec<String>,
+    instruction: Option<String>,
+) -> Result<ai_service::AiOutcome, AppError> {
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+        ai_service::run(
+            &mut conn,
+            &task,
+            &account_id,
+            &message_ids,
+            instruction.as_deref(),
+        )
+    })
+    .await
+    .map_err(|_| AppError::storage("AI 任务未完成"))?
+}
+
 #[tauri::command]
 async fn mail_purge_message(
     db: State<'_, Db>,
@@ -992,6 +1054,10 @@ pub fn run() {
             mail_rename_label,
             mail_delete_label,
             mail_set_message_labels,
+            ai_get_config,
+            ai_save_config,
+            ai_test_connection,
+            ai_run,
             mail_keep_message_local,
             get_app_info,
             list_user_skins,

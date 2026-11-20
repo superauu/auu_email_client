@@ -38,7 +38,8 @@ pub(crate) fn with_account<T>(
 }
 
 const SERVICE: &str = "AuuMail";
-const PROVIDERS: [&str; 4] = ["imap", "pop3", "microsoft", "gmail"];
+/// "ai" 是 AI 服务的 API Key 命名空间（固定 account_id "global"），不对应任何邮箱账号。
+const PROVIDERS: [&str; 5] = ["imap", "pop3", "microsoft", "gmail", "ai"];
 const MAX_USER_LEN: usize = 200;
 
 fn entry(provider: &str, account_id: &str) -> Result<Entry, AppError> {
