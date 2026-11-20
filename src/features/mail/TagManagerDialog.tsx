@@ -65,7 +65,7 @@ export function TagManagerDialog() {
         <div className="folder-create">
           <label className="sr-only" htmlFor="new-tag-name">{t('tags.createAria')}</label>
           <input id="new-tag-name" value={newName} placeholder={t('tags.createPlaceholder')} aria-label={t('tags.createAria')} maxLength={200} disabled={busy} onChange={event => setNewName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void create(); }} />
-          <div className="tag-color-options" role="group" aria-label={t('tags.title')}>
+          <div className="tag-color-options" role="group" aria-label={t('tags.colorGroupAria')}>
             {LABEL_COLORS.map(color => <button key={color} type="button" className={`tag-color-option${newColor === color ? ' is-active' : ''}`} aria-label={t(COLOR_LABEL[color])} aria-pressed={newColor === color} disabled={busy} onClick={() => setNewColor(color)}><span className={`label-dot tone-${color}`} /></button>)}
           </div>
           <Button disabled={busy || !!labelNameError(newName)} onClick={() => void create()}>{t('tags.createButton')}</Button>
@@ -74,7 +74,7 @@ export function TagManagerDialog() {
           {manageable.map(label => <li key={label.id}>
             {renamingId === label.id ? <>
               <input value={renameValue} aria-label={t('tags.renameAria', { name: label.name })} maxLength={200} disabled={busy} onChange={event => setRenameValue(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void saveRename(); }} autoFocus />
-              <div className="tag-color-options" role="group" aria-label={t('tags.renameAria', { name: label.name })}>
+              <div className="tag-color-options" role="group" aria-label={t('tags.colorGroupAria')}>
                 {LABEL_COLORS.map(color => <button key={color} type="button" className={`tag-color-option${renameColor === color ? ' is-active' : ''}`} aria-label={t(COLOR_LABEL[color])} aria-pressed={renameColor === color} disabled={busy} onClick={() => setRenameColor(color)}><span className={`label-dot tone-${color}`} /></button>)}
               </div>
               <Button disabled={busy || !!labelNameError(renameValue)} onClick={() => void saveRename()}>{t('tags.renameSave')}</Button>

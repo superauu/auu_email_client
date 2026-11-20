@@ -86,7 +86,10 @@ export const desktopMail = {
   async saveImapSettings(accountId: string, settings: import('../domain/imap').ImapSettings): Promise<void> { return invoke('mail_save_imap_settings', { accountId, settings }); },
   /** 每账号签名：读取（未设置返回默认值）与保存（Rust 侧 compose 消毒后入库）。 */
   async accountSignature(accountId: string): Promise<import('../domain/signature').AccountSignature> { return invoke('mail_account_signature', { accountId }); },
-  async saveAccountSignature(accountId: string, signature: import('../domain/signature').AccountSignature): Promise<void> { return invoke('mail_save_account_signature', { accountId, signature }); },
+  /** 多签名（v23）：列表 / 新建或更新（id 缺省新建，makeDefault 抢占唯一默认）/ 删除。 */
+  async signatureList(accountId: string): Promise<import('../domain/signature').SignatureEntry[]> { return invoke('mail_signature_list', { accountId }); },
+  async saveSignature(accountId: string, id: string | null, name: string, signature: import('../domain/signature').AccountSignature, makeDefault: boolean): Promise<import('../domain/signature').SignatureEntry> { return invoke('mail_save_signature', { accountId, id, name, signature, makeDefault }); },
+  async deleteSignature(accountId: string, id: string): Promise<void> { return invoke('mail_delete_signature', { accountId, id }); },
   /** 签名图片选取：Rust 文件对话框，返回 data URI（取消返回 null）。 */
   async pickImage(): Promise<{ dataUri: string; name: string; size: number } | null> { return invoke('mail_compose_pick_image'); },
   /** 服务器草稿上传：IMAP APPEND 到草稿目录副本，返回字节数。 */

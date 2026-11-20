@@ -61,8 +61,8 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     let aiConfig: { baseUrl: string; model: string } | null = null;
     const credentialKeys = new Set<string>();
     let backupStaged = false;
+    const signatureEntries: Array<{ id: string; accountId: string; name: string; html: string; useNew: boolean; useReply: boolean; isDefault: boolean }> = [];
     const aiRuns: Array<{ task: string; messageIds: unknown }> = [];
-    const signatures = new Map<string,{html:string;useNew:boolean;useReply:boolean}>();
     const trusted = new Map<string,string>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting'; let pickFailure = false;
     const htmlRequests: Array<{ id: string; allow: boolean; font?: number }> = []; const openCalls: string[] = [];
@@ -272,8 +272,25 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         }
         case 'mail_save_imap_settings': if(settingFails){settingFails=false;throw new Error('设置暂时未保存');} imapSettings.set(input.accountId as string,input.settings as {syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number});return;
         // 签名：镜像 signature.rs —— 未设置返回默认值（开关全开、空签名），保存后按账号记忆。
-        case 'mail_account_signature': return signatures.get(input.accountId as string) ?? { html: '', useNew: true, useReply: true };
-        case 'mail_save_account_signature': signatures.set(input.accountId as string, input.signature as { html: string; useNew: boolean; useReply: boolean }); return;
+        // 多签名：镜像 signature::list / save_entry（默认唯一）/ delete_entry。
+        case 'mail_signature_list': return structuredClone(signatureEntries.filter(entry => entry.accountId === input.accountId));
+        case 'mail_save_signature': {
+          const value = input.signature as { html: string; useNew: boolean; useReply: boolean };
+          const makeDefault = Boolean(input.makeDefault) || !signatureEntries.some(entry => entry.accountId === input.accountId && entry.isDefault);
+          const id = input.id ? String(input.id) : `sig-harness-${++sequence}`;
+          const entry = { id, accountId: String(input.accountId), name: String(input.name).trim(), html: String(value.html), useNew: Boolean(value.useNew), useReply: Boolean(value.useReply), isDefault: makeDefault };
+          const existing = signatureEntries.findIndex(item => item.id === id && item.accountId === entry.accountId);
+          if (existing >= 0) signatureEntries[existing] = entry; else signatureEntries.push(entry);
+          if (makeDefault) for (const item of signatureEntries) if (item.accountId === entry.accountId && item.id !== id) item.isDefault = false;
+          return structuredClone(entry);
+        }
+        case 'mail_delete_signature': {
+          const index = signatureEntries.findIndex(item => item.id === input.id && item.accountId === input.accountId);
+          if (index < 0) throw new Error('签名不存在或不属于此账号');
+          signatureEntries.splice(index, 1);
+          return;
+        }
+        case 'mail_account_signature': { const entry = signatureEntries.find(item => item.accountId === input.accountId && item.isDefault); return entry ? { html: entry.html, useNew: entry.useNew, useReply: entry.useReply } : { html: '', useNew: true, useReply: true }; }
         // 远程图片信任列表：镜像 mail_trust —— add/remove 幂等，列表按 kind:value 记忆。
         case 'mail_upload_draft': return 2048;
         case 'mail_trusted_senders': return [...trusted.entries()].map(([key, value]) => ({ kind: key.split(':')[0], value, createdAt: '2026-11-19T00:00:00Z' }));
@@ -365,7 +382,6 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
       failNextOutbox() { outboxFails = true; },
       accountInputs: () => structuredClone(accountInputs),
       settings: () => Object.fromEntries(imapSettings),
-      signatures: () => Object.fromEntries(signatures),
       recoveryResult(result: 'located' | 'source-present' | 'unresolved' | 'scanning') { nextRecovery = result; },
       segmentPhase(phase: 'collecting' | 'validating' | 'located' | 'unresolved') { segmentPhase = phase; },
       finish(id: string, failure: boolean) {
@@ -1098,7 +1114,7 @@ test('settings folder management creates renames and deletes custom IMAP folders
   await page.screenshot({ path: info.outputPath('settings-folder-manager.png') });
 });
 
-test('per-account signature editor saves html with an image and keeps its toggles', async ({ page }, info) => {
+test('per-account signatures: create with image, set default, edit and delete in the manager', async ({ page }, info) => {
   await mockDesktop(page, true, undefined, true, true);
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -1106,25 +1122,38 @@ test('per-account signature editor saves html with an image and keeps its toggle
   await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
   const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('还没有签名，新建一个。旧版单签名已迁移为默认签名。')).toBeVisible();
+  // 新建签名（含插入图片）→ 自动成为默认。
+  await dialog.getByRole('button', { name: '新建签名' }).click();
+  await dialog.getByRole('textbox', { name: '签名名称' }).fill('工作签名');
   const editor = dialog.getByRole('textbox', { name: '邮件正文' });
   await editor.fill('张三 · 产品部');
-  // 插入图片：Rust 对话框桩返回 data URI，img 落在光标处。
   await dialog.getByRole('button', { name: '插入图片', exact: true }).click();
   await expect(dialog.locator('.compose-editor img')).toHaveCount(1);
-  // 关闭回复追加开关并保存。
   await dialog.getByRole('checkbox', { name: '回复 / 转发追加签名' }).uncheck();
   await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  // 落库内容含图片（区分保存丢失与重开渲染丢失）。
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncTest: { signatures: () => Record<string, { html: string; useNew: boolean; useReply: boolean }> } }).__syncTest.signatures()['real-1']?.html ?? '')).toContain('data:image/png');
-  // 重开：按账号记忆——文字、图片与开关状态都保留。
+  const row = dialog.locator('.signature-list li').filter({ hasText: '工作签名' });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('默认');
+  // 第二条签名不抢占默认；显式设为默认后星标移动。
+  await dialog.getByRole('button', { name: '新建签名' }).click();
+  await dialog.getByRole('textbox', { name: '签名名称' }).fill('个人签名');
+  await dialog.getByRole('textbox', { name: '邮件正文' }).fill('个人落款');
+  await dialog.getByRole('checkbox', { name: '设为默认签名（撰写时自动追加）' }).check();
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  const personal = dialog.locator('.signature-list li').filter({ hasText: '个人签名' });
+  await expect(personal).toContainText('默认');
+  await expect(row).not.toContainText('默认');
+  // 重开对话框：两条签名与默认标记保持。
+  await dialog.getByRole('button', { name: '关闭对话框' }).click();
   await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
-  const reopened = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
-  await expect(reopened.locator('.compose-editor img')).toHaveCount(1);
-  await expect(reopened.getByRole('textbox', { name: '邮件正文' })).toContainText('张三 · 产品部');
-  await expect(reopened.getByRole('checkbox', { name: '回复 / 转发追加签名' })).not.toBeChecked();
-  await expect(reopened.getByRole('checkbox', { name: '新邮件追加签名' })).toBeChecked();
-  await page.screenshot({ path: info.outputPath('settings-signature.png') });
+  await expect(dialog.locator('.signature-list li')).toHaveCount(2);
+  await expect(dialog.locator('.signature-list li').filter({ hasText: '个人签名' })).toContainText('默认');
+  // 删除默认签名（确认对话框）。
+  page.once('dialog', handler => handler.accept());
+  await dialog.locator('.signature-list li').filter({ hasText: '个人签名' }).getByRole('button', { name: '删除签名 个人签名' }).click();
+  await expect(dialog.locator('.signature-list li')).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('signature-manager.png') });
 });
 
 test('compose appends the signature to new mail and above the reply quote', async ({ page }, info) => {
@@ -1135,10 +1164,16 @@ test('compose appends the signature to new mail and above the reply quote', asyn
   const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
   await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
   const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  // 多签名管理（v23）：新建默认签名后再进入编辑。
+  await dialog.getByRole('button', { name: '新建签名' }).click();
+  await dialog.getByRole('textbox', { name: '签名名称' }).fill('默认签名');
   await dialog.getByRole('textbox', { name: '邮件正文' }).fill('张三 · 产品部');
   await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(dialog.locator('.signature-list li').filter({ hasText: '默认签名' })).toContainText('默认');
+  await dialog.getByRole('button', { name: '关闭对话框' }).click();
   await expect(dialog).toHaveCount(0);
-  await page.keyboard.press('Escape');
+  // 关闭外层设置对话框。
+  await page.getByRole('dialog').getByRole('button', { name: '关闭对话框' }).click();
   // 新邮件：签名自动追加；光标在签名上方，打字不落在签名之后。
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   const editor = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
@@ -1164,10 +1199,13 @@ test('compose appends the signature to new mail and above the reply quote', asyn
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
   const toggle = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  // 编辑默认签名（列表态 → 编辑态）：关掉回复追加开关。
+  await toggle.locator('.signature-list li').filter({ hasText: '默认签名' }).getByRole('button', { name: '编辑签名 默认签名' }).click();
   await toggle.getByRole('checkbox', { name: '回复 / 转发追加签名' }).uncheck();
   await toggle.getByRole('button', { name: '保存设置', exact: true }).click();
-  await expect(toggle).toHaveCount(0);
-  await page.keyboard.press('Escape');
+  await expect(toggle.locator('.signature-list li').filter({ hasText: '默认签名' })).toBeVisible();
+  await toggle.getByRole('button', { name: '关闭对话框' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '关闭对话框' }).click();
   await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
   await page.getByRole('button', { name: '回复邮件', exact: true }).click();
   const plain = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });

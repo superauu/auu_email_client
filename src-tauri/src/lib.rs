@@ -990,18 +990,58 @@ fn mail_account_signature(
         .map_err(|_| AppError::storage("数据库忙"))?;
     signature::read(&conn, &account_id)
 }
+/// 签名列表（多签名，v23）。
 #[tauri::command]
-fn mail_save_account_signature(
+fn mail_signature_list(
     db: State<'_, Db>,
     account_id: String,
+) -> Result<Vec<signature::SignatureEntry>, AppError> {
+    let conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    signature::list(&conn, &account_id)
+}
+
+/// 新建或更新一条签名（id 缺省 = 新建；make_default 抢占该账号唯一默认）。
+#[tauri::command]
+fn mail_save_signature(
+    db: State<'_, Db>,
+    account_id: String,
+    id: Option<String>,
+    name: String,
     signature: signature::Signature,
+    make_default: bool,
+) -> Result<signature::SignatureEntry, AppError> {
+    let mut conn = db
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| AppError::storage("数据库忙"))?;
+    signature::save_entry(
+        &mut conn,
+        &account_id,
+        id.as_deref(),
+        &name,
+        &signature,
+        make_default,
+    )
+}
+
+/// 删除签名；删除默认签名后撰写注入自然回退为不注入。
+#[tauri::command]
+fn mail_delete_signature(
+    db: State<'_, Db>,
+    account_id: String,
+    id: String,
 ) -> Result<(), AppError> {
     let conn = db
         .inner()
         .0
         .lock()
         .map_err(|_| AppError::storage("数据库忙"))?;
-    signature::save(&conn, &account_id, &signature)
+    signature::delete_entry(&conn, &account_id, &id)
 }
 /// 签名图片选取：Rust 侧文件对话框，返回 data URI（取消返回 null）。
 #[tauri::command]
@@ -1138,7 +1178,9 @@ pub fn run() {
             mail_imap_settings,
             mail_save_imap_settings,
             mail_account_signature,
-            mail_save_account_signature,
+            mail_signature_list,
+            mail_save_signature,
+            mail_delete_signature,
             mail_compose_pick_image,
             mail_request_recovery,
             mail_update_message,

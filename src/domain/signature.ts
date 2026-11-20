@@ -19,6 +19,21 @@ export const MAX_INLINE_IMAGE = 1024 * 1024;
 /** 签名单图上限（解码后字节；与 Rust signature::MAX_SIGNATURE_IMAGE 对称）。 */
 export const MAX_SIGNATURE_IMAGE = MAX_INLINE_IMAGE;
 
+/** 签名列表条目（v23 多签名）：id 为不透明字符串；isDefault 供撰写注入与设置页星标。 */
+export interface SignatureEntry {
+  id: string;
+  name: string;
+  html: string;
+  useNew: boolean;
+  useReply: boolean;
+  isDefault: boolean;
+}
+
+/** 签名数量上限（与 Rust MAX_SIGNATURES_PER_ACCOUNT 对称）。 */
+export const MAX_SIGNATURES_PER_ACCOUNT = 10;
+/** 签名名称长度上限。 */
+export const MAX_SIGNATURE_NAME_CHARS = 100;
+
 export function validateAccountSignature(raw: unknown): AccountSignature {
   if (!raw || typeof raw !== 'object') throw new Error(t('signature.invalidData'));
   const value = raw as Record<string, unknown>;

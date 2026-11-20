@@ -27,10 +27,12 @@ function NavigationRow({ entry, active, count, onSelect, secondary, pin }: {
   const value = count ? (showTotal ? count.total : count.unread) : 0;
   const metric = entry.kind === 'drafts' ? t('sidebar.draftCount', { count: value }) : entry.kind === 'starred' ? t('sidebar.starredCount', { count: value }) : t('sidebar.unreadCount', { count: value });
   const name = secondary ? `${entry.label} · ${secondary}` : entry.label;
+  // 未读数经 aria-describedby 附加（不改变 accessible name，读屏在名称后播报计数）。
+  const describedBy = count && value > 0 ? `nav-count-${navigationKey(entry.target).replace(/[^a-zA-Z0-9-]/g, '-')}` : undefined;
   return <div className={`navigation-row${active ? ' is-active' : ''}`}>
-    <button type="button" className="navigation-link" aria-label={name} aria-current={active ? 'page' : undefined} title={`${entry.description} · ${metric}`} onClick={onSelect}>
+    <button type="button" className="navigation-link" aria-label={name} aria-describedby={describedBy} aria-current={active ? 'page' : undefined} title={`${entry.description} · ${metric}`} onClick={onSelect}>
       <Icon size={16} /><span className="navigation-label"><span>{entry.label}</span>{secondary && <small>{secondary}</small>}</span>
-      {!entry.available ? <small className="navigation-unavailable">{t('sidebar.unavailable')}</small> : count && value > 0 && <small className="navigation-count" title={metric} aria-hidden>{value}</small>}
+      {!entry.available ? <small className="navigation-unavailable">{t('sidebar.unavailable')}</small> : count && value > 0 && <small className="navigation-count" id={`nav-count-${navigationKey(entry.target).replace(/[^a-zA-Z0-9-]/g, '-')}`} title={metric} aria-hidden>{value}</small>}
     </button>
     {pin && <button type="button" className={`navigation-pin${pin.pinned ? ' is-pinned' : ''}`} aria-label={pin.pinned ? t('sidebar.unpinAria', { account: pin.accountName, folder: entry.label }) : t('sidebar.pinAria', { account: pin.accountName, folder: entry.label })} aria-pressed={pin.pinned} title={pin.pinned ? t('sidebar.unpinTitle') : t('sidebar.pinTitle')} onClick={pin.onToggle}>{pin.pinned ? <PinOff size={13} /> : <Pin size={13} />}</button>}
   </div>;
@@ -74,8 +76,8 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
     return <li className="account-branch" key={account.id}>
       <div className={`account-heading${query.accountId === account.id ? ' is-current' : ''}`}>
         <button className="account-disclosure" type="button" aria-label={opened ? t('sidebar.collapseFolderAria', { account: account.name }) : t('sidebar.expandFolderAria', { account: account.name })} aria-expanded={opened} aria-controls={controls} onClick={toggle}>{opened ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
-        <button className="account-select" type="button" aria-label={account.name} aria-pressed={query.accountId === account.id} title={`${account.name} · ${account.email}${account.status === 'demo' ? t('sidebar.demoAccountSuffix') : ''}`} onClick={() => navigate(inbox.target)}>
-          <Avatar text={account.avatar} color={account.color} small /><span>{account.name}</span>{account.status === 'demo' && <small className="account-demo-badge" aria-hidden>{t('sidebar.demoBadge')}</small>}{viewCounts && unread > 0 && <small className="navigation-count" aria-hidden title={t('sidebar.inboxUnreadTitle', { unread })}>{unread}</small>}
+        <button className="account-select" type="button" aria-label={account.name} aria-describedby={viewCounts && unread > 0 ? `account-unread-${encodeURIComponent(account.id).replace(/[^a-zA-Z0-9-]/g, '-')}` : undefined} aria-current={query.accountId === account.id ? 'true' : undefined} title={`${account.name} · ${account.email}${account.status === 'demo' ? t('sidebar.demoAccountSuffix') : ''}`} onClick={() => navigate(inbox.target)}>
+          <Avatar text={account.avatar} color={account.color} small /><span>{account.name}</span>{account.status === 'demo' && <small className="account-demo-badge" aria-hidden>{t('sidebar.demoBadge')}</small>}{viewCounts && unread > 0 && <small className="navigation-count" id={`account-unread-${encodeURIComponent(account.id).replace(/[^a-zA-Z0-9-]/g, '-')}`} aria-hidden title={t('sidebar.inboxUnreadTitle', { unread })}>{unread}</small>}
         </button>
       </div>
       <nav id={controls} className="account-folders" aria-label={t('sidebar.folderNavAria', { account: account.name })} hidden={!opened}>
@@ -85,7 +87,7 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
   }
   return <aside className="sidebar" aria-label={t('sidebar.mailNavAria')}>
     <div className="workspace-name"><span>{t('sidebar.workspaceName')}</span><span className="label">{t('sidebar.workspaceLocal')}</span></div>
-    <Button variant="primary" className="compose-button" disabled={!accounts.length} title={accounts.length ? undefined : t('sidebar.composeNeedAccount')} onClick={onCompose}><Plus size={18} />{t('sidebar.compose')}<span>N</span></Button>
+    <Button variant="primary" className="compose-button" disabled={!accounts.length} title={accounts.length ? undefined : t('sidebar.composeNeedAccount')} onClick={onCompose}><Plus size={18} />{t('sidebar.compose')}<span aria-hidden>N</span></Button>
     <div className="sidebar-scroll">
       <div className="sidebar-section-title"><span>{t('sidebar.quickSection')}</span><span className="local-hint" title={t('sidebar.quickHintTitle')}>{t('sidebar.quickHint')}</span></div>
       <nav className="shortcut-list" aria-label={t('sidebar.quickNavAria')}>

@@ -113,6 +113,8 @@ export function App() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target;
+      // 任意对话框（含独立 Radix 弹窗）打开时不响应全局快捷键，避免在弹窗背后触发撰写 / 搜索。
+      if (document.querySelector('[role="dialog"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { if (!draft && !settingsTab) { event.preventDefault(); search.current?.focus(); } return; }
       if (event.key.toLowerCase() === 'n' && !event.ctrlKey && !event.metaKey && !event.altKey && !draft && !settingsTab && !(target instanceof HTMLElement && (target.closest('input, textarea, select, [contenteditable="true"]')))) { event.preventDefault(); composeRef.current(); }
       if (event.key === 'F5') { event.preventDefault(); syncAllRef.current(); }

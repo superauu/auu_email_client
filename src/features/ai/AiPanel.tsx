@@ -46,13 +46,13 @@ export function AiPanel({ onClose, onOpenSettings, onComposeWithText }: { onClos
         <Button variant="primary" onClick={onOpenSettings}><Settings size={15} />{t('ai.openSettings')}</Button>
       </> : <>
         <p className="muted">{message ? t('ai.targetMessage', { subject: message.subject }) : t('ai.emptySelection')}</p>
-        <div className="ai-actions">{tasks.map(({ kind, Icon, name, description }) => <button key={kind} type="button" className={results[kind] ? 'ai-task has-result' : 'ai-task'} disabled={running !== null || !message} aria-label={name} onClick={() => void execute(kind)}>
+        <div className="ai-actions">{tasks.map(({ kind, Icon, name, description }) => <button key={kind} type="button" className={results[kind] ? 'ai-task has-result' : 'ai-task'} disabled={running !== null || !message} onClick={() => void execute(kind)}>
           <Icon size={17} /><span><strong>{name}</strong><small>{running === kind ? t('ai.running') : description}</small></span>
         </button>)}</div>
         {error && <div className="inline-error" role="alert">{error}<Button variant="ghost" onClick={clearError}>{t('app.dismissToast')}</Button></div>}
-        {results['summarize'] && <section className="ai-result" aria-label={t('ai.summarize')}><h3>{t('ai.resultHeading', { model: results['summarize']!.model })}</h3><p>{results['summarize']!.text}</p></section>}
-        {replyResult && <section className="ai-result" aria-label={t('ai.draftReply')}><h3>{t('ai.resultHeading', { model: replyResult.model })}</h3><p>{replyResult.text}</p>{message && <Button variant="primary" onClick={() => onComposeWithText(message, replyResult.text)}><PenLine size={15} />{t('ai.useAsReply')}</Button>}<p className="muted">{t('ai.replyNote')}</p></section>}
-        {extractResult && <section className="ai-result" aria-label={t('ai.extractEvents')}><h3>{t('ai.resultHeading', { model: extractResult.model })}</h3><p>{extractResult.text}</p><p className="muted">{t('ai.extractNote')}</p></section>}
+        {results['summarize'] && <section className="ai-result" role="status" aria-label={t('ai.summarize')}><h3>{t('ai.resultHeading', { model: results['summarize']!.model })}</h3><p>{results['summarize']!.text}</p></section>}
+        {replyResult && <section className="ai-result" role="status" aria-label={t('ai.draftReply')}><h3>{t('ai.resultHeading', { model: replyResult.model })}</h3><p>{replyResult.text}</p>{message && <Button variant="primary" onClick={() => onComposeWithText(message, replyResult.text)}><PenLine size={15} />{t('ai.useAsReply')}</Button>}<p className="muted">{t('ai.replyNote')}</p></section>}
+        {extractResult && <section className="ai-result" role="status" aria-label={t('ai.extractEvents')}><h3>{t('ai.resultHeading', { model: extractResult.model })}</h3><p>{extractResult.text}</p><p className="muted">{t('ai.extractNote')}</p></section>}
       </>}
       <p className="ai-privacy">{t('ai.privacyDesktop')}</p>
     </div>

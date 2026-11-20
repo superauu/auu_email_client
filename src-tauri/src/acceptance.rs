@@ -1057,8 +1057,16 @@ Date: Sat, 7 Feb 2026 15:00:00 +0000
             use_reply: true,
         };
         {
-            let conn = db.lock().unwrap();
-            crate::signature::save(&conn, &account, &signature).unwrap();
+            let mut conn = db.lock().unwrap();
+            crate::signature::save_entry(
+                &mut conn,
+                &account,
+                None,
+                &format!("验收签名 {tag}"),
+                &signature,
+                false,
+            )
+            .unwrap();
             let stored = crate::signature::read(&conn, &account).unwrap();
             assert!(stored.html.contains("data:image/png;base64,"));
             assert!(stored.html.contains(&format!("验收签名 {tag}")));
