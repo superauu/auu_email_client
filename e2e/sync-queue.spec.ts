@@ -745,7 +745,7 @@ test('titlebar blank and brand drag while double-click maximizes, controls stay 
   await page.locator('.brand strong').dispatchEvent('mousedown',{button:0,buttons:1,detail:1});await expect.poll(calls).toEqual(['plugin:window|start_dragging']);
   await page.getByRole('banner').dispatchEvent('mousedown',{button:0,buttons:1,detail:2});await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize']);
   await page.getByRole('banner').dispatchEvent('mousedown',{button:2,buttons:2,detail:1});await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize']);
-  await page.getByRole('button',{name:'最大化或还原',exact:true}).click();await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize','plugin:window|toggle_maximize']);
+  await page.getByRole('button',{name:'最大化',exact:true}).click();await expect.poll(calls).toEqual(['plugin:window|start_dragging','plugin:window|toggle_maximize','plugin:window|toggle_maximize']);
 });
 
 test('rich mail renders in a sandboxed iframe, remote images stay gated and links open externally', async ({page},info) => {
@@ -1013,7 +1013,7 @@ test('list multi-select batches mark-read and delete into trash', async ({ page 
   await list.getByRole('button', { name: '删除', exact: true }).click();
   await expect(page.getByText('已选 2 封')).toHaveCount(0);
   await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
-  await expect(list.getByRole('article')).toHaveCount(2);
+  await expect(list.getByRole('listitem')).toHaveCount(2);
   await page.screenshot({ path: info.outputPath('mail-management-trash.png') });
 });
 
@@ -1028,8 +1028,48 @@ test('reader toolbar deletes to trash and moves between folders', async ({ page 
   await reader.getByRole('menuitem', { name: '移动到 项目邮件' }).click();
   await reader.getByRole('button', { name: '删除当前邮件到废纸篓' }).click();
   await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
-  await expect(list.getByRole('article')).toHaveCount(1);
+  await expect(list.getByRole('listitem')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('mail-management-reader.png') });
+});
+
+test('batch more menu supports keyboard dismissal, unread, star and moving without losing selection', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.addInitScript(() => localStorage.setItem('auumail.ui.layout.v1', JSON.stringify({ listWidth: 280, sidebarWidth: 222 })));
+  await page.goto('/');
+  const list = page.getByRole('region', { name: '邮件列表' });
+  const select = list.getByRole('button', { name: '选择邮件：纯文本链接测试', exact: true });
+  const more = list.getByRole('button', { name: '更多操作', exact: true });
+  await select.click();
+  await expect(list).toHaveCSS('width', '280px');
+  await more.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: '标为未读', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(more).toBeFocused();
+  await expect(list.getByText('已选 1 封')).toBeVisible();
+  await more.click();
+  await page.getByRole('menuitem', { name: '标为未读', exact: true }).click();
+  await expect(select).toHaveAttribute('aria-pressed', 'false');
+  await expect(list.locator('.mail-row').filter({ has: page.getByRole('button', { name: '选择邮件：纯文本链接测试', exact: true }) })).toHaveClass(/is-unread/);
+
+  await select.click();
+  await more.click();
+  await page.getByRole('menuitem', { name: '添加星标', exact: true }).click();
+  await expect(list.getByRole('button', { name: '取消星标：纯文本链接测试', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  await select.click();
+  await more.click();
+  await page.getByRole('menuitem', { name: '批量移动到其他文件夹', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('menuitem', { name: '批量移动到 项目邮件', exact: true })).toBeFocused();
+  await page.screenshot({ path: info.outputPath('mail-batch-move-menu.png') });
+  await page.keyboard.press('Enter');
+  await expect(select).toHaveCount(0);
+  await expect(list.locator('.batch-bar')).toHaveCount(0);
+
+  await list.locator('.mail-row').first().getByRole('button', { name: /选择邮件/ }).click();
+  await list.getByRole('button', { name: '取消选择', exact: true }).click();
+  await expect(list.getByRole('button', { name: '选择当前列表全部邮件', exact: true })).toBeVisible();
 });
 
 
@@ -1075,13 +1115,14 @@ test('trash view offers permanent delete which queues expunge after confirm', as
   await rows.nth(1).getByRole('button', { name: /选择邮件/ }).click();
   await list.getByRole('button', { name: '删除', exact: true }).click();
   await page.getByRole('navigation', { name: '测试邮箱 1的文件夹' }).getByRole('button', { name: '废纸篓', exact: true }).click();
-  await expect(list.getByRole('article')).toHaveCount(2);
-  // 批量栏出现「永久删除」；非废纸篓视图不显示（前面收件箱视图的批量栏没有该按钮）。
+  await expect(list.getByRole('listitem')).toHaveCount(2);
+  // 废纸篓的「更多操作」内提供永久删除。
   await rows.nth(0).getByRole('button', { name: /选择邮件/ }).click();
-  await expect(list.getByRole('button', { name: '永久删除', exact: true })).toBeVisible();
+  await list.getByRole('button', { name: '更多操作', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: '永久删除', exact: true })).toBeVisible();
   // window.confirm 确认后执行：桩返回 queued，邮件保留在废纸篓（EXPUNGE 未确认前不消失）。
   page.once('dialog', dialog => dialog.accept());
-  await list.getByRole('button', { name: '永久删除', exact: true }).click();
+  await page.getByRole('menuitem', { name: '永久删除', exact: true }).click();
   await expect(page.getByText('已选 1 封')).toHaveCount(0);
   const purgeStates = await page.evaluate(() => (window as unknown as { __syncTest: { messages: () => Array<{ changes: Array<{ field: string; state: string }> | null }> } }).__syncTest.messages().flatMap(message => message.changes ?? []).filter(change => change.field === 'purge'));
   expect(purgeStates.length).toBeGreaterThan(0);

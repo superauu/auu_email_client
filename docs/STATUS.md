@@ -1,19 +1,27 @@
 # 当前状态
 
-更新时间：2026-11-19（静默同步）。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**此前完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化；第五批：大邮箱按视图懒加载（启动不再全量分页灌入，Rust 视图计数聚合，搜索改 LIKE 并移除 FTS，v17 迁移）；第六批：同标题会话折叠（列表「对话」开关，默认关闭）。第七批（本轮）：真实协议验收——自建 GreenMail 全栈服务器（IMAP / POP3 / SMTP，TLS + 用户信任库）驱动真实 Rust 协议路径完成六项验收，并修复验收发现的多段 RFC 2231 附件名损坏问题（发送端改单段参数；接收端对 Thunderbird 风格多段续行自行解码覆盖）**。自建服务器验收通过的项目在公网邮箱（Gmail / QQ / 163）上仍建议复验怪癖差异（IMAP 扩展、限速、垃圾过滤）；5 万封级吞吐受 GreenMail 内存实现限制定在 2000 封规模。**第八批：废纸篓永久删除（v18 迁移，UID EXPUNGE 不可逆语义 / unknown 不自动重试 / POP3 仅本机移除），自建服务器验收⑧通过；第九批：IMAP 自定义目录管理（新建 / 重命名 / 删除，设置面板入口，独立短会话执行，目录名按 RFC 3501 modified UTF-7 编码——验收发现服务器拒绝原始 UTF-8 目录名并修复），自建服务器验收⑨通过；第十批：会话增强——对话归组升级为引用链（In-Reply-To / References，随行返回 UI）∪ 归一化标题的并查集连通（覆盖回复中途改主题的会话），阅读区新增会话内上一封 / 下一封导航与位置徽标（仅对话模式且展开会话可见）；第十一批：中文检索升级——v19 迁移重建 FTS5 trigram 分词索引（3 字符滑动窗口，子串语义中英文一致，≥3 字符查询走索引、更短回退 LIKE；UPDATE 触发器限定 OF subject/sender/body 列，未读星标更新不再重索引正文——吸取 017 移除旧 FTS 的写放大教训）；第十二批（本轮）：每账号邮件签名（Outlook 式自动追加，HTML + 内嵌图片，v20 迁移）与发送侧内联图片管道（data URI → cid + multipart/related），自建服务器验收⑩通过；同日静默同步——`SyncOutcome.refresh_needed` 改为诚实语义（仅拉取到邮件或确认了本机回写才刷新，IDLE / 自动同步空轮次界面零感知），移除运行中任务的 2 秒节流渐进刷新，列表筛选按钮禁止 CJK 竖排换行；同日头像功能菜单（Radix DropdownMenu：写邮件 / 搜索 / 同步 / 视图 / 设置集中入口）、Ctrl+V 粘贴剪贴板图片进正文（data URI → cid 管道复用）、远程图片信任发件人 / 发件域名（v21 迁移，信任后自动加载）**。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)、[SYNCHRONIZATION](SYNCHRONIZATION.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+更新时间：2026-11-20（多选操作栏重设计）。A3.8 收信 / 同步整批收尾已完成；真实 Gmail 授权、基础发送、自发自收附件下载及回复会话归组已验收。发送队列处理入口与 POP3 设置已完成原生窗口重点路径检查，并修复 POP3 手动入队校验遗漏。**此前完成四批工作：中文附件名 MIME 参数编码修复（RFC 2231，严格解析器实测通过）、中英文界面切换（`src/i18n` 消息字典）、邮件管理（删除到废纸篓 / 移动到文件夹 / 列表多选批量操作，v16 迁移）与大邮箱列表虚拟化；第五批：大邮箱按视图懒加载（启动不再全量分页灌入，Rust 视图计数聚合，搜索改 LIKE 并移除 FTS，v17 迁移）；第六批：同标题会话折叠（列表「对话」开关，默认关闭）。第七批（本轮）：真实协议验收——自建 GreenMail 全栈服务器（IMAP / POP3 / SMTP，TLS + 用户信任库）驱动真实 Rust 协议路径完成六项验收，并修复验收发现的多段 RFC 2231 附件名损坏问题（发送端改单段参数；接收端对 Thunderbird 风格多段续行自行解码覆盖）**。自建服务器验收通过的项目在公网邮箱（Gmail / QQ / 163）上仍建议复验怪癖差异（IMAP 扩展、限速、垃圾过滤）；5 万封级吞吐受 GreenMail 内存实现限制定在 2000 封规模。**第八批：废纸篓永久删除（v18 迁移，UID EXPUNGE 不可逆语义 / unknown 不自动重试 / POP3 仅本机移除），自建服务器验收⑧通过；第九批：IMAP 自定义目录管理（新建 / 重命名 / 删除，设置面板入口，独立短会话执行，目录名按 RFC 3501 modified UTF-7 编码——验收发现服务器拒绝原始 UTF-8 目录名并修复），自建服务器验收⑨通过；第十批：会话增强——对话归组升级为引用链（In-Reply-To / References，随行返回 UI）∪ 归一化标题的并查集连通（覆盖回复中途改主题的会话），阅读区新增会话内上一封 / 下一封导航与位置徽标（仅对话模式且展开会话可见）；第十一批：中文检索升级——v19 迁移重建 FTS5 trigram 分词索引（3 字符滑动窗口，子串语义中英文一致，≥3 字符查询走索引、更短回退 LIKE；UPDATE 触发器限定 OF subject/sender/body 列，未读星标更新不再重索引正文——吸取 017 移除旧 FTS 的写放大教训）；第十二批（本轮）：每账号邮件签名（Outlook 式自动追加，HTML + 内嵌图片，v20 迁移）与发送侧内联图片管道（data URI → cid + multipart/related），自建服务器验收⑩通过；同日静默同步——`SyncOutcome.refresh_needed` 改为诚实语义（仅拉取到邮件或确认了本机回写才刷新，IDLE / 自动同步空轮次界面零感知），移除运行中任务的 2 秒节流渐进刷新，列表筛选按钮禁止 CJK 竖排换行；同日头像功能菜单（Radix DropdownMenu：写邮件 / 搜索 / 同步 / 视图 / 设置集中入口）、Ctrl+V 粘贴剪贴板图片进正文（data URI → cid 管道复用）、远程图片信任发件人 / 发件域名（v21 迁移，信任后自动加载）**。完整范围及明确剩余事项见 [IMAP_COMPLETION](IMAP_COMPLETION.md)、[SENDING](SENDING.md)、[COMPOSING](COMPOSING.md)、[MESSAGE_CHANGES](MESSAGE_CHANGES.md)、[SYNCHRONIZATION](SYNCHRONIZATION.md)。以下历史增量按日期保留，当前行为以本节和更新的专项文档为准。
+
+## 最新增量：多选操作栏重设计（2026-11-20）
+
+- **界面**：44px 单行工具栏改为左侧固定取消选择 + 已选数量徽标，右侧固定已读 / 归档 / 删除图标与「更多操作」。未读、添加星标、同账号移动子菜单及废纸篓永久删除收入更多菜单；不再横向滚动找操作。图标提供中英文可访问名称与悬停说明，执行中显示进度并禁用重复操作。
+- **交互与皮肤**：共享 `components/ui/DropdownMenu.tsx` 基于 Radix Portal，支持方向键、Esc、焦点归还及长目录换行，避免原移动菜单被滚动容器裁剪；全部表面与状态复用语义 token。批量保存、账号隔离、永久删除确认和服务器回写语义沿用原流程。
+- **评审修复（同批并入）**：附件预览新增 PDF 分支（`application/pdf` → data URI iframe，沿用 8 MiB 上限）并补 Rust 端到端测试（缓存原文 → preview_content → base64 可还原）；向导字段级 `aria-invalid` 改为触控 / 提交失败后呈现并经 `aria-describedby` 关联错误说明（新增 `wizard.fieldRequired` / `fieldEmailInvalid` / `fieldPortInvalid`）；窗口最大化监听去抖 150ms 并修卸载早于监听注册的竞态；roving tabindex 初始化改为焦点自容器外进入时执行且以获焦项为锚（内部移动不再重置）；`EmptyState` 支持 `heading` 参数（列表 / 阅读区内的空态用 h2，避免与列表 sr-only h1 同级重复）；清理死键 `app.maximizeRestore`。
+- **验证**：`npm run check`（95 个 TS 测试）；完整 UI 回归 **92 项通过**（含最窄 280px 列表下的菜单键盘操作 / 未读 / 星标 / 移动 / 取消选择新用例与永久删除菜单入口断言改写）。人工查看 Paper / Graphite / Linen × 明暗 × 1440×950 / 900×700 的工具栏及菜单截图，280px 列表与英文菜单无横向溢出。`cargo test` **305 项全绿**（附件预览 +1），Clippy `-D warnings` 干净。
+- **边界**：Rust 侧仅附件预览命令新增 PDF 分支与测试，无 SQL / IPC 变更；截图与交互测试基于 Chromium 演示 / IPC harness，未执行原生 WebView2 手工复验（PDF 预览的 `data:` iframe 在 WebView2 内的实际渲染待演练时一并确认）。
+
+## 最新增量：多签名 + 可访问性审核修复（2026-11-20）
+
+- **多签名（v23 迁移）**：`account_signatures` 单签名升级为 `signatures` 多行表（id 不透明 / name / html / use_new / use_reply / is_default），既有单签名迁移为「默认签名」条目并置为默认（撰写注入行为不变）；空签名不迁移（等于未设置）。Rust：`signature::list` / `save_entry`（id 缺省新建；make_default 抢占账号唯一默认；无默认时第一条自动成为默认；每账号 ≤10 条、名称 ≤100 字符；compose 消毒与 2M 上限沿用）/ `delete_entry`（删默认不自动指派，注入自然回退不注入）；`read` 语义改为「返回默认条目」（compose 注入兼容），新增 `mail_signature_list` / `mail_save_signature` / `mail_delete_signature` 命令。设置页签名按钮改为多签名管理器（列表 + 默认星标 + 新建 / 编辑（名称 + 富文本编辑器 + 图片 + 两开关 + 设为默认）/ 删除确认），demo 端入口保持隐藏。
+- **可访问性审核（代码走查 16 项，本轮修复 11 项）**：P1——阅读区「移动到…」手写菜单补齐键盘（Escape / ArrowUp/Down 循环 / 打开焦点入首项 / 失焦关闭）；P2——AI 面板结果区加 role="status"（长任务结果对读屏可见）、侧栏未读计数改 aria-describedby 附加（accessible name 保持纯名称，不破坏既有语义；账号选择 aria-pressed 改 aria-current）；P3——AI 任务卡去覆盖性 aria-label、标签颜色分组专用 aria-label、事件视图 eyebrow 登记字典、全局快捷键在任意对话框打开时不再触发、撰写快捷键提示 aria-hidden、撰写编辑器焦点指示加强。**本轮已修**：虚拟列表容器与行补充 `role="list"` / `role="listitem"`（aria-posinset / aria-setsize 保留）；向导字段补充字段级 `aria-invalid` 映射；EmptyState 标题级别调整为顶层 `h1`。**仍记录为后续**：手写 toolbar 的 roving tabindex、窗口最大化动态名称。
+- **验证**：`cargo test` **304 项全绿**（签名重写 +2：多签名默认语义 / 名称与数量上限；迁移把 v20 单签名转为默认条目，acceptance ⑩ 路径适配）；`npm run check` 95 个 TS 测试；完整 UI 回归 **92 个 Chromium 用例**（签名用例改写：新建含图 → 默认星标 → 第二条不抢占 → 显式切默认 → 删除；撰写注入用例适配管理器流程；修复期间曾把未读数拼进 aria-label 导致既有 exact 定位全面失败——已回退为 aria-describedby 方案，以此确认 accessible name 是测试定位契约）。
+- **边界**：多签名无导入 / 导出、无按收件人自动选择；a11y 未修项如上；真实读屏（NVDA）人工验证未执行。
 
 ## 遗留小边界处置（2026-11-20）
 
 - **reload 后深层滚动位置**：经静默同步批次（reload 非破坏化）后现状为——非结构性 reload（标记回写 / 正文补齐）保留全部缓存与滚动位置；仅结构性变化（新邮件 / 删行的 id 集变化）作废视图分页回首页，这是组成核对的正确性取舍而非缺陷。维持现状，不另行实现滚动锚定。
 - **Rust 错误文案本地化**：评估后本轮不做——完整方案需 IPC 传 locale 并把全部错误文案键化（改动面大）；轻量方案（前端按 code 映射）与 Rust 原始详情语义重复。维持既有边界：Rust 文案为源语言中文、原始服务器 / OS 文本不翻译，英文界面下错误详情暂为中文，属后续独立增量。
 - 本轮整体收尾：阶段 C（标签 CRUD、搜索保存、ICS 事件、AI 助手）与阶段 D（可调字号、附件预览、备份恢复、可访问性审核）中无需用户参与的部分已完成并逐批提交；需用户参与的项不变——Microsoft OAuth 注册结果、公网邮箱（Gmail / QQ / 163）差异复验、真实服务商 AI 调用验收（待 Key）、原生 WebView 手工演练（备份恢复 / 多签名 / 预览）。
-
-## 最新增量：多签名 + 可访问性审核修复（2026-11-20）
-
-- **多签名（v23 迁移）**：`account_signatures` 单签名升级为 `signatures` 多行表（id 不透明 / name / html / use_new / use_reply / is_default），既有单签名迁移为「默认签名」条目并置为默认（撰写注入行为不变）；空签名不迁移（等于未设置）。Rust：`signature::list` / `save_entry`（id 缺省新建；make_default 抢占账号唯一默认；无默认时第一条自动成为默认；每账号 ≤10 条、名称 ≤100 字符；compose 消毒与 2M 上限沿用）/ `delete_entry`（删默认不自动指派，注入自然回退不注入）；`read` 语义改为「返回默认条目」（compose 注入兼容），新增 `mail_signature_list` / `mail_save_signature` / `mail_delete_signature` 命令。设置页签名按钮改为多签名管理器（列表 + 默认星标 + 新建 / 编辑（名称 + 富文本编辑器 + 图片 + 两开关 + 设为默认）/ 删除确认），demo 端入口保持隐藏。
-- **可访问性审核（代码走查 16 项，本轮修复 11 项）**：P1——阅读区「移动到…」手写菜单补齐键盘（Escape / ArrowUp/Down 循环 / 打开焦点入首项 / 失焦关闭）；P2——AI 面板结果区加 role="status"（长任务结果对读屏可见）、侧栏未读计数改 aria-describedby 附加（accessible name 保持纯名称，不破坏既有语义；账号选择 aria-pressed 改 aria-current）；P3——AI 任务卡去覆盖性 aria-label、标签颜色分组专用 aria-label、事件视图 eyebrow 登记字典、全局快捷键在任意对话框打开时不再触发、撰写快捷键提示 aria-hidden、撰写编辑器焦点指示加强。**未修（记录为后续）**：虚拟列表 aria-posinset 需 list/listitem 角色重构、手写 toolbar 的 roving tabindex、窗口最大化动态名称、向导字段级 aria-invalid 映射、EmptyState 顶层标题级别。
-- **验证**：`cargo test` **304 项全绿**（签名重写 +2：多签名默认语义 / 名称与数量上限；迁移把 v20 单签名转为默认条目，acceptance ⑩ 路径适配）；`npm run check` 95 个 TS 测试；完整 UI 回归 **92 个 Chromium 用例**（签名用例改写：新建含图 → 默认星标 → 第二条不抢占 → 显式切默认 → 删除；撰写注入用例适配管理器流程；修复期间曾把未读数拼进 aria-label 导致既有 exact 定位全面失败——已回退为 aria-describedby 方案，以此确认 accessible name 是测试定位契约）。
-- **边界**：多签名无导入 / 导出、无按收件人自动选择；a11y 未修项如上；真实读屏（NVDA）人工验证未执行。
 
 ## 最新增量：数据备份与恢复（2026-11-20）
 
@@ -35,7 +43,7 @@
 - **范围（阶段 D）**：阅读正文字号四档（小 12 / 标准 13 / 大 15 / 特大 17px），设置 → 外观与皮肤「阅读字号」按钮组，持久化 localStorage `auumail.ui.readerFont.v1`（纯 UI 偏好）。
 - **生效路径（双侧）**：纯文本正文经根元素 CSS 变量 `--reader-font-size`（`.message-body` font-size var）即时生效；HTML 沙箱正文经 `mail_message_html` 新增 `font_size` 参数（ipc 全链路透传）写入包装 CSS，字号变化触发 iframe 重新渲染。Rust 侧白名单 11–24px、白名单外回落 13px（防异常值），WRAPPER_CSS 常量拆分、字号动态拼装。
 - **验证**：`cargo test` **299 项全绿**（新增 1：字号注入与白名单外回落）；`npm run check` 95 个 TS 测试；完整 UI 回归 **90 个 Chromium 用例**（新增 2：纯文本即时生效 + reload 持久化；沙箱按新字号重新渲染且 IPC 请求带 font=17）。
-- **边界**：档位固定四档（无任意 px 输入）；行高保持相对值不随档位缩放；皮肤行高 token 不受影响。
+- **边界**：档位固定四档（无任意 px 输入）；行高保持相对值 2.05 / 1.65 不随档位缩放；皮肤行高 token 不受影响。
 
 ## 最新增量：AI 助手（2026-11-20）
 
@@ -49,7 +57,8 @@
 ## 最新增量：ICS 日历邀请解析（2026-11-20）
 
 - **范围**：同步收信时从 `text/calendar`（或 .ics 兜底）附件解析 VEVENT 入事件视图（`mail_events` source='ics'，v1 表已预留枚举，无迁移）。IMAP 与 POP3 提交路径一致：`commit_batch` / `commit_pop3` 事务内按 `ics:{message_id}:{序号}` 幂等 upsert——同一邮件重复同步不产生重复事件，用户勾选的完成态不被覆盖；邮件行删除时既有触发器解绑关联。新增依赖 chrono-tz（纯 Rust IANA 时区库）。
-- **解析（`mail_ics`）**：RFC 5545 行折叠展开、SUMMARY 转义还原、DTSTART 支持 UTC（Z）/ TZID（经 chrono-tz 转 UTC ISO，DST 正确）/ 全天 DATE / floating（无时区）——floating 与未知 TZID 存无时区后缀的墙上时间并标记 `floating`，事件视图按查看者本地时区展示，不做错误换算。守护限制：单附件 256 KiB、每封 8 个日历附件 / 20 个事件，超限跳过不伪造；无 DTSTART 或无标题的 VEVENT 跳过。VALARM / RSVP 不解析（边界明确）。
+- **解析（`mail_ics`）**：RFC 5545 行折叠展开、SUMMARY 转义还原（`\,` `\;` `
+` `\`）、DTSTART 支持 UTC（Z）/ TZID（经 chrono-tz 转 UTC ISO，DST 正确）/ 全天 DATE / floating（无时区）——floating 与未知 TZID 存无时区后缀的墙上时间并标记 `floating`，事件视图按查看者本地时区展示，不做错误换算。守护限制：单附件 256 KiB、每封 8 个日历附件 / 20 个事件，超限跳过不伪造；无 DTSTART 或无标题的 VEVENT 跳过。VALARM / RSVP 不解析（边界明确）。
 - **UI**：事件视图 ics 事件显示「来自邮件」徽标；时区格式化容错（floating / 非法时区回退查看者本地），展示语言改用当前界面语言（此前硬编码 zh-CN 的既有缺口顺带修复）。
 - **验证**：`cargo test` **291 项全绿**（新增 7：UTC / TZID 含 DST / floating / 全天、折叠与转义、不完整 VEVENT 跳过与上限、未知时区、commit 幂等与完成态保留、合成 MIME → parse_raw → commit_pop3 端到端、日历附件判定）；`npm run check` 95 个 TS 测试；完整 UI 回归 **87 个 Chromium 用例**（新增 1：ics 事件渲染 + 来源徽标 + floating 时区不崩）。
 - **边界**：只读解析——不做 RSVP 回复、不做提醒通知、不做日历双向同步；DTEND / DURATION / 重复规则（RRULE）未存（事件视图为单时刻卡片）；floating 事件的时刻语义是「查看者本地时间」，非邀请方时区。GreenMail 真实服务器验收（Thunderbird 风格邀请注入 → 同步 → 事件入库）待下轮验收环境运行。

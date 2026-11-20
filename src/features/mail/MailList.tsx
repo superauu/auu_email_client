@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, ChevronDown, ChevronRight, FolderInput, ListChecks, RefreshCw, Star, X } from 'lucide-react';
+import { Archive, ArrowDown, Check, ChevronDown, ChevronRight, FolderInput, ListChecks, LoaderCircle, Mail, MailOpen, MoreHorizontal, RefreshCw, Star, Trash2, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useSyncStore, isManualSync } from '../../stores/syncStore';
@@ -10,6 +10,7 @@ import { countForView } from './viewCounts';
 import { conversationRows, type ThreadRow } from './threading';
 import { viewKey } from '../../domain/navigation';
 import { Button } from '../../components/ui/Button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from '../../components/ui/DropdownMenu';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { cn } from '../../lib/cn';
 import { isDesktop } from '../../platform/desktop';
@@ -39,7 +40,6 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
   const toggleThreadView = useThreadViewStore(s => s.toggle);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
-  const [moveOpen, setMoveOpen] = useState(false);
   // 会话折叠：开关开启时同标题 ≥2 封成组；展开集合按视图切换清空。
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   // ── 虚拟列表：只渲染视口窗口，滚动条高度由上下留白维持 ──
@@ -90,7 +90,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     if (window_.bottomPad < viewportHeight + rowHeight * 12) void loadMore();
   }, [state, window_.bottomPad, rowHeight, viewportHeight, loadMore]);
   // 视图切换 / 搜索变化时清空选择与展开的会话，避免跨视图误操作。
-  useEffect(() => { setSelected([]); setMoveOpen(false); setExpandedThreads(new Set()); }, [query.accountId, query.mailbox, query.folderId, query.draftSource, query.labelId, query.search, query.unreadOnly]);
+  useEffect(() => { setSelected([]); setExpandedThreads(new Set()); }, [query.accountId, query.mailbox, query.folderId, query.draftSource, query.labelId, query.search, query.unreadOnly]);
   const queriedAccount = query.accountId ? accounts.find(a => a.id === query.accountId) : null;
   const realAccount = queriedAccount && queriedAccount.status !== 'demo' ? queriedAccount : null;
   // 指定账号视图同步该账号；全部账号视图同步所有可同步账号（IMAP + Gmail OAuth）。
@@ -133,7 +133,6 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     } finally {
       setBatchRunning(false);
       setSelected([]);
-      setMoveOpen(false);
     }
   }
   async function runBatch(patchFor: (message: MailMessage) => MessagePatch | null) {
@@ -150,28 +149,37 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
     } finally {
       setBatchRunning(false);
       setSelected([]);
-      setMoveOpen(false);
     }
   }
   return <section className="mail-list" aria-label={t('mailList.listAria')}>
     <h1 className="sr-only">{folderTitle ?? title} {visible.length}</h1>
-    {selectionMode ? <header className="list-toolbar batch-bar">
-      <span className="batch-count">{t('mailList.selectedCount', { count: selected.length })}</span>
-      <div className="list-actions batch-actions">
-        <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(() => ({ unread: false }))}>{t('mailList.batchRead')}</Button>
-        <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(() => ({ unread: true }))}>{t('mailList.batchUnread')}</Button>
-        <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(message => message.starred ? null : { starred: true })}>{t('mailList.batchStar')}</Button>
-        <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(message => message.mailbox === 'archive' ? null : { archive: true })}>{t('mailList.batchArchive')}</Button>
-        <Button variant="ghost" disabled={batchRunning} onClick={() => void runBatch(() => ({ delete: true }))}>{t('mailList.batchDelete')}</Button>
-        {query.mailbox === 'trash' && isDesktop() && <Button variant="ghost" disabled={batchRunning} onClick={() => { if (window.confirm(t('reader.purgeConfirm'))) void runPurge(); }}>{t('mailList.batchPurge')}</Button>}
-        {batchTargets.length > 0 && <div className="move-menu-wrap">
-          <Button variant="ghost" disabled={batchRunning} aria-expanded={moveOpen} aria-label={t('mailList.batchMoveAria')} onClick={() => setMoveOpen(value => !value)}><FolderInput size={14} />{t('mailList.batchMove')}</Button>
-          {moveOpen && <div className="move-menu" role="menu" aria-label={t('mailList.batchMoveMenuAria')}>
-            {batchTargets.map(folder => <button key={folder.id} role="menuitem" onClick={() => { setMoveOpen(false); void runBatch(() => ({ moveTo: folder.id })); }}>{t('mailList.batchMoveTargetAria', { name: folder.name })}</button>)}
-          </div>}
-        </div>}
-        {batchRunning && <span role="status">{t('mailList.batchRunning')}</span>}
-        <Button variant="ghost" aria-label={t('mailList.batchCancel')} disabled={batchRunning} onClick={() => setSelected([])}><X size={14} />{t('mailList.batchCancel')}</Button>
+    {selectionMode ? <header className="list-toolbar batch-bar" aria-busy={batchRunning}>
+      <div className="batch-selection">
+        <Button variant="ghost" iconOnly aria-label={t('mailList.batchCancel')} title={t('mailList.batchCancel')} disabled={batchRunning} onClick={() => setSelected([])}><X size={15} /></Button>
+        <span className="batch-count" title={t('mailList.selectedCount', { count: selected.length })}>{t('mailList.selectedCount', { count: selected.length })}</span>
+        {batchRunning && <span role="status" className="batch-progress"><LoaderCircle size={14} className="spin" aria-hidden /><span className="sr-only">{t('mailList.batchRunning')}</span></span>}
+      </div>
+      <div className="batch-actions" role="group" aria-label={t('mailList.batchActionsAria')}>
+        <Button variant="ghost" iconOnly aria-label={t('mailList.batchRead')} title={t('mailList.batchRead')} disabled={batchRunning} onClick={() => void runBatch(() => ({ unread: false }))}><MailOpen size={16} /></Button>
+        <Button variant="ghost" iconOnly aria-label={t('mailList.batchArchive')} title={t('mailList.batchArchive')} disabled={batchRunning} onClick={() => void runBatch(message => message.mailbox === 'archive' ? null : { archive: true })}><Archive size={16} /></Button>
+        <Button variant="ghost" iconOnly className="action-danger" aria-label={t('mailList.batchDelete')} title={t('mailList.batchDelete')} disabled={batchRunning} onClick={() => void runBatch(() => ({ delete: true }))}><Trash2 size={16} /></Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild><Button variant="ghost" iconOnly aria-label={t('mailList.batchMore')} title={t('mailList.batchMore')} disabled={batchRunning}><MoreHorizontal size={17} /></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end" aria-label={t('mailList.batchMore')}>
+            <DropdownMenuItem onSelect={() => void runBatch(() => ({ unread: true }))}><Mail size={16} /><span>{t('mailList.batchUnread')}</span></DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void runBatch(message => message.starred ? null : { starred: true })}><Star size={16} /><span>{t('mailList.batchStar')}</span></DropdownMenuItem>
+            {batchTargets.length > 0 && <DropdownMenuSub>
+              <DropdownMenuSubTrigger aria-label={t('mailList.batchMoveAria')}><FolderInput size={16} /><span>{t('mailList.batchMove')}</span><ChevronRight size={14} /></DropdownMenuSubTrigger>
+              <DropdownMenuSubContent aria-label={t('mailList.batchMoveMenuAria')}>
+                {batchTargets.map(folder => <DropdownMenuItem key={folder.id} onSelect={() => void runBatch(() => ({ moveTo: folder.id }))}>{t('mailList.batchMoveTargetAria', { name: folder.name })}</DropdownMenuItem>)}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>}
+            {query.mailbox === 'trash' && isDesktop() && <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="action-danger" onSelect={() => { if (window.confirm(t('reader.purgeConfirm'))) void runPurge(); }}><Trash2 size={16} /><span>{t('mailList.batchPurge')}</span></DropdownMenuItem>
+            </>}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header> : <header className="list-toolbar">
       <div className="list-filters" role="group" aria-label={t('mailList.filterGroupAria')}>
@@ -181,9 +189,9 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
       </div>
       <div className="list-actions"><span className="list-order" title={t('mailList.orderByDateTitle')}>{t('mailList.orderByDate')}<ArrowDown size={12} /></span><Button variant="ghost" aria-label={t('mailList.selectAllAria')} title={t('mailList.selectAll')} disabled={!visible.length} onClick={() => setSelected(visible.map(message => message.id))}><ListChecks size={14} /></Button><Button variant="ghost" className="account-sync" aria-label={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} title={syncTarget ? t('mailList.syncAccountAria', { name: syncTarget.name }) : t('mailList.syncAllAria')} disabled={!isDesktop() || !syncable.length || (syncTarget ? accountSyncing : syncingAll)} onClick={syncCurrent}><RefreshCw size={14} className={(syncTarget ? spinningAccount : spinningAll) ? 'spin' : ''} />{syncTarget ? submitting.includes(syncTarget.id) ? t('settings.queuing') : jobsByAccount.get(syncTarget.id)?.status === 'failed' ? t('settings.retry') : accountSyncing ? t('settings.syncing') : t('settings.sync') : syncingAll ? t('settings.syncing') : t('settings.sync')}</Button></div>
     </header>}
-    <div className="mail-list-scroll" ref={scrollRef}>
+    <div className="mail-list-scroll" ref={scrollRef} role="list" aria-label={t('mailList.listAria')}>
       {visible.length === 0 && state?.loading ? <div className="list-loading" role="status">{t('mailList.loadingView')}</div>
-        : visible.length === 0 ? (query.unreadOnly ? <EmptyState title={t('mailList.emptyUnreadTitle')} description={t('mailList.emptyUnreadBody')} /> : query.search ? <EmptyState title={t('mailList.emptySearchTitle')} description={t('mailList.emptySearchBody')} /> : realAccount ? <EmptyState title={t('mailList.emptyAccountTitle', { name: realAccount.name })} description={t('mailList.emptyAccountBody')} /> : <EmptyState title={t('mailList.emptyTitle')} description={t('mailList.emptyBody')} />) : <>
+        : visible.length === 0 ? (query.unreadOnly ? <EmptyState heading="h2" title={t('mailList.emptyUnreadTitle')} description={t('mailList.emptyUnreadBody')} /> : query.search ? <EmptyState heading="h2" title={t('mailList.emptySearchTitle')} description={t('mailList.emptySearchBody')} /> : realAccount ? <EmptyState heading="h2" title={t('mailList.emptyAccountTitle', { name: realAccount.name })} description={t('mailList.emptyAccountBody')} /> : <EmptyState heading="h2" title={t('mailList.emptyTitle')} description={t('mailList.emptyBody')} />) : <>
         {window_.topPad > 0 && <div style={{ height: window_.topPad }} aria-hidden />}
         {rows.slice(window_.start, window_.end).map((row, offset) => {
         const position = window_.start + offset + 1;
@@ -191,7 +199,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
           const { group, unread, latest } = row;
           const expanded = expandedThreads.has(group.key);
           const account = accounts.find(a => a.id === row.latest.accountId);
-          return <article key={group.key} aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', 'thread-row', unread > 0 && 'is-unread')}>
+          return <article key={group.key} role="listitem" aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', 'thread-row', unread > 0 && 'is-unread')}>
             <button className="thread-toggle" aria-expanded={expanded} aria-label={expanded ? t('mailList.threadCollapseAria', { subject: group.subject }) : t('mailList.threadGroupAria', { subject: group.subject, count: group.messages.length })} title={t('mailList.threadCountTitle', { count: group.messages.length, unread })} onClick={() => { if (expanded || selectionMode) toggleThread(group.key); else { toggleThread(group.key); selectMessage(latest.id); } }}>
               {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               <span className="sender"><span className={cn('unread-dot', unread === 0 && 'invisible')} /><span>{latest.from.name}</span></span>
@@ -205,7 +213,7 @@ export function MailList({ onSelect }: { onSelect: () => void }) {
         const message = row.message;
         const account = accounts.find(a => a.id === message.accountId);
         const isSelected = selected.includes(message.id);
-        return <article key={message.id} aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', row.childOf && threadsEnabled && 'thread-child', selectedId === message.id && 'is-selected', message.unread && 'is-unread', isSelected && 'is-checked')}>
+        return <article key={message.id} role="listitem" aria-posinset={position} aria-setsize={rows.length} className={cn('mail-row', row.childOf && threadsEnabled && 'thread-child', selectedId === message.id && 'is-selected', message.unread && 'is-unread', isSelected && 'is-checked')}>
           <button className={cn('row-select', isSelected && 'is-on')} aria-label={t('mailList.selectAria', { subject: message.subject })} aria-pressed={isSelected} onClick={() => toggleSelected(message.id)}><Check size={13} /></button>
           <button className="mail-row-main" title={[message.from.email, account?.name, ...message.labelIds.map(id => labels.find(label => label.id === id)?.name)].filter(Boolean).join(' · ')} aria-label={t('mailList.readAria', { subject: message.subject })} onClick={() => { if (!selectionMode) { selectMessage(message.id); onSelect(); } else toggleSelected(message.id); }} aria-current={selectedId === message.id ? 'true' : undefined}>
             <div className="mail-row-top"><span className="sender"><span className={cn('unread-dot', !message.unread && 'invisible')} /><span>{message.from.name}</span></span><time dateTime={message.receivedAt}>{new Intl.DateTimeFormat(currentLanguage(), { month: 'numeric', day: 'numeric' }).format(new Date(message.receivedAt))}</time></div>

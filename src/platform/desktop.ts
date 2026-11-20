@@ -62,6 +62,37 @@ export const desktop = {
     if (action === 'close') await window.close();
     if (action === 'drag') await window.startDragging();
   },
+  async isMaximized(): Promise<boolean> {
+    if (!isDesktop()) return false;
+    try { return await getCurrentWindow().isMaximized(); }
+    catch { return false; }
+  },
+  onMaximizedChange(callback: (maximized: boolean) => void): () => void {
+    if (!isDesktop()) return () => {};
+    const window = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    // resize 事件连发期间去抖，停稳后再查询一次最大化状态。
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = () => {
+      if (disposed) return;
+      window.isMaximized().then(callback).catch(() => { /* ignore */ });
+    };
+    void window.onResized(() => {
+      if (disposed) return;
+      clearTimeout(timer);
+      timer = setTimeout(poll, 150);
+    }).then(fn => {
+      // 卸载先于监听注册完成时立即注销，避免泄漏。
+      if (disposed) { fn(); return; }
+      unlisten = fn;
+    }).catch(() => { /* ignore */ });
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      unlisten?.();
+    };
+  },
   async guardWindowClose(shouldBlock: () => boolean, onBlocked: () => void): Promise<() => void> {
     if (!isDesktop()) return () => {};
     return getCurrentWindow().onCloseRequested(event => {

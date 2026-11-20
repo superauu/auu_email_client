@@ -9,6 +9,7 @@ const TEXT_SUFFIX = ['.txt', '.md', '.csv', '.log', '.json'];
 export function isPreviewableAttachment(mediaType: string, name: string): boolean {
   const lower = mediaType.toLowerCase();
   if (IMAGE_MIME.includes(lower)) return true;
+  if (lower === 'application/pdf') return true;
   const fileName = name.toLowerCase();
   return lower.startsWith('text/')
     || lower === 'application/json'
@@ -18,7 +19,7 @@ export function isPreviewableAttachment(mediaType: string, name: string): boolea
 
 /** mail_preview_attachment 的返回形状（kind 'image' 有 dataUri；'text' 有 text）。 */
 export interface AttachmentPreview {
-  kind: 'image' | 'text';
+  kind: 'image' | 'text' | 'pdf';
   dataUri: string | null;
   text: string | null;
   truncated: boolean;

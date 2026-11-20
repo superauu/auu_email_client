@@ -38,7 +38,7 @@ patch 必须非空，archive 只接受 true，未知字段拒绝；核对账号�
 - **前置守卫**：废纸篓投影成立（物理成员 = 服务器真相，或本机 delete 意图投影）；任何未终结（queued / applying / unknown / failed）移动族意图都拒绝——移入废纸篓的 MOVE 未在服务器生效前 EXPUNGE 会删错对象，提示先同步；已有 purge 排队 / applying / unknown 时拒绝重复执行。
 - **回写**：同步会话内 UID STORE `\Deleted` → UIDPLUS 服务器用 `UID EXPUNGE`（只清除目标 UID），无 UIDPLUS 回退 `EXPUNGE`（标准 IMAP 行为，会连带清除文件夹内其他 \Deleted）→ `uid_fetch` 确认 UID 消失 → `acknowledge_purge` 删除本机行（级联清理意图，事件触发器解绑）。任一环节未确认转 `unknown`，**不自动重试**（EXPUNGE 不可逆）；启动 recover 把 applying 的 purge 转 unknown。
 - **本机投影**：purge 意图与 delete 一致投影到废纸篓（EXPUNGE 确认前用户仍能看到邮件作为证据）；确认后本机行删除、邮件从所有视图消失。
-- **UI**：废纸篓视图才显示——阅读区工具栏「永久删除」图标按钮（`window.confirm` 二次确认，文案明确服务器副本也将清除）；列表多选批量栏「永久删除」逐封执行。非桌面（演示）隐藏入口。
+- **UI**：废纸篓视图才显示——阅读区工具栏「永久删除」图标按钮（`window.confirm` 二次确认，文案明确服务器副本也将清除）；列表多选「更多操作 → 永久删除」逐封执行，同样保留二次确认。非桌面（演示）隐藏入口。
 - **验收**：`purge_intent_really_expunges_message_on_server`（GreenMail：删除同步 → 服务器 Trash 有一封 → purge 排队 → 同步 → 服务器 Trash 空且本机行删除）通过；Rust 单测 4 个（投影前置 / queued 拦截与 POP3 本机移除 / 确认删除级联 / recover 中断转 unknown）；e2e 1 个（废纸篓批量永久删除排队，桩核对 purge 意图状态）。
 
 ## 删除与移动（2026-11-17）

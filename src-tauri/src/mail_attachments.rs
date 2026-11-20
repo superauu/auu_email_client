@@ -88,6 +88,20 @@ pub(crate) fn preview_content(
             truncated,
         });
     }
+    if attachment
+        .media_type
+        .eq_ignore_ascii_case("application/pdf")
+    {
+        return Ok(AttachmentPreview {
+            kind: "pdf".into(),
+            data_uri: Some(format!(
+                "data:application/pdf;base64,{}",
+                BASE64.encode(contents)
+            )),
+            text: None,
+            truncated: false,
+        });
+    }
     Err(AppError::invalid("该附件类型不支持预览，请使用另存为"))
 }
 fn filename(name: &str, index: usize) -> String {
@@ -227,5 +241,29 @@ mod tests {
         let bytes = vec![0x89, 0x50, 0x4e, 0x47];
         let data_uri = format!("data:image/png;base64,{}", BASE64.encode(&bytes));
         assert!(data_uri.starts_with("data:image/png;base64,"));
+    }
+
+    /// PDF 预览走真实缓存原文路径：写缓存 → preview_content → data URI 可还原为原字节。
+    #[test]
+    fn preview_content_serves_pdf_data_uri_and_rejects_unknown_type() {
+        let raw: &[u8] = b"From: a@example.test\r\nSubject: pdf\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=BOUND\r\n\r\n\
+--BOUND\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=doc.pdf\r\n\r\n\
+%PDF-1.4 test bytes\r\n--BOUND--\r\n";
+        let key = crate::mail_recovery::hash(raw);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(format!("{key}.eml")), raw).unwrap();
+
+        let (pdf_attachment, contents) = attachment("doc.pdf", "application/pdf", b"%PDF-1.4 test bytes");
+        let preview = preview_content(dir.path().to_path_buf(), key.clone(), &pdf_attachment).unwrap();
+        assert_eq!(preview.kind, "pdf");
+        assert!(preview.text.is_none());
+        let uri = preview.data_uri.expect("pdf 预览应有 data URI");
+        let encoded = uri.strip_prefix("data:application/pdf;base64,").expect("PDF data URI 前缀");
+        assert_eq!(BASE64.decode(encoded).unwrap(), contents);
+
+        // 不支持的类型明确拒绝（octet-stream 无文本扩展名兜底）。
+        let (unknown, _) = attachment("x.bin", "application/octet-stream", b"zz");
+        assert!(preview_content(dir.path().to_path_buf(), key, &unknown).is_err());
     }
 }
