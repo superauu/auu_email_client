@@ -42,6 +42,8 @@
 
 2026-11-21 已注册公共桌面应用（Entra 应用注册 AuuMail，允许公共客户端流，重定向 `http://localhost/callback`——微软忽略端口、路径必须匹配），Client ID 随应用内置（`MICROSOFT_BUILTIN_CLIENT_ID`，公开信息非机密），公共桌面应用无需 secret。租户默认 common，要求应用的受支持账户类型为「任何组织目录 + 个人 Microsoft 账户」（`signInAudience: AzureADandPersonalMicrosoftAccount`）；重新授权对话框可显式替换 Client ID / 租户（organizations / consumers / 租户 ID），显式值优先于内置兜底。
 
+**实测陷阱（2026-11-21）**：组合类型 `AzureADandPersonalMicrosoftAccount` **只能在创建应用注册时选择**；创建后在「身份验证」页改动「受支持的账户类型」并保存，会把清单静默降级为 `AzureADMultipleOrgs`（仅组织），个人账户授权即报 `unauthorized_client: not enabled for consumers`。判别以清单 `signInAudience` 为准，不以身份验证页下拉显示为准；补救只能重建应用注册。
+
 个人 Outlook / Hotmail / Live 账户不需要在门户预配 API 权限：`https://outlook.office.com/IMAP.AccessAsUser.All` 委托权限在首次登录同意页动态授权（与 Thunderbird 相同的方式）；MSA 账户也无法在租户内预配 Exchange Online 服务主体。组织 / 学校租户的账号可能需要管理员对 IMAP 委派权限做租户级同意，属当前边界。
 
 固定 outlook.office365.com:993 TLS，请求 https://outlook.office.com/IMAP.AccessAsUser.All 和 offline_access，不申请 SMTP.Send。配置依据 [IMAP OAuth 权限](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth/) 与 [loopback 回调规则](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url)。

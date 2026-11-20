@@ -40,7 +40,7 @@ pub(crate) struct Config {
 /// 内置的 Microsoft 公共桌面应用标识（Entra 应用注册，重定向 http://localhost/callback，
 /// 允许公共客户端流）。公共桌面应用无需 secret；个人账户的 IMAP 委托权限在首次
 /// 登录同意页动态授权（与 Thunderbird 相同的方式），门户无需预配 API 权限。
-pub(crate) const MICROSOFT_BUILTIN_CLIENT_ID: &str = "8ff50577-7f96-40cc-91fe-c9790c471070";
+pub(crate) const MICROSOFT_BUILTIN_CLIENT_ID: &str = "63c4f1ef-40e9-41ff-98ca-43abad284d2d";
 impl Config {
     /// 公共桌面客户端允许省略 Client ID：Google 与 Microsoft 均使用内置应用标识兜底。
     /// 归一化必须发生在持久化之前，使 profile 与 keyring Secret 携带同一份配置
