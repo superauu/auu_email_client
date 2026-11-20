@@ -494,3 +494,6 @@ fieldset.wizard-fields { border-inline: 0; border-bottom: 0; padding: 0; margin:
 .wizard-fields input[type="checkbox"] { flex: none; width: auto; }
 .settings-accounts > div { flex-wrap: wrap; }
 .settings-accounts > div > span:nth-child(2) { min-width: 130px; }
+
+/* 数据备份：按钮行。 */
+.backup-actions { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }

@@ -60,11 +60,12 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
     const imapSettings = new Map<string,{syncAllFolders:boolean;historyEnabled:boolean;autoSyncSeconds:number}>();
     let aiConfig: { baseUrl: string; model: string } | null = null;
     const credentialKeys = new Set<string>();
+    let backupStaged = false;
     const aiRuns: Array<{ task: string; messageIds: unknown }> = [];
     const signatures = new Map<string,{html:string;useNew:boolean;useReply:boolean}>();
     const trusted = new Map<string,string>();
     let settingFails = completion; let exportCalls = 0; let oauthState = 'waiting'; let pickFailure = false;
-    const htmlRequests: Array<{ id: string; allow: boolean }> = []; const openCalls: string[] = [];
+    const htmlRequests: Array<{ id: string; allow: boolean; font?: number }> = []; const openCalls: string[] = [];
     const outboxActions: Array<{ id: string; action: string }> = [];
     let outboxRows = options.outbox ?? null;
     let outboxResolved: string | null = null;
@@ -256,6 +257,10 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
         case 'credential_status': return credentialKeys.has(`${String(input.provider)}:${String(input.accountId)}`);
         case 'credential_save': credentialKeys.add(`${String(input.provider)}:${String(input.accountId)}`); return;
         case 'credential_delete': credentialKeys.delete(`${String(input.provider)}:${String(input.accountId)}`); return;
+        // 数据备份：镜像 backup 命令（staged 后 pending 为真，直到 harness 重置）。
+        case 'backup_export': return { cacheFiles: 12 };
+        case 'backup_stage_restore': backupStaged = true; return { dbBytes: 20480, cacheFiles: 12 };
+        case 'backup_restore_pending': return backupStaged;
         // AI：配置存 harness 内存，Key 走 credential_save（只存不回读）；run 按任务返回固定文本并记录调用。
         case 'ai_get_config': return aiConfig ? { ...aiConfig, keySaved: true } : null;
         case 'ai_save_config': aiConfig = { baseUrl: String(input.baseUrl), model: String(input.model) }; return;
@@ -1443,4 +1448,24 @@ test('attachment preview expands inline for text and can be collapsed', async ({
   await list.getByRole('button', { name: '收起附件 report.txt 的预览' }).click();
   await expect(list.locator('.attachment-preview-text')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('attachment-preview.png') });
+});
+
+test('data backup exports and stages a restore behind an explicit confirmation', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '关于' }).click();
+  const about = page.getByRole('tabpanel', { name: '关于' });
+  await about.getByRole('button', { name: '导出备份' }).click();
+  await expect(about.getByText('备份完成：数据库快照 + 12 个原文缓存文件。')).toBeVisible();
+  // 恢复：确认对话框接受 → staged 提示 + pending 横幅。
+  page.once('dialog', handler => handler.accept());
+  await about.getByRole('button', { name: '从备份恢复' }).click();
+  await expect(about.getByText('恢复已就绪：重启应用后生效。')).toBeVisible();
+  await expect(about.getByText('已有待恢复的备份，重启应用后生效。')).toBeVisible();
+  // 取消确认 → 不 staging，不出现第二份就绪提示。
+  page.once('dialog', handler => handler.dismiss());
+  await about.getByRole('button', { name: '从备份恢复' }).click();
+  await expect(about.getByText('恢复已就绪：重启应用后生效。')).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('backup-restore.png') });
 });

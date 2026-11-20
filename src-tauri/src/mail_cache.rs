@@ -9,7 +9,7 @@ use std::{
 };
 pub(crate) const MAX_RAW: u32 = 64 * 1024 * 1024;
 const QUOTA: u64 = 512 * 1024 * 1024;
-static CACHE_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static CACHE_LOCK: Mutex<()> = Mutex::new(());
 pub(crate) struct Spool {
     file: tempfile::NamedTempFile,
     root: PathBuf,

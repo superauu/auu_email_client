@@ -142,6 +142,15 @@ export const desktopAi = {
   },
 };
 
+/** 数据备份与恢复：导出为目录（mail.db 快照 + mail-cache 副本），恢复 staging 后重启生效。 */
+export const desktopBackup = {
+  /** 取消选择目录返回 null。 */
+  async export(): Promise<{ cacheFiles: number } | null> { return invoke('backup_export'); },
+  /** 校验备份目录并 staging；取消选择返回 null。 */
+  async stageRestore(): Promise<{ dbBytes: number; cacheFiles: number } | null> { return invoke('backup_stage_restore'); },
+  async pending(): Promise<boolean> { return invoke('backup_restore_pending'); },
+};
+
 /** OS credential storage. Secrets travel in only; nothing here ever returns one. */
 /** provider 'ai' 是 AI 服务 Key 的命名空间（固定 account 'global'），不对应邮箱账号。 */
 export const desktopCredentials = {

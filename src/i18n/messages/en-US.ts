@@ -656,6 +656,15 @@ export const enUS: Record<MessageId, string> = {
   'ai.testOk': 'Connected — {count} models available',
   'ai.configPrivacy': 'Configuration and the Key stay on this device; requests only include the plain text of the selected mail (subject and truncated body).',
   'settings.tabAi': 'AI assistant',
+  'backup.heading': 'Data backup and restore',
+  'backup.intro': 'A backup contains the mail database and cached raw messages; export into an empty folder of your choice.',
+  'backup.export': 'Export backup',
+  'backup.restore': 'Restore from backup',
+  'backup.exportDone': 'Backup complete: database snapshot + {cacheFiles} cached raw-message files.',
+  'backup.restoreConfirm': 'Restoring will replace ALL current mail data with the selected backup and takes effect after restarting the app.\n\nNotes:\n· OS credentials (account passwords, OAuth grants, AI Key) are not part of the backup — affected accounts need re-authorization after restoring;\n· The current database is kept as mail.db.pre-restore for manual recovery;\n· Then select the backup folder that contains mail.db.\n\nContinue?',
+  'backup.restoreStaged': 'Restore is ready: it takes effect after restarting the app.',
+  'backup.pendingNotice': 'A staged restore is waiting and takes effect after restarting the app.',
+  'backup.privacyNote': 'The backup contains no OS credentials; keep the backup folder safe — it holds full mail content.',
   'store.aiDesktopOnly': 'AI features are available in the desktop app only.',
 
   // ── Provider presets ────────────────────────────────────────

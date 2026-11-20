@@ -658,6 +658,15 @@ export const zhCN = {
   'ai.testOk': '连接成功，{count} 个模型可用',
   'ai.configPrivacy': '配置与 Key 仅保存在本机；请求只包含所选邮件的纯文本（主题与截断正文）。',
   'settings.tabAi': 'AI 助手',
+  'backup.heading': '数据备份与恢复',
+  'backup.intro': '备份包含邮件数据库与已缓存的邮件原文；导出到你选择的一个空目录。',
+  'backup.export': '导出备份',
+  'backup.restore': '从备份恢复',
+  'backup.exportDone': '备份完成：数据库快照 + {cacheFiles} 个原文缓存文件。',
+  'backup.restoreConfirm': '恢复将用所选备份替换当前全部邮件数据，并在重启应用时生效。\n\n注意：\n· 系统凭据（账号密码、OAuth 授权、AI Key）不在备份内，恢复后相关账号需重新授权或重输密码；\n· 当前数据会先备份为 mail.db.pre-restore，如恢复有问题可手动还原；\n· 确认后请选择包含 mail.db 的备份目录。\n\n是否继续？',
+  'backup.restoreStaged': '恢复已就绪：重启应用后生效。',
+  'backup.pendingNotice': '已有待恢复的备份，重启应用后生效。',
+  'backup.privacyNote': '备份不包含系统凭据；备份目录请妥善保管，内含完整邮件内容。',
   'store.aiDesktopOnly': 'AI 功能仅桌面版可用。',
 
   // ── 提供商预设 ──────────────────────────────────────────────

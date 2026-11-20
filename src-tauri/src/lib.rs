@@ -2,6 +2,7 @@
 mod acceptance;
 mod account_service;
 mod ai_service;
+mod backup;
 mod compose_attach;
 mod credentials;
 mod drafts;
@@ -205,6 +206,68 @@ async fn mail_preview_attachment(
     })
     .await
     .map_err(|_| AppError::storage("附件预览任务未完成"))?
+}
+
+// 数据备份与恢复：导出为目录（mail.db 快照 + mail-cache 副本），恢复 staging 后重启生效。
+#[tauri::command]
+async fn backup_export(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    paths: State<'_, AppPaths>,
+) -> Result<Option<backup::ExportSummary>, AppError> {
+    use tauri_plugin_dialog::DialogExt;
+    let target_dir = app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|path| path.into_path().ok());
+    let Some(target_dir) = target_dir else {
+        return Ok(None);
+    };
+    let data_dir = paths.data.clone();
+    let conn = db.inner().0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // 快照持 DB 锁保证一致性；缓存复制在缓存全局锁内避免与同步写入竞争。
+        let summary = {
+            let conn = conn.lock().map_err(|_| AppError::storage("数据库忙"))?;
+            let cache_guard = backup::cache_lock_shared()
+                .lock()
+                .map_err(|_| AppError::storage("缓存忙"))?;
+            let summary = backup::export_snapshot(&conn, &data_dir, &target_dir)?;
+            drop(cache_guard);
+            summary
+        };
+        Ok(Some(summary))
+    })
+    .await
+    .map_err(|_| AppError::storage("备份导出任务未完成"))?
+}
+
+#[tauri::command]
+async fn backup_stage_restore(
+    app: tauri::AppHandle,
+    paths: State<'_, AppPaths>,
+) -> Result<Option<backup::RestoreStaged>, AppError> {
+    use tauri_plugin_dialog::DialogExt;
+    let source_dir = app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|path| path.into_path().ok());
+    let Some(source_dir) = source_dir else {
+        return Ok(None);
+    };
+    let data_dir = paths.data.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        backup::stage_restore(&data_dir, &source_dir).map(Some)
+    })
+    .await
+    .map_err(|_| AppError::storage("备份恢复暂存任务未完成"))?
+}
+
+#[tauri::command]
+async fn backup_restore_pending(paths: State<'_, AppPaths>) -> Result<bool, AppError> {
+    Ok(backup::restore_pending(&paths.data))
 }
 
 /// UTC ISO-8601 timestamp for seeding bookkeeping; message times come from the payload.
@@ -1024,6 +1087,8 @@ pub fn run() {
             let data = app.path().app_data_dir()?;
             let skins = data.join("skins");
             std::fs::create_dir_all(&skins)?;
+            // 待生效的数据恢复（staged 于上次会话）：在打开新库之前原子换库。
+            backup::consume_pending_restore(&data).map_err(std::io::Error::other)?;
             mail_cache::recover(&data.join("mail-cache"))
                 .map_err(|error| std::io::Error::other(error.message))?;
             let conn = storage::initialize(&data.join("mail.db")).map_err(std::io::Error::other)?;
@@ -1085,6 +1150,9 @@ pub fn run() {
             mail_rename_label,
             mail_delete_label,
             mail_set_message_labels,
+            backup_export,
+            backup_stage_restore,
+            backup_restore_pending,
             ai_get_config,
             ai_save_config,
             ai_test_connection,

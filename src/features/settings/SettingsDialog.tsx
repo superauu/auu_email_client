@@ -22,6 +22,7 @@ import { useSyncStore } from '../../stores/syncStore';
 import { isSyncActive, syncJobSummary, syncableAccounts } from '../../domain/sync';
 import { OutboxPanel } from './OutboxPanel';
 import { AiOptions } from './AiOptions';
+import { BackupOptions } from './BackupOptions';
 import { useI18n, useLanguage, currentLanguage, languageLabel, setLanguage, languages } from '../../i18n/react';
 
 export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; onClose: () => void; initialTab: 'appearance' | 'accounts' | 'ai' | 'about' }) {
@@ -78,7 +79,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
       {wizardOpen && <AccountWizardDialog open initial={editing} tone={nextTone} onClose={() => setWizardOpen(false)} onSaved={reload} />}
       </Tabs.Content>
       <Tabs.Content value="ai" className="settings-body"><AiOptions /></Tabs.Content>
-      <Tabs.Content value="about" className="settings-body"><div className="about-brand"><img src="/logo.png" alt="" /><div><h3>AuuMail</h3><p>{t('about.tagline')}</p></div><span className="label">v{info?.version ?? '0.1.0'}</span></div><div className="info-card"><h3>{t('about.infraHeading')}</h3><p>{t('about.infraBody')}</p><p>{info ? t('about.dbStatus', { state: info.databaseReady ? t('about.dbStateReady') : t('about.dbStateStopped') }) : t('about.browserInfo')}</p></div></Tabs.Content>
+      <Tabs.Content value="about" className="settings-body"><BackupOptions /><div className="about-brand"><img src="/logo.png" alt="" /><div><h3>AuuMail</h3><p>{t('about.tagline')}</p></div><span className="label">v{info?.version ?? '0.1.0'}</span></div><div className="info-card"><h3>{t('about.infraHeading')}</h3><p>{t('about.infraBody')}</p><p>{info ? t('about.dbStatus', { state: info.databaseReady ? t('about.dbStateReady') : t('about.dbStateStopped') }) : t('about.browserInfo')}</p></div></Tabs.Content>
     </Tabs.Root>{error && <p className="inline-error" role="alert">{error}</p>}
   </Dialog>;
 }
