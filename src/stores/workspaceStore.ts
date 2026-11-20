@@ -66,7 +66,7 @@ interface WorkspaceState extends WorkspaceSnapshot {
   applyMessagePatch: (id: string, patch: MessagePatch) => Promise<void>;
   exportAttachment: (id: string, index: number) => Promise<boolean>;
   /** Sanitized sandbox srcdoc for rich rendering; rejects when the environment has no verified raw cache. */
-  messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark') => Promise<string>;
+  messageHtml: (accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark', fontPx: number) => Promise<string>;
   /** Register a persisted draft into the outbox queue (docs/SENDING.md). */
   messageHtmlFragment: (accountId: string, messageId: string) => Promise<string>;
   sendDraft: (draftId: string, revision: number) => Promise<import('../domain/outbox').OutboxEntry>;
@@ -164,9 +164,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try { return await gateway.exportAttachment(message.accountId, id, index); }
     catch (error) { set({ error: errorMessage(error) }); return false; }
   },
-  async messageHtml(accountId, messageId, allowRemoteImages, mode) {
+  async messageHtml(accountId, messageId, allowRemoteImages, mode, fontPx) {
     if (!gateway.messageHtml) throw new Error(t('store.noRichBody'));
-    return gateway.messageHtml(accountId, messageId, allowRemoteImages, mode);
+    return gateway.messageHtml(accountId, messageId, allowRemoteImages, mode, fontPx);
   },
   async messageHtmlFragment(accountId, messageId) {
     if (!gateway.messageHtmlFragment) throw new Error(t('store.noQuoteFragment'));

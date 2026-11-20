@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
-import { Check, FolderOpen, Languages, Monitor, Moon, Plus, RefreshCw, Sun, Trash2 } from 'lucide-react';
+import { ALargeSmall, Check, FolderOpen, Languages, Monitor, Moon, Plus, RefreshCw, Sun, Trash2 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button } from '../../components/ui/Button';
 import { Avatar } from '../../components/ui/Avatar';
 import { useThemeStore } from '../../stores/themeStore';
+import { useReaderFontStore } from '../../stores/readerFontStore';
+import { readerFontLabel, READER_FONT_OPTIONS } from '../../domain/readerFont';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { desktop, desktopAccounts, isDesktop, type AppInfo, type RealAccountInput } from '../../platform/desktop';
 import { errorMessage } from '../../domain/errors';
@@ -26,6 +28,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
   const t = useI18n();
   const language = useLanguage();
   const { skins, skinId, mode, warnings, loading, setAppearance, rescan } = useThemeStore(useShallow(s => ({ skins: s.skins, skinId: s.skinId, mode: s.mode, warnings: s.warnings, loading: s.loading, setAppearance: s.setAppearance, rescan: s.rescan })));
+  const { fontId, setFontId } = useReaderFontStore(useShallow(s => ({ fontId: s.fontId, setFontId: s.setFontId })));
   const { accounts, reload, syncStates } = useWorkspaceStore(useShallow(s => ({ accounts: s.accounts, reload: s.reload, syncStates: s.syncStates })));
   const [error, setError] = useState('');
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -66,6 +69,7 @@ export function SettingsDialog({ open, onClose, initialTab }: { open: boolean; o
       })}</div>
       <div className="setting-heading"><h3>{t('settings.modeHeading')}</h3><span>{t('settings.modeHint')}</span></div><div className="mode-options">{([{ id: 'light', Icon: Sun, label: t('settings.modeLight') }, { id: 'dark', Icon: Moon, label: t('settings.modeDark') }, { id: 'system', Icon: Monitor, label: t('settings.modeSystem') }] as const).map(({ id, Icon, label }) => <Button key={id} variant={mode === id ? 'primary' : 'secondary'} aria-pressed={mode === id} onClick={() => setAppearance(skinId, id as ThemeMode)}><Icon size={16} />{label}</Button>)}</div>
       <div className="setting-heading"><h3>{t('settings.languageHeading')}</h3><span>{t('settings.languageHint')}</span></div><div className="mode-options">{languages.map(id => <Button key={id} variant={language === id ? 'primary' : 'secondary'} aria-pressed={language === id} onClick={() => setLanguage(id)}><Languages size={16} />{languageLabel(id)}</Button>)}</div>
+      <div className="setting-heading"><h3>{t('readerFont.heading')}</h3><span>{t('readerFont.hint')}</span></div><div className="mode-options">{READER_FONT_OPTIONS.map(option => <Button key={option.id} variant={fontId === option.id ? 'primary' : 'secondary'} aria-pressed={fontId === option.id} onClick={() => setFontId(option.id)}><ALargeSmall size={16} />{readerFontLabel(option.id)}</Button>)}</div>
       <div className="skin-directory"><div><h3>{t('settings.customSkinHeading')}</h3><p>{isDesktop() ? t('settings.skinDesktopHint') : t('settings.skinBrowserHint')}</p>{info && <code>{info.skinDirectory}</code>}</div><div><Button disabled={!isDesktop()} onClick={() => { setError(''); void desktop.openSkinDirectory().catch(e => setError(errorMessage(e))); }}><FolderOpen size={15} />{t('settings.openSkinDir')}</Button><Button onClick={() => void rescan()} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : ''} />{loading ? t('settings.scanning') : t('settings.rescan')}</Button></div></div>
       {warnings.length > 0 && <div className="warning-list" role="status">{warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}
       </Tabs.Content>

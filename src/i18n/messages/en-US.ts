@@ -789,6 +789,13 @@ export const enUS: Record<MessageId, string> = {
   'tags.colorBlue': 'Blue',
   'tags.colorAmber': 'Amber',
   'reader.labelMenuAria': 'Message labels',
+  'readerFont.small': 'Small',
+  'readerFont.default': 'Default',
+  'readerFont.large': 'Large',
+  'readerFont.xlarge': 'Extra large',
+  'readerFont.prefNotSaved': 'The reading font size could not be saved right now; it still applies for this session.',
+  'readerFont.heading': 'Reading font size',
+  'readerFont.hint': 'Applies to plain-text and HTML mail bodies.',
 
   // ── Demo services ───────────────────────────────────────────
   'demo.draftConflict': 'The draft was modified in another window — keep your current content and reopen the draft.',

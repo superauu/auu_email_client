@@ -202,8 +202,8 @@ export type PurgeOutcome = { outcome: 'removed' } | { outcome: 'queued'; message
 export interface MailGateway {
   requestBody(accountId: string, messageId: string, revision: number): Promise<MailMessage>;
   exportAttachment(accountId: string, messageId: string, index: number): Promise<boolean>;
-  /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. */
-  messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark'): Promise<string>;
+  /** Sanitized sandbox srcdoc for the message HTML body; rejects when no verified raw cache exists. fontPx = 阅读字号档位（写入沙箱包装 CSS）。 */
+  messageHtml?(accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark', fontPx: number): Promise<string>;
   /** Persist event completion state (desktop: SQLite; demo: localStorage overlay). */
   updateEvent?(id: string, completed: boolean): Promise<void>;
   /** Sanitized HTML fragment for reply/forward quoting; rejects when no verified raw cache exists. */

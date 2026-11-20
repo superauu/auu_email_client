@@ -791,6 +791,13 @@ export const zhCN = {
   'tags.colorBlue': '蓝',
   'tags.colorAmber': '琥珀',
   'reader.labelMenuAria': '邮件标签',
+  'readerFont.small': '小',
+  'readerFont.default': '标准',
+  'readerFont.large': '大',
+  'readerFont.xlarge': '特大',
+  'readerFont.prefNotSaved': '阅读字号暂时无法保存，当前会话仍可使用。',
+  'readerFont.heading': '阅读字号',
+  'readerFont.hint': '应用于纯文本与 HTML 邮件正文。',
 
   // ── 演示服务 ────────────────────────────────────────────────
   'demo.draftConflict': '草稿已在其他窗口修改，请保留当前内容并重新打开草稿。',

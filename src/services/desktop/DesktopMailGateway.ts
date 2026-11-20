@@ -8,7 +8,7 @@ const PAGE_LIMIT = 200;
 export const desktopMailGateway: MailGateway = {
   mode: 'desktop-local',
   async requestBody(accountId, messageId, revision) { return desktopMail.requestBody(accountId, messageId, revision); },
-  async messageHtml(accountId, messageId, allowRemoteImages, mode) { return desktopMail.messageHtml(accountId, messageId, allowRemoteImages, mode); },
+  async messageHtml(accountId, messageId, allowRemoteImages, mode, fontPx) { return desktopMail.messageHtml(accountId, messageId, allowRemoteImages, mode, fontPx); },
   async messageHtmlFragment(accountId, messageId) { return desktopMail.messageHtmlFragment(accountId, messageId); },
   async updateEvent(id, completed) { return desktopMail.updateEvent(id, completed); },
   async sendDraft(draftId, revision) { return desktopMail.sendDraft(draftId, revision); },

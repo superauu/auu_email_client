@@ -284,6 +284,8 @@ fn mail_message_html(
     allow_remote_images: bool,
     // 当前主题模式（light/dark），决定沙箱正文的默认底色与文字颜色。
     mode: Option<String>,
+    // 阅读正文字号（px，可调整字号档位）；缺省 13。
+    font_size: Option<u32>,
 ) -> Result<MailHtmlPayload, AppError> {
     let conn = db
         .inner()
@@ -291,8 +293,15 @@ fn mail_message_html(
         .lock()
         .map_err(|_| AppError::storage("数据库忙"))?;
     let dark = mode.as_deref() == Some("dark");
-    mail_html::render(&conn, &account_id, &message_id, allow_remote_images, dark)
-        .map(|html| MailHtmlPayload { html })
+    mail_html::render(
+        &conn,
+        &account_id,
+        &message_id,
+        allow_remote_images,
+        dark,
+        font_size,
+    )
+    .map(|html| MailHtmlPayload { html })
 }
 
 /// 回复 / 转发引用：消毒后的正文 HTML 片段，直接插入撰写编辑器。

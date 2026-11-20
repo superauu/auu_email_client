@@ -71,7 +71,7 @@ export const desktop = {
 };
 
 export const desktopMail = {
-  async messageHtml(accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark'): Promise<string> { return invoke<{ html: string }>('mail_message_html', { accountId, messageId, allowRemoteImages, mode }).then(payload => payload.html); },
+  async messageHtml(accountId: string, messageId: string, allowRemoteImages: boolean, mode: 'light' | 'dark', fontPx: number): Promise<string> { return invoke<{ html: string }>('mail_message_html', { accountId, messageId, allowRemoteImages, mode, fontSize: fontPx }).then(payload => payload.html); },
   async messageHtmlFragment(accountId: string, messageId: string): Promise<string> { return invoke('mail_message_html_fragment', { accountId, messageId }); },
   async sendDraft(draftId: string, revision: number): Promise<import('../domain/outbox').OutboxEntry> { return invoke('mail_send_draft', { draftId, revision }); },
   async deleteDraft(draftId: string): Promise<void> { return invoke('mail_delete_draft', { draftId }); },

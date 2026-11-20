@@ -255,7 +255,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .message-sender strong { font-size: 12px; font-weight: 600; }
 .message-sender > div > span { font-size: 10px; color: var(--text-subtle); overflow-wrap: anywhere; }
 .message-sender > time { font-size: 10px; color: var(--text-subtle); align-self: flex-start; margin: 4px 0 0 auto; white-space: nowrap; }
-.message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 2.05; padding: 20px 0 26px; }
+.message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--reader-font-size, 13px); line-height: 2.05; padding: 20px 0 26px; }
 .reader-actions { display: flex; align-items: center; gap: 10px; padding: 16px 0 4px; }
 .reader-actions > span { flex: 1; min-width: 0; font-size: 10px; color: var(--text-subtle); overflow-wrap: anywhere; }
 .message-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 0; }

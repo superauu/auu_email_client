@@ -17,6 +17,8 @@ import { selectMessages } from './selectors';
 import { useSyncStore } from '../../stores/syncStore';
 import { desktop, isDesktop } from '../../platform/desktop';
 import { useThemeStore } from '../../stores/themeStore';
+import { useReaderFontStore } from '../../stores/readerFontStore';
+import { readerFontPx as readerFontPxOf } from '../../domain/readerFont';
 import { useI18n, currentLanguage } from '../../i18n/react';
 
 type HtmlState = { state: 'loading' | 'ready' | 'plain'; doc: string; allowImages: boolean; trustedSender?: boolean };
@@ -94,6 +96,8 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
   const messageHtmlAction = useWorkspaceStore.getState().messageHtml;
   // 沙箱正文的底色跟随当前主题；切换深浅模式后重新渲染。
   const themeMode = useThemeStore(s => s.resolvedMode);
+  // 阅读字号档位（可调整字号）：纯文本经 CSS 变量生效，沙箱正文渲染时传入。
+  const readerFontPx = readerFontPxOf(useReaderFontStore(s => s.fontId));
   useEffect(() => {
     if (!messageId || !htmlEligible) { setHtml({ state: 'plain', doc: '', allowImages: false }); setFrameHeight(null); return; }
     let active = true;
@@ -106,14 +110,14 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
         // 信任判定：发件地址或域名在信任列表 → 直接加载远程图片（静默同步同款不打扰语义）。
         await useTrustStore.getState().ensure().catch(() => undefined);
         const trusted = useTrustStore.getState().isTrusted(target.from.email);
-        const doc = await messageHtmlAction(target.accountId, target.id, trusted, themeMode);
+        const doc = await messageHtmlAction(target.accountId, target.id, trusted, themeMode, readerFontPx);
         if (!active) return;
         setHtml({ state: 'ready', doc, allowImages: trusted, trustedSender: trusted });
       } catch { if (active) setHtml({ state: 'plain', doc: '', allowImages: false }); }
     }
     void load();
     return () => { active = false; };
-  }, [messageId, htmlEligible, messageHtmlAction, themeMode]);
+  }, [messageId, htmlEligible, messageHtmlAction, themeMode, readerFontPx]);
   if (!message) return <section className="mail-reader"><EmptyState title={t('reader.emptyTitle')} description={t('reader.emptyBody')} /></section>;
   const account = accounts.find(a => a.id === message.accountId);
   const localDraft = Boolean(message.draft);
@@ -139,7 +143,7 @@ export function MailReader({ onCompose, onAi, onBack }: { onCompose: (message: M
     if (!message) return;
     const current = message;
     try {
-      const doc = await messageHtml(current.accountId, current.id, allow, useThemeStore.getState().resolvedMode);
+      const doc = await messageHtml(current.accountId, current.id, allow, useThemeStore.getState().resolvedMode, readerFontPxOf(useReaderFontStore.getState().fontId));
       setHtml({ state: 'ready', doc, allowImages: allow, trustedSender: trusted });
       setOpenError('');
     } catch (error) { setHtml({ state: 'plain', doc: '', allowImages: false }); setOpenError(errorMessage(error)); }

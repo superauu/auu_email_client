@@ -405,7 +405,21 @@ fn csp(allow_remote_images: bool) -> String {
     )
 }
 
-const WRAPPER_CSS_FONT: &str = "html,body{margin:0;padding:12px;font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;font-size:13px;line-height:1.65;overflow-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}";
+/// 阅读字号由前端传入（可调整字号档位）；固定 13px 常量拆出，字号动态拼进 CSS。
+const WRAPPER_CSS_BASE: &str = "html,body{margin:0;padding:12px;font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.65;overflow-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}";
+const DEFAULT_FONT_PX: u32 = 13;
+
+/// 阅读正文字号：白名单外的值回落 13px（防 CSS 注入与异常值）。
+fn sanitize_font_px(font_px: Option<u32>) -> u32 {
+    match font_px {
+        Some(value @ 11..=24) => value,
+        _ => DEFAULT_FONT_PX,
+    }
+}
+
+fn wrapper_font_css(font_px: u32) -> String {
+    format!("{WRAPPER_CSS_BASE}html{{font-size:{font_px}px}}body{{font-size:{font_px}px}}")
+}
 const WRAPPER_CSS_LIGHT: &str =
     "html{color-scheme:light}body{background:#ffffff;color:#1c2430}a{color:#0a7ea4}";
 const WRAPPER_CSS_DARK: &str =
@@ -429,6 +443,7 @@ pub(crate) fn render(
     id: &str,
     allow_remote_images: bool,
     dark: bool,
+    font_px: Option<u32>,
 ) -> Result<String, AppError> {
     let (root, key) = load_cache_key(conn, account, id)?;
     let raw = mail_cache::read(&root, &key)?;
@@ -444,15 +459,20 @@ pub(crate) fn render(
     for (id, uri) in inline {
         prepared = prepared.replace(&format!("cid:{id}"), &uri);
     }
-    Ok(srcdoc(&sanitize(&prepared), allow_remote_images, dark))
+    Ok(srcdoc(
+        &sanitize(&prepared),
+        allow_remote_images,
+        dark,
+        font_px,
+    ))
 }
 
-fn srcdoc(body: &str, allow_remote_images: bool, dark: bool) -> String {
+fn srcdoc(body: &str, allow_remote_images: bool, dark: bool, font_px: Option<u32>) -> String {
     let mut doc = String::with_capacity(body.len() + 2048);
     doc.push_str("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"");
     doc.push_str(&csp(allow_remote_images));
     doc.push_str("\"><style>");
-    doc.push_str(WRAPPER_CSS_FONT);
+    doc.push_str(&wrapper_font_css(sanitize_font_px(font_px)));
     doc.push_str(wrapper_css(dark));
     doc.push_str("</style></head><body>");
     doc.push_str(body);
@@ -589,21 +609,40 @@ mod tests {
             sanitized.contains("src=\"data:image/png;base64,"),
             "cid 必须转成 data URI"
         );
-        let doc = srcdoc(&sanitized, false, false);
+        let doc = srcdoc(&sanitized, false, false, None);
         assert!(doc.contains("img-src 'none'"));
         assert!(doc.contains(&format!("script-src 'sha256-{}'", bridge_hash())));
         assert!(doc.starts_with("<!DOCTYPE html>"));
-        let allow = srcdoc(&sanitized, true, false);
+        let allow = srcdoc(&sanitized, true, false, None);
         assert!(allow.contains("img-src https: data:"));
     }
 
     #[test]
     fn wrapper_css_follows_theme_mode() {
-        let light = srcdoc("<p>x</p>", false, false);
+        let light = srcdoc("<p>x</p>", false, false, None);
         assert!(light.contains("color-scheme:light") && light.contains("#ffffff"));
-        let dark = srcdoc("<p>x</p>", false, true);
+        let dark = srcdoc("<p>x</p>", false, true, None);
         assert!(dark.contains("color-scheme:dark") && dark.contains("#1b2129"));
         assert!(!dark.contains("#ffffff"));
+    }
+
+    #[test]
+    fn reader_font_size_is_injected_and_out_of_range_values_fall_back() {
+        let large = srcdoc("<p>x</p>", false, false, Some(17));
+        assert!(
+            large.contains("html{font-size:17px}body{font-size:17px}"),
+            "可调整字号应写入包装 CSS"
+        );
+        assert!(
+            !large.contains("font-size:13px"),
+            "指定字号时不再包含默认值"
+        );
+        let default = srcdoc("<p>x</p>", false, false, None);
+        assert!(default.contains("font-size:13px"));
+        // 白名单外（过小 / 过大）回落 13px，不做任意值注入。
+        assert!(srcdoc("<p>x</p>", false, false, Some(10)).contains("font-size:13px"));
+        assert!(srcdoc("<p>x</p>", false, false, Some(25)).contains("font-size:13px"));
+        assert!(!srcdoc("<p>x</p>", false, false, Some(25)).contains("font-size:25px"));
     }
 
     #[test]

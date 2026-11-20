@@ -311,9 +311,9 @@ async function mockDesktop(page: Page, messageChanges = false, recoveryMode?: 'l
           if (input.messageId === 'plain-link') throw new Error('原文缓存不可用，回退纯文本');
           const message = workspace.messages.find(message => message.id === input.messageId && message.accountId === input.accountId);
           if (!message) throw new Error('邮件不存在或不属于此账号');
-          htmlRequests.push({ id: message.id, allow: Boolean(input.allowRemoteImages) });
+          htmlRequests.push({ id: message.id, allow: Boolean(input.allowRemoteImages), font: Number(input.fontSize ?? 13) });
           const images = input.allowRemoteImages ? 'img-src https: data:' : 'img-src \'none\'';
-          return { html: `<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${images}"></head><body><p>富文本正文（${input.allowRemoteImages ? '远程图片已允许' : '远程图片被拦截'}）</p><a href="https://example.test/receipt">收据链接</a></body></html>` };
+          return { html: `<!DOCTYPE html><html><head><style>html{font-size:${Number(input.fontSize ?? 13)}px}</style><meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${images}"></head><body><p>富文本正文（${input.allowRemoteImages ? '远程图片已允许' : '远程图片被拦截'}）</p><a href="https://example.test/receipt">收据链接</a></body></html>` };
         }
         case 'open_external': openCalls.push(input.url as string); return;
         case 'mail_sync_jobs': return snapshot();
@@ -743,7 +743,7 @@ test('rich mail renders in a sandboxed iframe, remote images stay gated and link
   await expect(calls).toEqual(['https://example.test/receipt','https://example.com/help']);
   // 开发模式 StrictMode 会对首次选择双触发 effect；语义断言：默认拦截请求在前、允许请求存在、
   // 纯文本测试邮件在原文缓存不可用时回退，不返回富文本结果。
-  await expect(requests[0]).toEqual({id:'real-message',allow:false});
+  await expect(requests[0]).toEqual({id:'real-message',allow:false,font:13});
   await expect(requests.some(request => request.allow)).toBe(true);
   await expect(requests.every(request => request.id === 'real-message')).toBe(true);
   // 操作区在正文上方：回复 / 回复全部 / 转发创建本地草稿（发送尚未接入）。
@@ -1406,4 +1406,22 @@ test('AI panel: configure service, summarize, draft a reply and hand it to the c
   await expect(compose.getByRole('textbox', { name: '邮件正文' })).toContainText('周五前给出详细方案');
   await expect(compose.getByRole('combobox', { name: '收件人' })).toBeVisible();
   await page.screenshot({ path: info.outputPath('ai-reply-draft.png') });
+});
+
+test('reader font size re-renders the HTML sandbox with the chosen size', async ({ page }, info) => {
+  test.setTimeout(60000);
+  await mockDesktop(page, true, undefined, true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
+  const frame = page.locator('iframe.mail-html-frame');
+  await expect(frame).toHaveAttribute('srcdoc', /font-size:13px/);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '外观与皮肤' }).click();
+  await page.getByRole('button', { name: '特大', exact: true }).click();
+  await page.keyboard.press('Escape');
+  // 字号变化触发沙箱重新渲染（mail_message_html 以新 font_size 重新请求）。
+  await expect(frame).toHaveAttribute('srcdoc', /font-size:17px/);
+  const requests = await page.evaluate(() => (window as unknown as { __syncTest: { htmlRequests: () => Array<{ id: string; allow: boolean; font?: number }> } }).__syncTest.htmlRequests());
+  expect(requests.at(-1)?.font).toBe(17);
+  await page.screenshot({ path: info.outputPath('reader-font-sandbox.png') });
 });
