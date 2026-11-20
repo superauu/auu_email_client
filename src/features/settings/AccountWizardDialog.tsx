@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button } from '../../components/ui/Button';
@@ -172,6 +172,15 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
       onClose();
     } catch (error) { oauth.setError(t('wizard.savedRefreshFailed', { error: errorMessage(error) })); }
   }
+
+  // 授权保存成功后立即刷新账号列表并收尾，避免用户错过手动刷新按钮后列表一直缺账号。
+  const autoFinished = useRef(false);
+  useEffect(() => {
+    if (oauth.flow?.state !== 'saved' || autoFinished.current) return;
+    autoFinished.current = true;
+    void finishSaved();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- finishSaved 依赖本次渲染闭包，仅首次 saved 触发
+  }, [oauth.flow?.state]);
 
   const providerStep = !initial && !providerId;
   const title = initial ? t('wizard.titleUpdate', { protocol: providerId === 'pop3' ? 'POP3' : 'IMAP' }) : providerStep || !preset ? t('wizard.titleAdd') : t('wizard.titleAddProvider', { provider: providerPresetLabel(preset.id) });

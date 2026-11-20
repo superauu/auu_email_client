@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import type { OAuthConfig } from '../../domain/oauth';
@@ -16,6 +16,14 @@ export function OAuthDialog({ account, initial, lockedProvider, onClose, onSaved
   // Google / Microsoft 空 Client ID 时由后端使用内置公共应用标识；自定义值优先于内置兜底。
   const builtin = (config.provider === 'google' || config.provider === 'microsoft') && !config.clientId;
   const finish = async () => { try { oauth.savedRef.current = true; await onSaved(); onClose(); } catch (error) { oauth.setError(t('wizard.savedRefreshFailed', { error: errorMessage(error) })); } };
+  // 授权保存成功后立即刷新账号列表并收尾，无需用户再点「刷新账号列表」。
+  const autoFinished = useRef(false);
+  useEffect(() => {
+    if (!saved || autoFinished.current) return;
+    autoFinished.current = true;
+    void finish();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- finish 依赖本次渲染闭包，仅首次 saved 触发
+  }, [saved]);
   const close = async () => { if (oauth.flow?.state === 'committing') return; if (saved) { await finish(); return; } if (running) { await oauth.stop(); return; } onClose(); };
   return <Dialog open onOpenChange={value => { if (!value) void close(); }} title={account.id ? t('oauth.titleReauthorize') : t('oauth.titleAdd')} description={t('oauth.description')}>
     <div className="imap-options">
