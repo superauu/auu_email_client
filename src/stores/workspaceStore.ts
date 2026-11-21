@@ -30,7 +30,7 @@ interface WorkspaceState extends WorkspaceSnapshot {
   clearError: () => void;
   query: MailQuery;
   selectedId: string | null;
-  view: 'mail' | 'events';
+  view: 'mail' | 'events' | 'outbox';
   load: () => Promise<void>;
   reload: () => Promise<void>;
   /** 确保视图已加载首页（桌面端懒加载入口；演示端为空操作）。 */
@@ -77,7 +77,7 @@ interface WorkspaceState extends WorkspaceSnapshot {
   /** 撰写附件选取（Rust 对话框 + 暂存）；演示环境诚实拒绝。 */
   pickAttachments: (draftId: string, current: DraftAttachment[]) => Promise<DraftAttachment[]>;
   toggleEvent: (id: string) => void;
-  setView: (view: 'mail' | 'events') => void;
+  setView: (view: WorkspaceState['view']) => void;
   saveDraft: (draft: MailDraft, options?: DraftSaveOptions) => Promise<MailDraft>;
 }
 

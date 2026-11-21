@@ -1,6 +1,7 @@
-import { Archive, ChevronDown, ChevronRight, FilePenLine, Folder, Inbox, Pin, PinOff, Plus, Search, Send, Star, Trash2, X } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, FilePenLine, Folder, Inbox, ListTodo, Pin, PinOff, Plus, Search, Send, Star, Trash2, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
+import { useSyncStore } from '../../stores/syncStore';
 import { useSavedSearchStore } from '../../stores/savedSearchStore';
 import { sanitizeSavedQuery, sameQuery, type SavedSearch } from '../../domain/savedSearch';
 import { TagManagerDialog } from '../../features/mail/TagManagerDialog';
@@ -38,9 +39,10 @@ function NavigationRow({ entry, active, count, onSelect, secondary, pin }: {
   </div>;
 }
 
-export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () => void; onAccounts: () => void; onNavigate?: () => void }) {
+export function Sidebar({ onCompose, onAccounts, onNavigate, onOutbox }: { onCompose: () => void; onAccounts: () => void; onNavigate?: () => void; onOutbox: () => void }) {
   const t = useI18n();
   const { accounts, messages, folders, labels, query, viewCounts, setQuery, view } = useWorkspaceStore(useShallow(s => ({ accounts: s.accounts, messages: s.messages, folders: s.folders ?? emptyFolders, labels: s.labels, query: s.query, viewCounts: s.viewCounts, setQuery: s.setQuery, view: s.view })));
+  const outboxPending = useSyncStore(s => s.outbox.filter(entry => entry.state !== 'sent' && entry.resolvedBy !== 'keep-local' && accounts.some(account => account.id === entry.accountId && account.status !== 'demo')).length);
   const { pinned, expanded, setExpanded, togglePinned, error } = useNavigationStore(useShallow(s => ({ pinned: s.pinned, expanded: s.expanded, setExpanded: s.setExpanded, togglePinned: s.togglePinned, error: s.error })));
   const openIds = expanded ?? (accounts[0] ? [accounts[0].id] : []);
   const { savedSearches, remove: removeSavedSearch } = useSavedSearchStore(useShallow(s => ({ savedSearches: s.searches, remove: s.remove })));
@@ -74,9 +76,9 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
     const controls = `account-folders-${encodeURIComponent(account.id)}`;
     const toggle = () => setExpanded(opened ? openIds.filter(id => id !== account.id) : [...openIds, account.id]);
     return <li className="account-branch" key={account.id}>
-      <div className={`account-heading${query.accountId === account.id ? ' is-current' : ''}`}>
+      <div className={`account-heading${view === 'mail' && query.accountId === account.id ? ' is-current' : ''}`}>
         <button className="account-disclosure" type="button" aria-label={opened ? t('sidebar.collapseFolderAria', { account: account.name }) : t('sidebar.expandFolderAria', { account: account.name })} aria-expanded={opened} aria-controls={controls} onClick={toggle}>{opened ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
-        <button className="account-select" type="button" aria-label={account.name} aria-describedby={viewCounts && unread > 0 ? `account-unread-${encodeURIComponent(account.id).replace(/[^a-zA-Z0-9-]/g, '-')}` : undefined} aria-current={query.accountId === account.id ? 'true' : undefined} title={`${account.name} · ${account.email}${account.status === 'demo' ? t('sidebar.demoAccountSuffix') : ''}`} onClick={() => navigate(inbox.target)}>
+        <button className="account-select" type="button" aria-label={account.name} aria-describedby={viewCounts && unread > 0 ? `account-unread-${encodeURIComponent(account.id).replace(/[^a-zA-Z0-9-]/g, '-')}` : undefined} aria-current={view === 'mail' && query.accountId === account.id ? 'true' : undefined} title={`${account.name} · ${account.email}${account.status === 'demo' ? t('sidebar.demoAccountSuffix') : ''}`} onClick={() => navigate(inbox.target)}>
           <Avatar text={account.avatar} color={account.color} small /><span>{account.name}</span>{account.status === 'demo' && <small className="account-demo-badge" aria-hidden>{t('sidebar.demoBadge')}</small>}{viewCounts && unread > 0 && <small className="navigation-count" id={`account-unread-${encodeURIComponent(account.id).replace(/[^a-zA-Z0-9-]/g, '-')}`} aria-hidden title={t('sidebar.inboxUnreadTitle', { unread })}>{unread}</small>}
         </button>
       </div>
@@ -92,6 +94,12 @@ export function Sidebar({ onCompose, onAccounts, onNavigate }: { onCompose: () =
       <div className="sidebar-section-title"><span>{t('sidebar.quickSection')}</span><span className="local-hint" title={t('sidebar.quickHintTitle')}>{t('sidebar.quickHint')}</span></div>
       <nav className="shortcut-list" aria-label={t('sidebar.quickNavAria')}>
         {defaultShortcuts().map(entry => <NavigationRow key={navigationKey(entry.target)} entry={entry} active={view === 'mail' && isNavigationActive(query, entry.target)} count={resolveCount(entry.target)} onSelect={() => navigate(entry.target)} />)}
+        {isDesktop() && <div className={`navigation-row${view === 'outbox' ? ' is-active' : ''}`}>
+          <button type="button" className="navigation-link" aria-label={t('outbox.heading')} aria-current={view === 'outbox' ? 'page' : undefined} aria-describedby={outboxPending ? 'outbox-pending-count' : undefined} onClick={onOutbox}>
+            <ListTodo size={16} aria-hidden /><span className="navigation-label"><span>{t('outbox.heading')}</span></span>
+            {outboxPending > 0 && <><small className="navigation-count" aria-hidden>{outboxPending}</small><span id="outbox-pending-count" className="sr-only">{t('outbox.pendingCount', { count: outboxPending })}</span></>}
+          </button>
+        </div>}
         {pinned.map(target => {
           const account = accounts.find(item => item.id === target.accountId);
           if (!account) return null;

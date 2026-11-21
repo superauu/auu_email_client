@@ -25,6 +25,8 @@ interface SyncState {
   submitting: string[];
   outbox: OutboxEntry[];
   outboxLoaded: boolean;
+  outboxLoadError: string | null;
+  outboxActionError: string | null;
   outboxPending: string[];
   error: string | null;
   enqueue: (ids: string[]) => Promise<void>;
@@ -63,7 +65,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
     async function changeOutbox(id: string, action: ((id: string) => Promise<OutboxEntry>) | undefined, remove = false) {
       if (!transport.available() || !action || get().outboxPending.includes(id)) return false;
       outboxEpoch += 1;
-      set(state => ({ outboxPending: [...state.outboxPending, id], error: null }));
+      set(state => ({ outboxPending: [...state.outboxPending, id], outboxActionError: null }));
       try {
         const entry = await action(id);
         outboxEpoch += 1;
@@ -71,7 +73,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         if (remove) { needsWorkspaceRefresh = true; await refreshWorkspace(); }
         return true;
       } catch (error) {
-        set({ error: t('sync.errOutboxAction', { error: errorMessage(error) }) });
+        set({ outboxActionError: t('sync.errOutboxAction', { error: errorMessage(error) }) });
         return false;
       } finally {
         outboxEpoch += 1;
@@ -113,7 +115,7 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
       if (monitors && transport.available()) timer = setTimeout(() => { void get().refresh(); }, get().jobs.some(isSyncActive) || pollingFailed ? pollMs : idlePollMs);
     }
     return {
-      revision: -1, jobs: [], submitting: [], outbox: [], outboxLoaded: false, outboxPending: [], error: null,
+      revision: -1, jobs: [], submitting: [], outbox: [], outboxLoaded: false, outboxLoadError: null, outboxActionError: null, outboxPending: [], error: null,
       async enqueue(ids) {
         if (!transport.available()) { set({ error: t('sync.desktopOnly') }); return; }
         const pending = new Set(get().submitting);
@@ -129,19 +131,23 @@ export function createSyncStore(transport: SyncTransport, pollMs = 750, idlePoll
         if (!transport.available()) return Promise.resolve();
         if (reading) return reading;
         reading = (async () => {
+          pollingFailed = false;
           try {
-            const snapshot = await transport.read();
-            pollingFailed = false;
-            if (get().error?.startsWith(t('sync.errProgressPrefix'))) set({ error: null });
-            apply(snapshot);
-            if (transport.outboxList) {
-              const epoch = outboxEpoch;
+            try {
+              const snapshot = await transport.read();
+              if (get().error?.startsWith(t('sync.errProgressPrefix'))) set({ error: null });
+              apply(snapshot);
+            } catch (error) { pollingFailed = true; set({ error: `${t('sync.errProgressPrefix')}${errorMessage(error)}` }); }
+            if (!transport.outboxList) return;
+            const epoch = outboxEpoch;
+            try {
               const outbox = await transport.outboxList();
-              if (epoch === outboxEpoch && !get().outboxPending.length) set({ outbox, outboxLoaded: true });
+              if (epoch === outboxEpoch && !get().outboxPending.length) set({ outbox, outboxLoaded: true, outboxLoadError: null });
+            } catch (error) {
+              pollingFailed = true;
+              if (epoch === outboxEpoch) set({ outboxLoadError: errorMessage(error) });
             }
-          }
-          catch (error) { pollingFailed = true; set({ error: `${t('sync.errProgressPrefix')}${errorMessage(error)}` }); }
-          finally { reading = null; schedule(); }
+          } finally { reading = null; schedule(); }
         })();
         return reading;
       },

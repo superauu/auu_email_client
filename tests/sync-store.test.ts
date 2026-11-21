@@ -55,7 +55,7 @@ test('outbox failures keep the task and surface the error; retry preserves the r
   await store.getState().refresh();
   assert.equal(await store.getState().outboxRetry('ob-1'), false);
   assert.equal(store.getState().outbox[0].state, 'failed');
-  assert.match(store.getState().error!, /发送状态已变化/);
+  assert.match(store.getState().outboxActionError!, /发送状态已变化/);
   fail = false;
   assert.equal(await store.getState().outboxRetry('ob-1'), true);
   assert.equal(store.getState().outbox[0].messageId, '<once@example.test>');

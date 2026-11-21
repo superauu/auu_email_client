@@ -550,7 +550,7 @@ test('multi-account progress persists outside settings and drafts remain editabl
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '同步全部', exact: true }).click();
   await expect(page.getByText('2 个账号同步中 · 1 个排队中。关闭设置后任务继续运行。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '同步 测试邮箱 1', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '停止同步 测试邮箱 1', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '关闭对话框', exact: true }).click();
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   await page.getByLabel('发件人', { exact: true }).selectOption('real-2');
@@ -570,28 +570,56 @@ test('one account failing leaves the others running and supports queued retry ca
   await page.evaluate(() => (window as unknown as { __syncTest: { finish: (id: string, failure: boolean) => void } }).__syncTest.finish('real-1', true));
   await expect(page.locator('.sync-note', { hasText: '同步失败：测试连接失败' })).toBeVisible();
   await expect(page.getByRole('button', { name: '同步 测试邮箱 1', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: '同步 测试邮箱 2', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '停止同步 测试邮箱 2', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '同步 测试邮箱 1', exact: true }).click();
   await page.getByRole('button', { name: '取消排队 测试邮箱 1', exact: true }).click();
   await expect(page.getByText(/已取消排队/)).toBeVisible();
   await expect(page.getByRole('button', { name: '同步 测试邮箱 1', exact: true })).toBeEnabled();
 });
 
-test('IMAP settings preserve edits after failure and remain scoped to one account', async ({page},info) => {
-  await mockDesktop(page,true,undefined,true);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
-  await page.getByRole('button',{name:'同步设置 测试邮箱 1',exact:true}).click();
-  const dialog=page.getByRole('dialog',{name:'测试邮箱 1 · IMAP 同步设置'});
-  await dialog.getByLabel('继续下载更早的历史邮件').check();await dialog.getByLabel('自动同步',{exact:true}).selectOption('300');
-  await dialog.getByRole('button',{name:'保存设置',exact:true}).click();await expect(dialog.getByRole('alert')).toHaveText('设置暂时未保存');
-  await expect(dialog.getByLabel('继续下载更早的历史邮件')).toBeChecked();await dialog.getByRole('button',{name:'保存设置',exact:true}).click();
-  await page.getByRole('button',{name:'同步设置 测试邮箱 1',exact:true}).click();await expect(dialog.getByLabel('自动同步',{exact:true})).toHaveValue('300');
-  await page.screenshot({path:info.outputPath('imap-options.png')});await dialog.getByRole('button',{name:'取消',exact:true}).click();
-  await page.getByRole('button',{name:'同步设置 测试邮箱 2',exact:true}).click();await expect(page.getByRole('dialog',{name:'测试邮箱 2 · IMAP 同步设置'}).getByLabel('自动同步',{exact:true})).toHaveValue('0');
+test('IMAP settings preserve edits after failure and remain scoped to one account', async ({ page }, info) => {
+  await mockDesktop(page, true, undefined, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '管理账号 测试邮箱 1' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(dialog.getByRole('heading', { name: 'IMAP 同步设置' })).toBeVisible();
+  await dialog.getByLabel('继续下载更早的历史邮件').check();
+  await dialog.getByLabel('自动同步', { exact: true }).selectOption('300');
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('设置暂时未保存');
+  await dialog.getByRole('button', { name: '返回邮箱账号' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(dialog.getByRole('button', { name: '继续编辑', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog.getByLabel('继续下载更早的历史邮件')).toBeChecked();
+  await expect(dialog.getByLabel('自动同步', { exact: true })).toHaveValue('300');
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(dialog.getByText('设置已保存', { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('imap-options.png') });
+  await dialog.getByRole('button', { name: '返回邮箱账号' }).click();
+  await dialog.getByRole('button', { name: '管理账号 测试邮箱 2' }).click();
+  await expect(dialog.getByLabel('自动同步', { exact: true })).toHaveValue('0');
+  await dialog.getByLabel('自动同步', { exact: true }).selectOption('60');
+  const accounts = dialog.getByRole('tab', { name: '邮箱账号' });
+  await accounts.focus();
+  await page.keyboard.press('ArrowDown');
+  const appearance = dialog.getByRole('tab', { name: '外观与皮肤' });
+  await expect(appearance).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByRole('button', { name: '放弃更改', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '放弃更改', exact: true }).click();
+  await expect(appearance).toHaveAttribute('aria-selected', 'true');
 });
 
 test('connection editing supports mandatory STARTTLS and reports SMTP as skipped for receive-only', async ({page},info) => {
   await mockDesktop(page,false,undefined,true);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
-  await page.getByRole('button',{name:'重新配置 测试邮箱 1',exact:true}).click();const dialog=page.getByRole('dialog',{name:'更新 IMAP 邮箱连接'});
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '管理账号 测试邮箱 1' }).click();
+  await dialog.getByRole('button', { name: '连接设置', exact: true }).click();
+  await dialog.getByRole('button', { name: '重新配置 测试邮箱 1', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: '更新 IMAP 邮箱连接' })).toBeVisible();
   await dialog.getByLabel('IMAP 加密').selectOption('starttls');await expect(dialog.getByLabel('IMAP 端口',{exact:true})).toHaveValue('143');
   await expect(dialog.getByLabel('SMTP 服务器')).toBeDisabled();await dialog.getByLabel('密码',{exact:true}).fill('synthetic');
   await dialog.getByRole('button',{name:'测试连接',exact:true}).click();await expect(dialog.getByText('SMTP 未验证（仅收信）')).toBeVisible();
@@ -601,9 +629,9 @@ test('connection editing supports mandatory STARTTLS and reports SMTP as skipped
 test('OAuth configuration waits for actual authorization and can be cancelled without a saved success', async ({page},info) => {
   await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('button',{name:'添加账号',exact:true}).click();
-  const wizard=page.getByRole('dialog',{name:'添加邮箱账号'});
+  const wizard=page.getByRole('dialog', { name: '设置', exact: true });
   await wizard.getByRole('button',{name:'添加 Gmail 账号',exact:true}).click();
-  const gmail=page.getByRole('dialog',{name:'添加 Gmail 账号'});
+  const gmail=page.getByRole('dialog', { name: '设置', exact: true });
   await expect(gmail.getByLabel('Client ID',{exact:true})).toHaveCount(0);
   await gmail.getByLabel('账号名称',{exact:true}).fill('OAuth 测试');await gmail.getByLabel('邮箱地址',{exact:true}).fill('oauth@gmail.test');
   await gmail.getByRole('button',{name:'在浏览器中授权',exact:true}).click();
@@ -618,16 +646,16 @@ test('OAuth configuration waits for actual authorization and can be cancelled wi
 test('provider picker enables OAuth providers and prefills password IMAP presets', async ({page},info) => {
   await mockDesktop(page);await page.goto('/');await page.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('button',{name:'添加账号',exact:true}).click();
-  const wizard=page.getByRole('dialog',{name:'添加邮箱账号'});
+  const wizard=page.getByRole('dialog', { name: '设置', exact: true });
   const outlook=wizard.getByRole('button',{name:'添加 Outlook / Microsoft 365 账号',exact:true});
   await expect(outlook).toBeEnabled();
   await outlook.click();
-  const ms=page.getByRole('dialog',{name:'添加 Outlook / Microsoft 365 账号'});
+  const ms=page.getByRole('dialog', { name: '设置', exact: true });
   await expect(ms.getByRole('heading',{name:'使用 Microsoft 账户授权'})).toBeVisible();
   await expect(ms.getByLabel('邮箱地址',{exact:true})).toHaveAttribute('placeholder','you@outlook.com');
   await ms.getByRole('button',{name:'返回',exact:true}).click();
   await wizard.getByRole('button',{name:'添加 QQ 邮箱 账号',exact:true}).click();
-  const qq=page.getByRole('dialog',{name:'添加 QQ 邮箱 账号'});
+  const qq=page.getByRole('dialog', { name: '设置', exact: true });
   await expect(qq.getByLabel('IMAP 服务器')).toHaveValue('imap.qq.com');
   await expect(qq.getByLabel('SMTP 服务器')).toHaveValue('smtp.qq.com');
   await expect(qq.getByLabel('授权码',{exact:true})).toBeVisible();
@@ -636,7 +664,7 @@ test('provider picker enables OAuth providers and prefills password IMAP presets
   await qq.getByRole('button',{name:'返回',exact:true}).click();
   // POP3 卡片可手动填服务器（无预设地址）。
   await wizard.getByRole('button',{name:'添加 POP3 邮箱 账号',exact:true}).click();
-  const pop3=page.getByRole('dialog',{name:'添加 POP3 邮箱 账号'});
+  const pop3=page.getByRole('dialog', { name: '设置', exact: true });
   await expect(pop3.getByLabel('POP3 服务器')).toBeVisible();
   await expect(pop3.getByLabel('密码',{exact:true})).toBeVisible();
   await pop3.getByRole('button',{name:'返回',exact:true}).click();
@@ -673,7 +701,7 @@ test('desktop workspace isolates legacy demo accounts, mail, labels, events and 
   await expect(page.getByLabel('发件人', { exact: true })).toHaveValue('real-1');
   await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.locator('.settings-accounts > div')).toHaveCount(3);
+  await expect(page.locator('.settings-account')).toHaveCount(3);
   const reads = await page.evaluate(() => (window as unknown as { __syncTest: { workspaceCalls: () => Array<{ accountId?: string | null }> } }).__syncTest.workspaceCalls());
   // 懒加载后消息按视图分页读取：读取范围只能是真实账号或全部账号视图（演示账号永不入内）。
   expect(reads.length).toBeGreaterThan(0);
@@ -696,8 +724,8 @@ test('desktop with only legacy demo rows offers account setup without a demo fal
   await expect(page.locator('.demo-badge')).toHaveText('本地工作区');
   await page.screenshot({ path: info.outputPath('empty-real-workspace.png') });
   await page.getByRole('button', { name: '添加邮箱', exact: true }).click();
-  await expect(page.getByRole('button', { name: '添加账号', exact: true })).toBeEnabled();
-  await expect(page.locator('.settings-accounts > div')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '添加邮箱账号', exact: true })).toBeVisible();
+  await expect(page.locator('.settings-account')).toHaveCount(0);
 });
 
 test('account tree maps physical folders once, keeps server drafts separate and marks cached folder pins', async ({ page }, info) => {
@@ -866,13 +894,19 @@ test('send is capability-gated, the outbox queue surfaces state, and unknown off
   await expect(compose).toHaveCount(0);
   await expect(page.locator('.toast')).toContainText('已进入发送队列');
   await page.screenshot({path:info.outputPath('send-queued.png')});
-  await page.getByRole('banner').getByRole('button',{name:'设置',exact:true}).click();
-  await expect(page.getByText('发送排队中')).toBeVisible();
+  await page.getByRole('banner').getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '设置', exact: true }).getByText('发送队列', { exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '发送队列', exact: true }).click();
+  const queue = page.getByRole('region', { name: '发送队列', exact: true });
+  await expect(queue.getByText('发送排队中')).toBeVisible();
   // 结果不明：两个明确出口，不自动重发。
   await page.evaluate(() => (window as unknown as { __syncTest: { outboxState: (state: string) => void } }).__syncTest.outboxState('unknown'));
   await expect(page.getByText(/结果不明（已尝试 1 次）/)).toBeVisible({timeout:7000});
-  await page.getByRole('tabpanel',{name:'邮箱账号'}).getByRole('button',{name:'仅保留本机',exact:true}).click();
-  await expect(page.getByText('仅保留本机（投递结果未确认，不会再次发送）', { exact: true })).toBeVisible({timeout:7000});
+  await queue.getByRole('button',{name:'仅保留本机',exact:true}).click();
+  await expect(queue.getByText('没有待处理的发送任务')).toBeVisible();
+  await queue.getByLabel('发送队列状态').selectOption('local');
+  await expect(queue.getByText('仅保留本机（投递结果未确认，不会再次发送）', { exact: true })).toBeVisible({timeout:7000});
   await expect(page.getByRole('region', { name: '发送队列', exact: true }).getByRole('button', { name: '重试发送', exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '发送队列', exact: true }).getByRole('button', { name: '返回草稿修改', exact: true })).toHaveCount(0);
   const actions=await page.evaluate(() => (window as unknown as { __syncTest: { outboxActions: () => Array<{ id: string; action: string }> } }).__syncTest.outboxActions());
@@ -884,10 +918,16 @@ const queueEntry = (id: string, state: OutboxEntry['state'], accountId = 'real-1
 test('outbox exposes old unknown tasks, account filters, retry failures and queued cancellation', async ({ page }) => {
   await mockDesktop(page, false, undefined, false, false, true, { outbox: [queueEntry('sent-1', 'sent'), queueEntry('sent-2', 'sent'), queueEntry('sent-3', 'sent'), queueEntry('old-unknown', 'unknown'), queueEntry('rejected', 'failed', 'real-2'), queueEntry('sending', 'sending')] });
   await page.goto('/');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '发送队列', exact: true }).click();
   const queue = page.getByRole('region', { name: '发送队列', exact: true });
   const unknown = queue.getByRole('article', { name: '发送任务：任务 old-unknown · 测试邮箱 1', exact: true });
+  await expect(queue.getByRole('article', { name: /sent-1/ })).toHaveCount(0);
+  await queue.getByLabel('发送队列状态').selectOption('sent');
+  await expect(queue.getByRole('article', { name: /sent-1/ })).toBeVisible();
+  await queue.getByLabel('发送队列状态').selectOption('pending');
+  await unknown.getByRole('button', { name: '检查并重试', exact: true }).click();
   await expect(unknown.getByRole('button', { name: '确认未送达并重试', exact: true })).toBeVisible();
+  await unknown.getByRole('button', { name: '取消', exact: true }).click();
   await expect(unknown.getByRole('button', { name: '重试发送', exact: true })).toHaveCount(0);
   await expect(queue.getByRole('article', { name: '发送任务：任务 sending · 测试邮箱 1', exact: true }).getByRole('button')).toHaveCount(0);
   await queue.getByLabel('发送队列账号', { exact: true }).selectOption('real-2');
@@ -902,7 +942,8 @@ test('outbox exposes old unknown tasks, account filters, retry failures and queu
   await expect(rejected).toContainText('发送排队中');
   await rejected.getByRole('button', { name: '取消发送', exact: true }).click();
   await expect(rejected).toHaveCount(0);
-  await expect(queue).toContainText('正文和附件均保留');
+  await expect(page.getByRole('heading', { name: /本机草稿/ })).toBeVisible();
+  await expect(page.locator('.toast')).toContainText('正文和附件均已保留');
   const actions = await page.evaluate(() => (window as unknown as { __syncTest: { outboxActions: () => Array<{ id: string; action: string }> } }).__syncTest.outboxActions());
   expect(actions).toEqual([{ id: 'rejected', action: 'mail_retry_outbox' }, { id: 'rejected', action: 'mail_outbox_cancel' }]);
 });
@@ -910,11 +951,10 @@ test('outbox exposes old unknown tasks, account filters, retry failures and queu
 test('a clearly failed send returns to the same editable draft with recipients, HTML and attachments intact', async ({ page }) => {
   await mockDesktop(page, false, undefined, false, false, true, { outbox: [queueEntry('edit', 'failed', 'real-2')] });
   await page.goto('/');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '发送队列', exact: true }).click();
   const task = page.getByRole('article', { name: '发送任务：任务 edit · 测试邮箱 2', exact: true });
   await task.getByRole('button', { name: '返回草稿修改', exact: true }).click();
   await expect(task).toHaveCount(0);
-  await page.getByRole('button', { name: '关闭对话框', exact: true }).click();
   await page.getByRole('button', { name: '编辑草稿', exact: true }).click();
   const compose = page.locator('.compose-pane');
   await expect(compose.getByLabel('发件人', { exact: true })).toHaveValue('real-2');
@@ -927,6 +967,23 @@ test('a clearly failed send returns to the same editable draft with recipients, 
   expect(draft).toMatchObject({ id: 'draft-edit', accountId: 'real-2', cc: 'copy@example.test', bcc: 'private@example.test', bodyText: '退回后修改的正文', attachments: [{ name: '测试附件.txt' }] });
 });
 
+test('returning a queued message to drafts preserves an already open composer', async ({ page }) => {
+  await mockDesktop(page, false, undefined, false, false, true, { outbox: [queueEntry('queued', 'queued', 'real-2')] });
+  await page.goto('/');
+  await page.getByRole('button', { name: '写邮件', exact: false }).click();
+  const compose = page.locator('.compose-pane');
+  await compose.getByLabel('主题', { exact: true }).fill('另一封正在撰写的邮件');
+  await compose.getByRole('textbox', { name: '邮件正文' }).fill('继续保留这里的编辑内容');
+  await page.getByRole('button', { name: '发送队列', exact: true }).click();
+  await expect(compose).toBeHidden();
+  await expect(compose).toHaveCount(1);
+  const queue = page.getByRole('region', { name: '发送队列', exact: true });
+  await queue.getByRole('button', { name: '取消发送', exact: true }).click();
+  await expect(compose).toBeVisible();
+  await expect(compose.getByLabel('主题', { exact: true })).toHaveValue('另一封正在撰写的邮件');
+  await expect(compose.getByRole('textbox', { name: '邮件正文' })).toHaveText('继续保留这里的编辑内容');
+});
+
 test('POP3 joins manual sync-all, saves only automatic-sync options, and keeps its protocol when reconfigured', async ({ page }) => {
   await mockDesktop(page, false, undefined, false, false, true, { pop3: true });
   await page.goto('/');
@@ -937,19 +994,21 @@ test('POP3 joins manual sync-all, saves only automatic-sync options, and keeps i
   await page.getByRole('button', { name: '取消排队 测试邮箱 3', exact: true }).click();
   await page.getByRole('button', { name: '同步 测试邮箱 3', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消排队 测试邮箱 3', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '同步设置 测试邮箱 3', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '测试邮箱 3 · POP3 同步设置', exact: true });
+  await page.getByRole('button', { name: '管理账号 测试邮箱 3', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
   await expect(settings.getByRole('checkbox')).toHaveCount(0);
   await expect(settings).toContainText('不删除服务器副本');
   await settings.getByLabel('自动同步', { exact: true }).selectOption('300');
   await settings.getByRole('button', { name: '保存设置', exact: true }).click();
-  await page.getByRole('button', { name: '同步设置 测试邮箱 3', exact: true }).click();
+  await expect(settings.getByText('设置已保存')).toBeVisible();
   await expect(settings.getByLabel('自动同步', { exact: true })).toHaveValue('300');
   const saved = await page.evaluate(() => (window as unknown as { __syncTest: { settings: () => Record<string, unknown> } }).__syncTest.settings());
   expect(saved).toEqual({ 'real-3': { syncAllFolders: false, historyEnabled: false, autoSyncSeconds: 300 } });
-  await settings.getByRole('button', { name: '取消', exact: true }).click();
+  await settings.getByRole('button', { name: '连接设置', exact: true }).click();
   await page.getByRole('button', { name: '重新配置 测试邮箱 3', exact: true }).click();
-  const wizard = page.getByRole('dialog', { name: '更新 POP3 邮箱连接', exact: true });
+  const wizard = settings;
+  const heading = wizard.getByRole('heading', { name: '更新 POP3 邮箱连接', exact: true });
+  await expect(heading).toBeVisible();
   await expect(wizard.getByLabel('POP3 服务器', { exact: true })).toHaveValue('pop.example.test');
   await expect(wizard.getByLabel('POP3 端口', { exact: true })).toHaveValue('995');
   await expect(wizard.getByLabel('POP3 加密', { exact: true }).getByRole('option', { name: /STARTTLS/ })).toHaveCount(0);
@@ -957,21 +1016,29 @@ test('POP3 joins manual sync-all, saves only automatic-sync options, and keeps i
   await wizard.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(wizard).toContainText('POP3连接成功');
   await wizard.getByRole('button', { name: '保存账号', exact: true }).click();
-  await expect(wizard).toHaveCount(0);
+  await expect(heading).toHaveCount(0);
   const inputs = await page.evaluate(() => (window as unknown as { __syncTest: { accountInputs: () => Array<{ command: string; provider: string }> } }).__syncTest.accountInputs());
   expect(inputs).toEqual([{ command: 'mail_verify_account', provider: 'pop3' }, { command: 'mail_save_account', provider: 'pop3' }]);
 });
 
-test('outbox remains readable in each skin and mode at desktop and narrow widths', async ({ page }, info) => {
+test('settings and outbox remain readable in each skin and mode at desktop and narrow widths', async ({ page }, info) => {
   test.setTimeout(60000);
   await mockDesktop(page, false, undefined, false, false, true, { pop3: true, outbox: [queueEntry('long-rejection', 'failed'), queueEntry('unknown', 'unknown'), queueEntry('queued', 'queued', 'real-3')] });
   await page.goto('/');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
   for (const skin of ['Paper', 'Graphite', 'Linen']) for (const mode of ['浅色', '深色']) {
-    await page.getByRole('tab', { name: '外观与皮肤', exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await page.getByRole('button', { name: '外观与皮肤', exact: true }).click();
     await page.getByRole('button', { name: new RegExp(`^使用皮肤 ${skin}`) }).click();
     await page.getByRole('button', { name: mode, exact: true }).click();
     await page.getByRole('tab', { name: '邮箱账号', exact: true }).click();
+    for (const width of [1440, 900]) {
+      await page.setViewportSize({ width, height: width === 900 ? 700 : 950 });
+      const settings = page.getByRole('tabpanel', { name: '邮箱账号', exact: true });
+      expect(await settings.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: info.outputPath(`settings-${skin}-${mode}-${width}.png`) });
+    }
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '发送队列', exact: true }).click();
     for (const width of [1440, 900]) {
       await page.setViewportSize({ width, height: width === 900 ? 700 : 950 });
       const queue = page.getByRole('region', { name: '发送队列', exact: true });
@@ -1140,23 +1207,23 @@ test('settings folder management creates renames and deletes custom IMAP folders
   await mockDesktop(page, true, undefined, true, true);
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
-  await accountCard.getByRole('button', { name: '管理 测试邮箱 1 的服务器目录' }).click();
-  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 服务器目录' });
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '管理账号 测试邮箱 1', exact: true }).click();
+  await dialog.getByRole('button', { name: '目录管理', exact: true }).click();
   await expect(dialog).toBeVisible();
   // 新建目录。
   await dialog.getByRole('textbox', { name: '新建目录名称' }).fill('验收目录');
   await dialog.getByRole('button', { name: '新建', exact: true }).click();
   await expect(dialog.getByText('验收目录')).toBeVisible();
-  // 重命名（确认对话框）。
-  page.once('dialog', dialog => dialog.accept());
+  // 原位编辑名称。
   await dialog.getByRole('button', { name: '重命名目录 验收目录' }).click();
   await dialog.getByRole('textbox', { name: '重命名目录 验收目录' }).fill('验收目录改');
   await dialog.getByRole('button', { name: '重命名', exact: true }).click();
   await expect(dialog.getByText('验收目录改')).toBeVisible();
-  // 删除（确认对话框）。
-  page.once('dialog', dialog => dialog.accept());
+  // 删除前在当前行确认。
   await dialog.getByRole('button', { name: '删除目录 验收目录改' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await dialog.getByRole('button', { name: '确认删除目录', exact: true }).click();
   await expect(dialog.getByText('验收目录改')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('settings-folder-manager.png') });
 });
@@ -1165,11 +1232,14 @@ test('per-account signatures: create with image, set default, edit and delete in
   await mockDesktop(page, true, undefined, true, true);
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
-  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
-  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  async function openSignatures() {
+    await dialog.getByRole('button', { name: '管理账号 测试邮箱 1', exact: true }).click();
+    await dialog.getByRole('button', { name: '签名', exact: true }).click();
+  }
+  await openSignatures();
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('还没有签名，新建一个。旧版单签名已迁移为默认签名。')).toBeVisible();
+  await expect(dialog.getByText('还没有签名。')).toBeVisible();
   // 新建签名（含插入图片）→ 自动成为默认。
   await dialog.getByRole('button', { name: '新建签名' }).click();
   await dialog.getByRole('textbox', { name: '签名名称' }).fill('工作签名');
@@ -1191,14 +1261,14 @@ test('per-account signatures: create with image, set default, edit and delete in
   const personal = dialog.locator('.signature-list li').filter({ hasText: '个人签名' });
   await expect(personal).toContainText('默认');
   await expect(row).not.toContainText('默认');
-  // 重开对话框：两条签名与默认标记保持。
-  await dialog.getByRole('button', { name: '关闭对话框' }).click();
-  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
+  // 返回后重进签名页。
+  await dialog.getByRole('button', { name: '返回邮箱账号' }).click();
+  await openSignatures();
   await expect(dialog.locator('.signature-list li')).toHaveCount(2);
   await expect(dialog.locator('.signature-list li').filter({ hasText: '个人签名' })).toContainText('默认');
-  // 删除默认签名（确认对话框）。
-  page.once('dialog', handler => handler.accept());
+  // 删除默认签名前在当前行确认。
   await dialog.locator('.signature-list li').filter({ hasText: '个人签名' }).getByRole('button', { name: '删除签名 个人签名' }).click();
+  await dialog.getByRole('button', { name: '确认删除签名' }).click();
   await expect(dialog.locator('.signature-list li')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('signature-manager.png') });
 });
@@ -1208,9 +1278,12 @@ test('compose appends the signature to new mail and above the reply quote', asyn
   await page.goto('/');
   // 保存签名（两个开关默认都开）。
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const accountCard = page.locator('.settings-accounts > div').filter({ hasText: '测试邮箱 1' });
-  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
-  const dialog = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  async function openSignatures() {
+    await dialog.getByRole('button', { name: '管理账号 测试邮箱 1', exact: true }).click();
+    await dialog.getByRole('button', { name: '签名', exact: true }).click();
+  }
+  await openSignatures();
   // 多签名管理（v23）：新建默认签名后再进入编辑。
   await dialog.getByRole('button', { name: '新建签名' }).click();
   await dialog.getByRole('textbox', { name: '签名名称' }).fill('默认签名');
@@ -1219,8 +1292,6 @@ test('compose appends the signature to new mail and above the reply quote', asyn
   await expect(dialog.locator('.signature-list li').filter({ hasText: '默认签名' })).toContainText('默认');
   await dialog.getByRole('button', { name: '关闭对话框' }).click();
   await expect(dialog).toHaveCount(0);
-  // 关闭外层设置对话框。
-  await page.getByRole('dialog').getByRole('button', { name: '关闭对话框' }).click();
   // 新邮件：签名自动追加；光标在签名上方，打字不落在签名之后。
   await page.getByRole('button', { name: '写邮件', exact: false }).click();
   const editor = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
@@ -1244,15 +1315,14 @@ test('compose appends the signature to new mail and above the reply quote', asyn
   await page.getByRole('button', { name: '关闭撰写并返回列表', exact: true }).click();
   // 关闭回复追加开关后：再次回复无签名，引用不受影响。
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await accountCard.getByRole('button', { name: '编辑 测试邮箱 1 的邮件签名' }).click();
-  const toggle = page.getByRole('dialog', { name: '测试邮箱 1 · 邮件签名' });
+  await openSignatures();
+  const toggle = dialog;
   // 编辑默认签名（列表态 → 编辑态）：关掉回复追加开关。
   await toggle.locator('.signature-list li').filter({ hasText: '默认签名' }).getByRole('button', { name: '编辑签名 默认签名' }).click();
   await toggle.getByRole('checkbox', { name: '回复 / 转发追加签名' }).uncheck();
   await toggle.getByRole('button', { name: '保存设置', exact: true }).click();
   await expect(toggle.locator('.signature-list li').filter({ hasText: '默认签名' })).toBeVisible();
   await toggle.getByRole('button', { name: '关闭对话框' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '关闭对话框' }).click();
   await page.getByRole('button', { name: '阅读邮件：离线状态测试', exact: true }).click();
   await page.getByRole('button', { name: '回复邮件', exact: true }).click();
   const plain = page.locator('.compose-pane').getByRole('textbox', { name: '邮件正文' });
@@ -1323,7 +1393,7 @@ test('avatar menu gathers app functions: opens settings, switches view, closes o
   await page.screenshot({ path: info.outputPath('avatar-menu.png') });
   // 「设置」打开设置对话框（账号页签）。
   await menu.getByRole('menuitem', { name: '设置', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('让工作区，更像你');
+  await expect(page.getByRole('dialog', { name: '设置', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   // 再开菜单切到事件与待办视图。
   await page.getByRole('button', { name: '打开功能菜单', exact: true }).click();
@@ -1442,10 +1512,10 @@ test('user labels: manage dialog creates renames recolors and deletes; reader ta
   await expect(tagsNav.getByRole('button', { name: '重要标签' })).toBeVisible();
   await expect(page.locator('.reader-labels').getByText('重要标签')).toBeVisible();
   await expect(page.getByRole('button', { name: '阅读邮件：纯文本链接测试', exact: true })).toHaveCount(0);
-  // 删除标签（确认对话框）：筛选解除，邮件上的标签一并移除。
-  page.once('dialog', handler => handler.accept());
+  // 在标签行内确认，筛选解除，邮件上的标签一并移除。
   await manage.click();
   await dialog.getByRole('button', { name: '删除标签 重要标签' }).click();
+  await dialog.getByRole('button', { name: '确认删除标签' }).click();
   await expect(dialog.getByText('还没有标签，创建第一个来整理邮件。')).toBeVisible();
   await dialog.getByRole('button', { name: '关闭对话框' }).click();
   await expect(tagsNav).toHaveCount(0);
@@ -1539,18 +1609,19 @@ test('data backup exports and stages a restore behind an explicit confirmation',
   await mockDesktop(page, true, undefined, true, true);
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: '关于' }).click();
-  const about = page.getByRole('tabpanel', { name: '关于' });
-  await about.getByRole('button', { name: '导出备份' }).click();
-  await expect(about.getByText('备份完成：数据库快照 + 12 个原文缓存文件。')).toBeVisible();
-  // 恢复：确认对话框接受 → staged 提示 + pending 横幅。
-  page.once('dialog', handler => handler.accept());
-  await about.getByRole('button', { name: '从备份恢复' }).click();
-  await expect(about.getByText('恢复已就绪：重启应用后生效。')).toBeVisible();
-  await expect(about.getByText('已有待恢复的备份，重启应用后生效。')).toBeVisible();
+  await page.getByRole('tab', { name: '数据与备份' }).click();
+  const backup = page.getByRole('tabpanel', { name: '数据与备份' });
+  await backup.getByRole('button', { name: '导出备份' }).click();
+  await expect(backup.getByText('备份完成：数据库快照 + 12 个原文缓存文件。')).toBeVisible();
+  // 恢复前展示页内确认。
+  await backup.getByRole('button', { name: '从备份恢复' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await backup.getByRole('button', { name: '选择备份目录' }).click();
+  await expect(backup.getByText('恢复已就绪：重启应用后生效。')).toBeVisible();
+  await expect(backup.getByText('已有待恢复的备份，重启应用后生效。')).toBeVisible();
   // 取消确认 → 不 staging，不出现第二份就绪提示。
-  page.once('dialog', handler => handler.dismiss());
-  await about.getByRole('button', { name: '从备份恢复' }).click();
-  await expect(about.getByText('恢复已就绪：重启应用后生效。')).toHaveCount(1);
+  await backup.getByRole('button', { name: '从备份恢复' }).click();
+  await backup.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(backup.getByText('恢复已就绪：重启应用后生效。')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('backup-restore.png') });
 });

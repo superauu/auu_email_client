@@ -10,7 +10,8 @@ import { MailList } from '../features/mail/MailList';
 import { SaveSearchDialog } from '../features/mail/SaveSearchDialog';
 import { MailReader } from '../features/mail/MailReader';
 import { ComposePane } from '../features/compose/ComposePane';
-import { SettingsDialog } from '../features/settings/SettingsDialog';
+import { SettingsDialog, type SettingsTab } from '../features/settings/SettingsDialog';
+import { OutboxView } from '../features/mail/OutboxView';
 import { AiPanelGate } from '../features/ai/AiPanel';
 import { EventsView } from '../features/events/EventsView';
 import { useWorkspaceStore } from '../stores/workspaceStore';
@@ -20,6 +21,7 @@ import { useLayoutStore, MIN_LIST_WIDTH, MAX_LIST_WIDTH, MIN_READER_WIDTH, DEFAU
 import { desktop, isDesktop } from '../platform/desktop';
 import { errorMessage } from '../domain/errors';
 import { replyTargets, type MailDraft, type MailMessage } from '../domain/mail';
+import type { OutboxEntry } from '../domain/outbox';
 import { useI18n } from '../i18n/react';
 
 export function App() {
@@ -38,7 +40,9 @@ export function App() {
     return () => observer.disconnect();
   }, [mailArea]);
   const displayedListWidth = Math.min(listWidth, listMax);
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'accounts' | 'ai' | 'about' | null>(null);
+  const [settings, setSettings] = useState<{ tab: SettingsTab; addAccount: boolean } | null>(null);
+  const settingsTab = settings?.tab;
+  function setSettingsTab(tab: SettingsTab | null, addAccount = false) { setSettings(tab ? { tab, addAccount } : null); }
   const [draft, setDraft] = useState<MailDraft | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -56,6 +60,7 @@ export function App() {
   function compose(message?: MailMessage, editing = false, mode: 'reply' | 'reply-all' | 'forward' = 'reply', aiBodyText?: string) {
     const accountId = message?.accountId ?? query.accountId ?? accounts[0]?.id;
     if (!accountId) return;
+    setView('mail');
     setMobileReading(true); // 窄屏下撰写面替代阅读面时保持可见
     if (editing && message?.draft) { setDraft({ ...message.draft }); return; }
     if (message && mode === 'forward') {
@@ -135,6 +140,17 @@ export function App() {
   }, [notice]);
 
   function windowAction(action: 'minimize' | 'maximize' | 'close' | 'drag') { void desktop.windowAction(action).catch(e => setNotice(errorMessage(e))); }
+  function openReturnedDraft(entry: OutboxEntry) {
+    const workspace = useWorkspaceStore.getState();
+    if (workspace.view === 'outbox') {
+      workspace.setQuery({ accountId: entry.accountId, mailbox: 'drafts', draftSource: 'local', folderId: null, search: '', labelId: null, unreadOnly: false });
+      workspace.selectMessage(entry.draftId);
+      setMobileReading(true);
+      setNotice(t('outbox.returnedNotice'));
+    } else {
+      setNotice(t('outbox.returnedElsewhere'));
+    }
+  }
   // 左下角头像功能菜单：应用级功能集中入口（写邮件 / 搜索 / 同步 / 视图 / 设置）。
   const primaryAccount = accounts.find(a => a.status !== 'demo');
   const avatarMenu = (label: string, Icon: typeof Mail, action: () => void, disabled = false) => (
@@ -168,11 +184,30 @@ export function App() {
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
     </nav>
-      <Sidebar onCompose={() => compose()} onAccounts={() => setSettingsTab('accounts')} onNavigate={() => setMobileReading(false)} />
+      <Sidebar
+        onCompose={() => { if (draft) { setView('mail'); setMobileReading(true); } else compose(); }}
+        onAccounts={() => setSettingsTab('accounts')}
+        onNavigate={() => setMobileReading(false)}
+        onOutbox={() => setView('outbox')}
+      />
       <ResizeHandle variant="sidebar" label={t('app.sidebarResizeLabel')} value={sidebarWidth} min={MIN_SIDEBAR_WIDTH} max={MAX_SIDEBAR_WIDTH} onResize={setSidebarWidth} onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} />
-      {status === 'error' ? <EmptyState title={t('app.workspaceErrorTitle')} description={error ?? t('app.workspaceErrorFallback')} action={<Button onClick={() => void load()}>{t('app.reload')}</Button>} /> : status !== 'ready' ? <div className="workspace-loading" role="status">{t('app.loading')}</div> : isDesktop() && !accounts.length ? <EmptyState title={t('app.firstAccountTitle')} description={t('app.firstAccountBody')} action={<Button variant="primary" onClick={() => setSettingsTab('accounts')}>{t('app.addMailbox')}</Button>} /> : view === 'events' ? <EventsView /> : <main className="mail-area" ref={setMailArea}><MailList onSelect={() => setMobileReading(true)} /><ResizeHandle label={t('app.listResizeLabel')} value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} />{draft ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} /> : <MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />}{aiOpen && <AiPanelGate onClose={() => setAiOpen(value => !value)} onOpenSettings={() => setSettingsTab('ai')} onComposeWithText={(replyTarget, bodyText) => { compose(replyTarget, false, 'reply', bodyText); setAiOpen(false); setMobileReading(true); }} />}</main>}
+      {status === 'error' ? <EmptyState title={t('app.workspaceErrorTitle')} description={error ?? t('app.workspaceErrorFallback')} action={<Button onClick={() => void load()}>{t('app.reload')}</Button>} />
+        : status !== 'ready' ? <div className="workspace-loading" role="status">{t('app.loading')}</div>
+          : <>
+            {view === 'outbox' && <OutboxView onDraftReleased={openReturnedDraft} />}
+            {view === 'events' && <EventsView />}
+            {view === 'mail' && isDesktop() && !accounts.length && <EmptyState title={t('app.firstAccountTitle')} description={t('app.firstAccountBody')} action={<Button variant="primary" onClick={() => setSettingsTab('accounts', true)}>{t('app.addMailbox')}</Button>} />}
+            {(draft || !isDesktop() || accounts.length > 0) && <main className="mail-area" ref={setMailArea} hidden={view !== 'mail'}>
+              <MailList onSelect={() => setMobileReading(true)} />
+              <ResizeHandle label={t('app.listResizeLabel')} value={displayedListWidth} min={MIN_LIST_WIDTH} max={listMax} onResize={setListWidth} onReset={() => setListWidth(DEFAULT_LIST_WIDTH)} />
+              {draft
+                ? <ComposePane key={draft.id} initial={draft} onClose={() => { setDraft(null); setMobileReading(false); }} onNotice={setNotice} />
+                : <MailReader onCompose={compose} onAi={() => setAiOpen(value => !value)} onBack={() => setMobileReading(false)} />}
+              {aiOpen && <AiPanelGate onClose={() => setAiOpen(value => !value)} onOpenSettings={() => setSettingsTab('ai')} onComposeWithText={(replyTarget, bodyText) => { compose(replyTarget, false, 'reply', bodyText); setAiOpen(false); setMobileReading(true); }} />}
+            </main>}
+          </>}
     </div><footer className="app-statusbar"><span><span className="status-dot" />{isDesktop() ? t('app.statusLocal') : t('app.statusDemo')} · {t('app.statusAccounts', { count: accounts.length })}</span><span><PanelRight size={12} />{isDesktop() ? t('app.statusDesktop') : t('app.statusBrowser')}<span className="status-version">AuuMail 0.1.0</span></span></footer>
-    {settingsTab && <SettingsDialog key={settingsTab} open initialTab={settingsTab} onClose={() => setSettingsTab(null)} />}
+    {settings && <SettingsDialog key={settings.tab} initialTab={settings.tab} initialAddAccount={settings.addAccount} onClose={() => setSettingsTab(null)} />}
     {error && status === 'ready' ? <div className="toast" role="alert">{error}<Button variant="ghost" onClick={() => useWorkspaceStore.getState().clearError()}>{t('app.dismissToast')}</Button></div> : notice && <div className="toast" role="status">{notice}</div>}
   </div>;
 }
