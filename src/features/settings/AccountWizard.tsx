@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
-import { Dialog } from '../../components/ui/Dialog';
+import { SettingsPageHeading } from './SettingsPageHeading';
+import { useSettingsNavigation } from './settingsNavigation';
 import { Button } from '../../components/ui/Button';
 import { ProviderIcon } from '../../components/ui/ProviderIcon';
 import { desktopAccounts, type MailVerifyReport, type RealAccountInput } from '../../platform/desktop';
@@ -69,14 +70,15 @@ function Probe({ label, probe, extra }: { label: string; probe: MailVerifyReport
   return <div className="probe">{probe.ok ? <span className="probe-ok">{t('wizard.probeOk', { label, extra: extra ?? '' })}</span> : <span className="probe-fail">{t('wizard.probeFail', { label, error: probe.error ?? '' })}</span>}</div>;
 }
 
-export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
-  open: boolean; tone: Tone; onClose: () => void; onSaved: () => Promise<void>; initial?: RealAccountInput;
+export function AccountWizard({ tone, onComplete, onSaved, initial }: {
+  tone: Tone; onComplete: () => void; onSaved: () => Promise<void>; initial?: RealAccountInput;
 }) {
   const t = useI18n();
   const [form, setForm] = useState<Form>(() => initial ? { name: initial.name, email: initial.email, imapHost: initial.imapHost, imapPort: String(initial.imapPort), imapSecurity: initial.imapSecurity ?? 'tls', smtpHost: initial.smtpHost, smtpPort: String(initial.smtpPort), authUser: initial.authUser, password: '', receiveOnly: initial.receiveOnly ?? false } : initialForm);
   // 编辑模式保留已保存的协议，不能将 POP3 原地重配成 IMAP。
   const [providerId, setProviderId] = useState<ProviderId | null>(initial ? initial.provider === 'pop3' ? 'pop3' : 'imap' : null);
   const [formError, setFormError] = useState('');
+  const [dirty, setDirty] = useState(false);
   // 字段级校验的可见性：仅在用户触碰过（或提交失败）后标记 aria-invalid，避免打开即全红。
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const touch = (key: string) => () => setTouched(current => current[key] ? current : { ...current, [key]: true });
@@ -155,7 +157,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
       await desktopAccounts.save(toInput(form, tone, initial?.id, providerId === 'pop3' ? 'pop3' : 'imap'), form.password);
       await onSaved();
       setForm(initialForm); setReport(null); resetTouched();
-      onClose();
+      onComplete();
     } catch (error) { setSaveError(errorMessage(error)); }
     setSaving(false);
   }
@@ -169,7 +171,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
     try {
       oauth.savedRef.current = true;
       await onSaved();
-      onClose();
+      onComplete();
     } catch (error) { oauth.setError(t('wizard.savedRefreshFailed', { error: errorMessage(error) })); }
   }
 
@@ -186,8 +188,10 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
   const title = initial ? t('wizard.titleUpdate', { protocol: providerId === 'pop3' ? 'POP3' : 'IMAP' }) : providerStep || !preset ? t('wizard.titleAdd') : t('wizard.titleAddProvider', { provider: providerPresetLabel(preset.id) });
   const description = providerStep ? t('wizard.descProviderStep') : oauthOnly ? t('wizard.descOauth') : t('wizard.descManual');
   const dialogBusy = testing || saving || oauth.running;
+  const navigate = useSettingsNavigation(dirty && !oauthSaved, dialogBusy);
 
-  return <Dialog open={open} onOpenChange={value => { if (!value && !dialogBusy) onClose(); }} title={title} description={description} className="compose-dialog">
+  return <div className="account-wizard" onChangeCapture={() => setDirty(true)}>
+    <SettingsPageHeading title={title} description={description} focus level={initial ? 'h4' : 'h3'} />
     {providerStep && <>
       <div className="provider-grid">{PROVIDER_PRESETS.map(item => (
         <button key={item.id} className="provider-card" disabled={!item.available} aria-label={item.available ? t('wizard.titleAddProvider', { provider: providerPresetLabel(item.id) }) : t('wizard.providerSoonAria', { provider: providerPresetLabel(item.id) })} title={item.available ? undefined : t('wizard.soonTitle')} onClick={() => chooseProvider(item.id)}>
@@ -202,7 +206,7 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
       {oauthOnly && <div className="oauth-hero">
         <span className="provider-icon-slot provider-icon-slot-lg"><ProviderIcon provider={preset.id} /></span>
         <div>
-          <h3>{t(preset.id === 'microsoft' ? 'wizard.oauthHeadingMicrosoft' : 'wizard.oauthHeading')}</h3>
+          <h4>{t(preset.id === 'microsoft' ? 'wizard.oauthHeadingMicrosoft' : 'wizard.oauthHeading')}</h4>
           <p>{t(preset.id === 'microsoft' ? 'wizard.oauthIntroMicrosoft' : 'wizard.oauthIntro')}</p>
         </div>
       </div>}
@@ -232,9 +236,9 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
       {oauth.flow && <p className="oauth-status" role="status">{oauthPhaseText(oauth.flow.state)}{oauth.flow.folderCount !== null ? t('wizard.oauthFolders', { count: oauth.flow.folderCount }) : ''}</p>}
       {(oauth.error || oauth.flow?.error) && <p className="inline-error" role="alert">{oauth.error || oauth.flow?.error}</p>}
       {(formError || saveError) && <p className="inline-error" role="alert">{formError || saveError}</p>}
-      <div className="compose-footer">
+      <div className="settings-form-actions">
         {oauthOnly ? <>
-          <Button disabled={oauth.running} onClick={backToProviders}><ArrowLeft size={15} />{t('wizard.back')}</Button>
+          <Button disabled={dialogBusy} onClick={backToProviders}><ArrowLeft size={15} />{t('wizard.back')}</Button>
           <span>{oauthSaved ? t('wizard.oauthSavedNote') : t('wizard.oauthAutoNote')}</span>
           {oauthSaved
             ? <Button variant="primary" onClick={() => void finishSaved()}>{t('wizard.refreshAccounts')}</Button>
@@ -242,12 +246,13 @@ export function AccountWizardDialog({ open, tone, onClose, onSaved, initial }: {
               ? <Button variant="secondary" onClick={() => void oauth.stop()}>{t('wizard.cancelAuth')}</Button>
               : <Button variant="primary" disabled={!emailReady} onClick={() => void startOAuthAuth()}>{oauth.flow?.state === 'failed' || oauth.flow?.state === 'cancelled' ? t('settings.reauthorize') : t('wizard.authorizeBrowser')}</Button>}
         </> : <>
-          {!initial && <Button onClick={backToProviders}><ArrowLeft size={15} />{t('wizard.back')}</Button>}
-          <Button variant="secondary" onClick={() => void runTest()} disabled={testing || !valid}>{testing ? <Loader2 size={15} className="spin" /> : null}{testing ? t('wizard.testing') : t('wizard.testConnection')}</Button>
+          {!initial && <Button disabled={dialogBusy} onClick={backToProviders}><ArrowLeft size={15} aria-hidden />{t('wizard.back')}</Button>}
+          {initial && <Button disabled={dialogBusy} onClick={() => navigate?.(onComplete)}>{t('editor.cancel')}</Button>}
+          <Button variant="secondary" onClick={() => void runTest()} disabled={dialogBusy || !valid}>{testing ? <Loader2 size={15} className="spin" /> : null}{testing ? t('wizard.testing') : t('wizard.testConnection')}</Button>
           <span>{t('wizard.saveHint')}</span>
-          <Button variant="primary" type="submit" onClick={() => void runSave()} disabled={saving || !valid}>{saving ? <Loader2 size={15} className="spin" /> : null}{saving ? t('wizard.saving') : t('wizard.saveAccount')}</Button>
+          <Button variant="primary" type="submit" onClick={() => void runSave()} disabled={dialogBusy || !valid}>{saving ? <Loader2 size={15} className="spin" /> : null}{saving ? t('wizard.saving') : t('wizard.saveAccount')}</Button>
         </>}
       </div>
     </>}
-  </Dialog>;
+  </div>;
 }

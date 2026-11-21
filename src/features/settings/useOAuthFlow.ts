@@ -14,7 +14,7 @@ export function oauthPhaseText(state: OAuthFlow['state']): string {
   return t(phases[state]);
 }
 
-/** 共享的授权会话：发起、轮询、取消与完成后的收尾，供向导内嵌进度与重新授权对话框复用。 */
+/** 共享的授权会话：发起、轮询、取消与完成后的收尾，供添加向导与重新授权页复用。 */
 export function useOAuthFlow() {
   const [flow, setFlow] = useState<OAuthFlow | null>(null);
   const [flowId, setFlowId] = useState<string | null>(null);

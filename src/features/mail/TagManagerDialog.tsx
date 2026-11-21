@@ -3,6 +3,7 @@ import { PenLine, Tags, Trash2 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
+import { InlineConfirmation } from '../../components/ui/InlineConfirmation';
 import { isDesktop } from '../../platform/desktop';
 import { errorMessage } from '../../domain/errors';
 import { isUserLabel, isLabelColor, labelNameError, LABEL_COLORS, type LabelColor } from '../../domain/labels';
@@ -22,6 +23,7 @@ export function TagManagerDialog() {
   const [renameValue, setRenameValue] = useState('');
   const [renameColor, setRenameColor] = useState<LabelColor>('teal');
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const supported = isDesktop();
   const labels = useWorkspaceStore(useShallow(s => s.labels));
   const { createLabel, renameLabel, deleteLabel } = useWorkspaceStore(useShallow(s => ({ createLabel: s.createLabel, renameLabel: s.renameLabel, deleteLabel: s.deleteLabel })));
@@ -50,9 +52,9 @@ export function TagManagerDialog() {
     } catch (caught) { setError(errorMessage(caught)); }
     setBusy(false);
   }
-  async function remove(id: string, name: string) {
+  async function remove(id: string) {
     if (busy) return;
-    if (!window.confirm(t('tags.deleteConfirm', { name }))) return;
+    setDeletingId(null);
     setBusy(true); setError('');
     try { await deleteLabel(id); } catch (caught) { setError(errorMessage(caught)); }
     setBusy(false);
@@ -60,7 +62,7 @@ export function TagManagerDialog() {
 
   if (!supported) return null;
   return <><Button variant="ghost" iconOnly aria-label={t('tags.manageAria')} title={t('tags.manageAria')} onClick={() => { setError(''); setOpen(true); }}><Tags size={14} /></Button>
-    <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }} title={t('tags.title')} description={t('tags.description')}>
+    <Dialog open={open} onOpenChange={value => { if (!busy) { setDeletingId(null); setOpen(value); } }} title={t('tags.title')} description={t('tags.description')}>
       <div className="folder-manager">
         <div className="folder-create">
           <label className="sr-only" htmlFor="new-tag-name">{t('tags.createAria')}</label>
@@ -72,7 +74,7 @@ export function TagManagerDialog() {
         </div>
         {manageable.length === 0 ? <p className="muted">{t('tags.empty')}</p> : <ul className="folder-list-manage">
           {manageable.map(label => <li key={label.id}>
-            {renamingId === label.id ? <>
+            {deletingId === label.id ? <InlineConfirmation message={t('tags.deleteConfirm', { name: label.name })} confirmLabel={t('tags.deleteButton')} onCancel={() => setDeletingId(null)} onConfirm={() => void remove(label.id)} /> : renamingId === label.id ? <>
               <input value={renameValue} aria-label={t('tags.renameAria', { name: label.name })} maxLength={200} disabled={busy} onChange={event => setRenameValue(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void saveRename(); }} autoFocus />
               <div className="tag-color-options" role="group" aria-label={t('tags.colorGroupAria')}>
                 {LABEL_COLORS.map(color => <button key={color} type="button" className={`tag-color-option${renameColor === color ? ' is-active' : ''}`} aria-label={t(COLOR_LABEL[color])} aria-pressed={renameColor === color} disabled={busy} onClick={() => setRenameColor(color)}><span className={`label-dot tone-${color}`} /></button>)}
@@ -83,7 +85,7 @@ export function TagManagerDialog() {
               <span className={`label-dot tone-${label.color}`} aria-hidden />
               <span title={label.name}>{label.name}</span>
               <Button variant="ghost" iconOnly aria-label={t('tags.renameAria', { name: label.name })} disabled={busy} onClick={() => startRename(label.id, label.name, label.color)}><PenLine size={14} /></Button>
-              <Button variant="ghost" iconOnly className="folder-delete" aria-label={t('tags.deleteAria', { name: label.name })} disabled={busy} onClick={() => void remove(label.id, label.name)}><Trash2 size={14} /></Button>
+              <Button variant="ghost" iconOnly className="danger-button" aria-label={t('tags.deleteAria', { name: label.name })} disabled={busy || deletingId !== null} onClick={() => setDeletingId(label.id)}><Trash2 size={14} aria-hidden /></Button>
             </>}
           </li>)}
         </ul>}

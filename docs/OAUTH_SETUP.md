@@ -4,7 +4,7 @@
 
 ## 操作
 
-桌面设置 → 添加账号 → 选择提供商卡片。Gmail 卡片只需账号名称和邮箱地址，点「在浏览器中授权」即开始授权，进度内嵌显示在同一对话框（取消 / 重新授权 / 刷新账号列表均在此完成）。用户无需填写任何 Client ID 或 secret；Client ID 仍是内置的公开标识；配套 secret 仅在 Rust 构建时从私有配置注入。桌面二进制不能保守共享 secret；PKCE 防护授权码兑换，不证明应用身份。高级场景可在重新授权对话框中替换为自己的 Client ID（自定义桌面应用需自行满足服务商的 secret 要求，界面不提供 secret 输入）；显式填写的值优先于内置兜底。已有 OAuth 账号点重新授权，密码账号点连接设置；重配沿用本机 accountId，保留邮件和修改。Gmail OAuth 已接入 IMAP / SMTP；Microsoft 的 SMTP 能力仍未开放。
+桌面设置 → 邮箱账号 → 添加账号 → 选择提供商卡片。Gmail 卡片只需账号名称和邮箱地址，点「在浏览器中授权」即开始授权，进度内嵌显示在设置窗体的当前页（取消 / 重新授权 / 刷新账号列表均在此完成）。用户无需填写任何 Client ID 或 secret；Client ID 仍是内置的公开标识；配套 secret 仅在 Rust 构建时从私有配置注入。桌面二进制不能保守共享 secret；PKCE 防护授权码兑换，不证明应用身份。高级场景可在重新授权页中替换为自己的 Client ID（自定义桌面应用需自行满足服务商的 secret 要求，界面不提供 secret 输入）；显式填写的值优先于内置兜底。已有账号从「管理」进入「连接设置」，OAuth 账号点「重新授权」，密码账号点「编辑连接」。重配沿用本机 accountId，保留邮件和修改。Gmail OAuth 已接入 IMAP / SMTP；Microsoft 的 SMTP 能力仍未开放。
 
 授权在系统浏览器执行，用户同意后真实 XOAUTH2 登录 + LIST 成功才存账号。授权失败 / 取消保留原账号与凭据；保存失败补偿旧凭据。完成后点刷新账号列表或关闭，会重新读取工作区。
 
@@ -34,13 +34,13 @@
 
 用户提供的新值已写入本机忽略配置并重建；2026-11-16 已按用户授权重启新程序，验证既有授权在新 secret 下可刷新并连接 Gmail，多个目录成功提交。早期全目录任务触及 300 秒预算，已保留批次并停止；后续修复有界提交、目录续跑和 Gmail 大小差异后，25 个目录完整同步及额外手动复核均已通过（2026-11-16），详见 STATUS / SYNCHRONIZATION。本任务没有停用或删除 Google 旧值，旧值停用后的再次刷新仍待验证。Google 测试状态下 refresh token 自身可能到期，若出现 invalid_grant 需重新授权，不能保证已有过期令牌靠轮换恢复。
 
-如需替换为自己的应用：在 Google 控制台注册 Desktop app，配置同意屏幕及适用测试用户，在重新授权对话框填入 Client ID 即可（显式填写优先于内置兜底）。
+如需替换为自己的应用：在 Google 控制台注册 Desktop app，配置同意屏幕及适用测试用户，在重新授权页填入 Client ID 即可（显式填写优先于内置兜底）。
 
 注册与公开客户端流程依据 [Google 桌面 OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)，IMAP 令牌使用方式见 [Gmail XOAUTH2](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol)。
 
 ## Microsoft
 
-2026-11-21 已注册公共桌面应用（Entra 应用注册 AuuMail，允许公共客户端流，重定向 `http://localhost/callback`——微软忽略端口、路径必须匹配），Client ID 随应用内置（`MICROSOFT_BUILTIN_CLIENT_ID`，公开信息非机密），公共桌面应用无需 secret。租户默认 common，要求应用的受支持账户类型为「任何组织目录 + 个人 Microsoft 账户」（`signInAudience: AzureADandPersonalMicrosoftAccount`）；重新授权对话框可显式替换 Client ID / 租户（organizations / consumers / 租户 ID），显式值优先于内置兜底。
+2026-11-21 已注册公共桌面应用（Entra 应用注册 AuuMail，允许公共客户端流，重定向 `http://localhost/callback`——微软忽略端口、路径必须匹配），Client ID 随应用内置（`MICROSOFT_BUILTIN_CLIENT_ID`，公开信息非机密），公共桌面应用无需 secret。租户默认 common，要求应用的受支持账户类型为「任何组织目录 + 个人 Microsoft 账户」（`signInAudience: AzureADandPersonalMicrosoftAccount`）；重新授权页可显式替换 Client ID / 租户（organizations / consumers / 租户 ID），显式值优先于内置兜底。
 
 **实测陷阱（2026-11-21）**：组合类型 `AzureADandPersonalMicrosoftAccount` **只能在创建应用注册时选择**；创建后在「身份验证」页改动「受支持的账户类型」并保存，会把清单静默降级为 `AzureADMultipleOrgs`（仅组织），个人账户授权即报 `unauthorized_client: not enabled for consumers`。判别以清单 `signInAudience` 为准，不以身份验证页下拉显示为准；补救只能重建应用注册。
 
